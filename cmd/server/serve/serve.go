@@ -18,6 +18,7 @@ import (
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/embed"
+	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/store"
 )
@@ -78,6 +79,13 @@ func Run() error {
 			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel)
 			rag = chat.NewRAG(embedder, store.NewChunkRepository(pool), cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
+
+			docsRepo := store.NewDocumentRepository(pool)
+			ingestSvc := ingest.NewService(
+				[]ingest.Extractor{ingest.NewPDFExtractor()},
+				embedder, docsRepo, store.NewChunkRepository(pool), cfg.IngestChunkChars,
+			)
+			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
 		}
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
 			Model:        cfg.LLMModel,
