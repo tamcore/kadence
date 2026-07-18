@@ -52,11 +52,12 @@ export async function sendMessage(text: string): Promise<number | null> {
 	messages.update((m) => [...m, { role: 'assistant', content: '' }]);
 	const assistantIdx = get(messages).length - 1;
 
-	abort = new AbortController();
+	const localAbort = new AbortController();
+	abort = localAbort;
 	const body = { conversationId: get(activeId) ?? undefined, message: text };
 	let convId = get(activeId);
 	try {
-		for await (const ev of chatApi.streamChat(body, abort.signal)) {
+		for await (const ev of chatApi.streamChat(body, localAbort.signal)) {
 			if (ev.type === 'meta') {
 				convId = ev.conversationId;
 				if (get(activeId) === null) activeId.set(convId);
@@ -74,10 +75,17 @@ export async function sendMessage(text: string): Promise<number | null> {
 			}
 		}
 	} catch {
-		chatError.set('The chat stream was interrupted');
+		// Intentional aborts should not surface as errors to the user
+		if (!localAbort.signal.aborted) {
+			chatError.set('The chat stream was interrupted');
+		}
+		return null;
 	} finally {
-		sending.set(false);
-		abort = null;
+		// Only reset shared state if this send is still the active one
+		if (abort === localAbort) {
+			sending.set(false);
+			abort = null;
+		}
 	}
 	void refreshConversations();
 	return convId;
