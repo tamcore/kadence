@@ -46,6 +46,7 @@
 		<header class="topbar">
 			<a href="/" class="brand">Kadence</a>
 			<nav>
+				{#if $isAuthenticated}<a href="/chat">Chat</a>{/if}
 				{#if $isAdmin}<a href="/admin/users">Users</a>{/if}
 				{#if $currentUser}<span class="who">{$currentUser.username}</span>{/if}
 				{#if $isAuthenticated}<button class="logout" onclick={handleLogout}>Log out</button>{/if}
