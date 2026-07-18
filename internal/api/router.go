@@ -19,10 +19,11 @@ import (
 
 // Deps carries the dependencies the router needs.
 type Deps struct {
-	Users    *store.UserRepository
-	Sessions *store.SessionRepository
-	Config   config.Config
-	Chat     *handlers.Chat
+	Users     *store.UserRepository
+	Sessions  *store.SessionRepository
+	Config    config.Config
+	Chat      *handlers.Chat
+	Documents *handlers.Documents
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -87,12 +88,24 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Delete("/api/conversations/{id}", deps.Chat.DeleteConversation)
 		}
 
+		if deps.Documents != nil {
+			r.Post("/api/documents", deps.Documents.Upload)
+			r.Get("/api/documents", deps.Documents.List)
+			r.Delete("/api/documents/{id}", deps.Documents.Delete)
+		}
+
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAuth)
 			r.Use(middleware.RequireAdmin)
 			r.Get("/api/users", usersH.List)
 			r.Post("/api/users", usersH.Create)
 			r.Delete("/api/users/{id}", usersH.Delete)
+
+			if deps.Documents != nil {
+				r.Post("/api/admin/documents", deps.Documents.UploadPublic)
+				r.Get("/api/admin/documents", deps.Documents.ListPublic)
+				r.Delete("/api/admin/documents/{id}", deps.Documents.DeletePublic)
+			}
 		})
 	})
 }

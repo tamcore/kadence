@@ -51,7 +51,7 @@ func withUser(r *http.Request, id int64) *http.Request { //nolint:unparam
 	return r.WithContext(auth.ContextWithUser(r.Context(), &model.User{ID: id, Username: "u", Role: model.RoleUser}))
 }
 
-func withChiParam(r *http.Request, param, val string) *http.Request {
+func withChiParam(r *http.Request, param, val string) *http.Request { //nolint:unparam
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(param, val)
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
