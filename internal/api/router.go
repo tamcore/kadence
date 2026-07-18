@@ -9,14 +9,24 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/api/middleware"
+	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/store"
 	"github.com/tamcore/kadence/web"
 )
+
+// Deps carries the dependencies the router needs.
+type Deps struct {
+	Users    *store.UserRepository
+	Sessions *store.SessionRepository
+	Config   config.Config
+}
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
 // embedded SvelteKit frontend (when built with -tags prodfrontend) is served
 // at root with SPA fallback.
-func NewRouter() http.Handler {
+func NewRouter(deps Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP) //nolint:staticcheck // trusted proxy sets X-Forwarded-For/X-Real-IP; used only for access logging, not auth decisions
@@ -26,12 +36,52 @@ func NewRouter() http.Handler {
 
 	r.Get("/api/healthz", healthz)
 
+	if deps.Users != nil && deps.Sessions != nil {
+		mountAuth(r, deps)
+	}
+
+	mountFrontend(r)
+	return r
+}
+
+func mountAuth(r chi.Router, deps Deps) {
+	authH := handlers.NewAuth(deps.Config, deps.Users, deps.Sessions)
+	usersH := handlers.NewUsers(deps.Users)
+
+	secret := []byte(deps.Config.CSRFSecret)
+	if len(secret) == 0 {
+		secret = randomSecret()
+	}
+	csrf := middleware.CSRF(secret, deps.Config.IsProd())
+	loadUser := middleware.LoadUser(deps.Sessions, deps.Users)
+
+	// Login: reachable without a prior CSRF token (no session yet), but behind LoadUser.
+	r.With(loadUser).Post("/api/session", authH.Login)
+
+	// All other auth/admin routes: LoadUser + CSRF protection.
+	r.Group(func(r chi.Router) {
+		r.Use(loadUser)
+		r.Use(csrf)
+
+		r.Delete("/api/session", authH.Logout)
+		r.Get("/api/session", authH.CurrentUser)
+
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireAuth)
+			r.Use(middleware.RequireAdmin)
+			r.Get("/api/users", usersH.List)
+			r.Post("/api/users", usersH.Create)
+			r.Delete("/api/users/{id}", usersH.Delete)
+		})
+	})
+}
+
+func mountFrontend(r chi.Router) {
 	if web.Available() {
 		r.NotFound(staticHandler(web.FS).ServeHTTP)
-	} else {
-		r.Get("/", placeholder)
+		return
 	}
-	return r
+	r.Get("/", placeholder)
 }
 
 // staticHandler serves files from fsys, falling back to the root document

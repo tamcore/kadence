@@ -4,6 +4,7 @@ package serve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,21 +13,47 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/api"
+	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/store"
 )
 
 const (
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 10 * time.Second
+	startupTimeout    = 30 * time.Second
 )
 
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
 func Run() error {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	startupCtx, cancel := context.WithTimeout(context.Background(), startupTimeout)
+	defer cancel()
+
+	pool, err := store.Open(startupCtx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.Close(pool)
+
+	if err := store.Migrate(startupCtx, pool); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+
+	if err := auth.BootstrapAdmin(startupCtx, users, cfg); err != nil {
+		return fmt.Errorf("bootstrap admin: %w", err)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.NewRouter(),
+		Handler:           api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: cfg}),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -48,7 +75,7 @@ func Run() error {
 		slog.Info("shutdown signal received", "signal", sig.String())
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
+	shutdownCtx, cancel2 := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel2()
 	return srv.Shutdown(shutdownCtx)
 }

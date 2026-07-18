@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tamcore/kadence/internal/api"
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/model"
@@ -61,18 +60,18 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		Remember bool   `json:"remember"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		api.RespondError(w, http.StatusBadRequest, "invalid request body")
+		RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	u, err := h.users.GetByUsername(r.Context(), body.Username)
 	if err != nil || !auth.CheckPassword(u.PasswordHash, body.Password) {
-		api.RespondError(w, http.StatusUnauthorized, "invalid username or password")
+		RespondError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 
 	id, err := auth.NewSessionID()
 	if err != nil {
-		api.RespondError(w, http.StatusInternalServerError, "could not create session")
+		RespondError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
 	ttl := defaultTTL
@@ -83,7 +82,7 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 	if err := h.sessions.Create(r.Context(), model.Session{
 		ID: id, UserID: u.ID, RememberMe: body.Remember, ExpiresAt: expiresAt,
 	}); err != nil {
-		api.RespondError(w, http.StatusInternalServerError, "could not create session")
+		RespondError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
 
@@ -92,7 +91,7 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		Expires: expiresAt, MaxAge: int(time.Until(expiresAt).Seconds()),
 		HttpOnly: true, Secure: h.cfg.IsProd(), SameSite: http.SameSiteLaxMode,
 	})
-	api.RespondJSON(w, http.StatusOK, toPublic(u))
+	RespondJSON(w, http.StatusOK, toPublic(u))
 }
 
 // Logout deletes the current session and clears the cookie.
@@ -105,15 +104,15 @@ func (h *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 		Expires: time.Unix(0, 0), MaxAge: -1,
 		HttpOnly: true, Secure: h.cfg.IsProd(), SameSite: http.SameSiteLaxMode,
 	})
-	api.RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // CurrentUser returns the authenticated user from context.
 func (h *Auth) CurrentUser(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	if u == nil {
-		api.RespondError(w, http.StatusUnauthorized, "authentication required")
+		RespondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	api.RespondJSON(w, http.StatusOK, toPublic(*u))
+	RespondJSON(w, http.StatusOK, toPublic(*u))
 }
