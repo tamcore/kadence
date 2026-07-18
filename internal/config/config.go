@@ -32,11 +32,29 @@ type Config struct {
 	LLMTimeout     time.Duration
 	// SystemPrompt overrides the default chat system prompt.
 	SystemPrompt string
+
+	// Guardrail (opt-in topic classifier). Model/base/key fall back to the LLM* values.
+	GuardrailEnabled       bool
+	GuardrailModel         string
+	GuardrailBaseURL       string
+	GuardrailAPIKey        string
+	GuardrailHistoryWindow int
+	// Domain config for the guardrail classifier prompt + refusal.
+	DomainName     string
+	AllowedTopics  string
+	RefusalMessage string
 }
 
 const (
 	defaultListenAddr = ":8080"
 	defaultEnv        = "dev"
+
+	defaultDomainName    = "Kadence, an endurance-sports coaching assistant"
+	defaultAllowedTopics = "endurance training and racing (running, cycling, swimming, triathlon), " +
+		"workouts, training plans, pacing, recovery, injury-prevention basics, sports nutrition and hydration, " +
+		"race preparation, and the user's own training data and progress"
+	defaultRefusalMessage = "I'm your coaching assistant, so I can only help with training, workouts, " +
+		"recovery, nutrition, and race prep. What would you like to work on?"
 )
 
 // Load reads configuration from the environment, applying defaults.
@@ -59,6 +77,15 @@ func Load() Config {
 	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 90*time.Second)
 	cfg.SystemPrompt = os.Getenv("KADENCE_SYSTEM_PROMPT")
 
+	cfg.GuardrailEnabled = envBoolOr("KADENCE_GUARDRAIL_ENABLED", false)
+	cfg.GuardrailModel = os.Getenv("KADENCE_GUARDRAIL_MODEL")
+	cfg.GuardrailBaseURL = os.Getenv("KADENCE_GUARDRAIL_BASE_URL")
+	cfg.GuardrailAPIKey = os.Getenv("KADENCE_GUARDRAIL_API_KEY")
+	cfg.GuardrailHistoryWindow = envIntOr("KADENCE_GUARDRAIL_HISTORY_WINDOW", 6)
+	cfg.DomainName = envOr("KADENCE_DOMAIN_NAME", defaultDomainName)
+	cfg.AllowedTopics = envOr("KADENCE_ALLOWED_TOPICS", defaultAllowedTopics)
+	cfg.RefusalMessage = envOr("KADENCE_REFUSAL_MESSAGE", defaultRefusalMessage)
+
 	return cfg
 }
 
@@ -77,6 +104,30 @@ func (c Config) Validate() error {
 		return errors.New("KADENCE_CSRF_SECRET is required in production")
 	}
 	return nil
+}
+
+// ResolvedGuardrailModel returns the guardrail model, falling back to the chat model.
+func (c Config) ResolvedGuardrailModel() string {
+	if c.GuardrailModel != "" {
+		return c.GuardrailModel
+	}
+	return c.LLMModel
+}
+
+// ResolvedGuardrailBaseURL returns the guardrail base URL, falling back to the chat base URL.
+func (c Config) ResolvedGuardrailBaseURL() string {
+	if c.GuardrailBaseURL != "" {
+		return c.GuardrailBaseURL
+	}
+	return c.LLMBaseURL
+}
+
+// ResolvedGuardrailAPIKey returns the guardrail API key, falling back to the chat API key.
+func (c Config) ResolvedGuardrailAPIKey() string {
+	if c.GuardrailAPIKey != "" {
+		return c.GuardrailAPIKey
+	}
+	return c.LLMAPIKey
 }
 
 func envOr(key, fallback string) string {
@@ -108,6 +159,15 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+func envBoolOr(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

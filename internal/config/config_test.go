@@ -97,3 +97,44 @@ func TestLLMDefaults(t *testing.T) {
 		t.Fatalf("llm defaults not applied: %+v", cfg)
 	}
 }
+
+func TestGuardrailDefaults(t *testing.T) {
+	t.Setenv("KADENCE_GUARDRAIL_ENABLED", "")
+	cfg := Load()
+	if cfg.GuardrailEnabled {
+		t.Fatal("guardrail should default OFF")
+	}
+	if cfg.GuardrailHistoryWindow != 6 {
+		t.Fatalf("history window = %d, want 6", cfg.GuardrailHistoryWindow)
+	}
+	if cfg.DomainName == "" || cfg.AllowedTopics == "" || cfg.RefusalMessage == "" {
+		t.Fatalf("domain defaults missing: %+v", cfg)
+	}
+}
+
+func TestGuardrailResolversFallBackToLLM(t *testing.T) {
+	t.Setenv("KADENCE_LLM_MODEL", "main-model")
+	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
+	t.Setenv("KADENCE_LLM_API_KEY", "main-key")
+	t.Setenv("KADENCE_GUARDRAIL_MODEL", "")
+	t.Setenv("KADENCE_GUARDRAIL_BASE_URL", "")
+	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "")
+
+	cfg := Load()
+	if cfg.ResolvedGuardrailModel() != "main-model" ||
+		cfg.ResolvedGuardrailBaseURL() != "https://main.example/v1" ||
+		cfg.ResolvedGuardrailAPIKey() != "main-key" {
+		t.Fatalf("resolvers should fall back to LLM values: %+v", cfg)
+	}
+}
+
+func TestGuardrailSeparateBackend(t *testing.T) {
+	t.Setenv("KADENCE_LLM_MODEL", "main-model")
+	t.Setenv("KADENCE_GUARDRAIL_MODEL", "cheap-model")
+	t.Setenv("KADENCE_GUARDRAIL_BASE_URL", "https://guard.example/v1")
+	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "guard-key")
+	cfg := Load()
+	if cfg.ResolvedGuardrailModel() != "cheap-model" || cfg.ResolvedGuardrailBaseURL() != "https://guard.example/v1" || cfg.ResolvedGuardrailAPIKey() != "guard-key" {
+		t.Fatalf("resolvers should use guardrail-specific values: %+v", cfg)
+	}
+}
