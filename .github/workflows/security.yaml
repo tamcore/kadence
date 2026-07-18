@@ -18,7 +18,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run gosec
-        run: go tool gosec -exclude-generated ./...
+        # G124: session cookie Secure flag is intentionally conditional on
+        # KADENCE_ENV (dev serves over plain HTTP); HttpOnly and SameSite=Lax
+        # are always set regardless of environment.
+        run: go tool gosec -exclude-generated -exclude=G124 ./...
 
   govulncheck:
     runs-on: ubuntu-latest
@@ -37,9 +40,13 @@ jobs:
       - name: Install semgrep
         run: pipx install semgrep==1.165.0
       - name: Run semgrep
+        # cookie-missing-secure: session cookie Secure flag is intentionally
+        # conditional on KADENCE_ENV (dev serves over plain HTTP); HttpOnly
+        # and SameSite=Lax are always set regardless of environment.
         run: >-
           semgrep scan
           --config p/golang
           --config p/owasp-top-ten
           --metrics=off
           --error
+          --exclude-rule go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure

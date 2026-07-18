@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/tamcore/kadence/internal/auth"
@@ -62,18 +63,5 @@ func RequireAuth(next http.Handler) http.Handler {
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"data":null,"error":` + quote(msg) + `}`))
-}
-
-func quote(s string) string {
-	b := make([]byte, 0, len(s)+2)
-	b = append(b, '"')
-	for _, r := range s {
-		if r == '"' || r == '\\' {
-			b = append(b, '\\')
-		}
-		b = append(b, byte(r))
-	}
-	b = append(b, '"')
-	return string(b)
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "error": msg})
 }
