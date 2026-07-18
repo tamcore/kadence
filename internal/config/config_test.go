@@ -138,3 +138,20 @@ func TestGuardrailSeparateBackend(t *testing.T) {
 		t.Fatalf("resolvers should use guardrail-specific values: %+v", cfg)
 	}
 }
+
+func TestEmbedDefaultsAndRAGGating(t *testing.T) {
+	t.Setenv("KADENCE_EMBED_BASE_URL", "")
+	t.Setenv("KADENCE_EMBED_MODEL", "")
+	t.Setenv("KADENCE_EMBED_API_KEY", "")
+	cfg := Load()
+	if cfg.EmbedBaseURL != "https://api.openai.com/v1" || cfg.EmbedModel == "" || cfg.RAGTopK != 5 {
+		t.Fatalf("embed defaults wrong: %+v", cfg)
+	}
+	if cfg.RAGEnabled() {
+		t.Fatal("RAG should be disabled without an embed API key")
+	}
+	t.Setenv("KADENCE_EMBED_API_KEY", "ek")
+	if !Load().RAGEnabled() {
+		t.Fatal("RAG should enable when embed API key is set")
+	}
+}

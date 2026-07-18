@@ -43,6 +43,12 @@ type Config struct {
 	DomainName     string
 	AllowedTopics  string
 	RefusalMessage string
+
+	// Embeddings / RAG. RAG is enabled iff EmbedAPIKey != "".
+	EmbedBaseURL string
+	EmbedAPIKey  string
+	EmbedModel   string
+	RAGTopK      int
 }
 
 const (
@@ -86,6 +92,11 @@ func Load() Config {
 	cfg.AllowedTopics = envOr("KADENCE_ALLOWED_TOPICS", defaultAllowedTopics)
 	cfg.RefusalMessage = envOr("KADENCE_REFUSAL_MESSAGE", defaultRefusalMessage)
 
+	cfg.EmbedBaseURL = envOr("KADENCE_EMBED_BASE_URL", "https://api.openai.com/v1")
+	cfg.EmbedAPIKey = os.Getenv("KADENCE_EMBED_API_KEY")
+	cfg.EmbedModel = envOr("KADENCE_EMBED_MODEL", "text-embedding-3-small")
+	cfg.RAGTopK = envIntOr("KADENCE_RAG_TOP_K", 5)
+
 	return cfg
 }
 
@@ -94,6 +105,9 @@ func (c Config) IsProd() bool { return c.Env == "prod" }
 
 // ChatEnabled reports whether LLM chat is configured.
 func (c Config) ChatEnabled() bool { return c.LLMAPIKey != "" }
+
+// RAGEnabled reports whether retrieval-augmented memory is configured.
+func (c Config) RAGEnabled() bool { return c.EmbedAPIKey != "" }
 
 // Validate checks required runtime configuration. Call before starting the server.
 func (c Config) Validate() error {
