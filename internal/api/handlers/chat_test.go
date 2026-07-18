@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
@@ -23,15 +24,22 @@ func (f *fakeStreamer) Stream(_ context.Context, _, _ int64, text string, sink c
 	return sink.Flush()
 }
 
-type fakeConvLister struct{ list []model.Conversation }
+type fakeConvLister struct {
+	list         []model.Conversation
+	getByIDError error
+	deleteError  error
+}
 
 func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation, error) {
 	return f.list, nil
 }
 func (f fakeConvLister) GetByID(_ context.Context, id, userID int64) (model.Conversation, error) {
+	if f.getByIDError != nil {
+		return model.Conversation{}, f.getByIDError
+	}
 	return model.Conversation{ID: id, UserID: userID}, nil
 }
-func (f fakeConvLister) Delete(context.Context, int64, int64) error { return nil }
+func (f fakeConvLister) Delete(context.Context, int64, int64) error { return f.deleteError }
 
 type fakeMsgLister struct{ msgs []model.Message }
 
@@ -39,8 +47,14 @@ func (f fakeMsgLister) ListByConversation(context.Context, int64) ([]model.Messa
 	return f.msgs, nil
 }
 
-func withUser(r *http.Request, id int64) *http.Request {
+func withUser(r *http.Request, id int64) *http.Request { //nolint:unparam
 	return r.WithContext(auth.ContextWithUser(r.Context(), &model.User{ID: id, Username: "u", Role: model.RoleUser}))
+}
+
+func withChiParam(r *http.Request, param, val string) *http.Request {
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(param, val)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
 func TestChatSendStreamsSSE(t *testing.T) {
@@ -80,5 +94,88 @@ func TestListConversations(t *testing.T) {
 	h.ListConversations(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"a"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListConversationsMissingUser(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.ListConversations(rec, httptest.NewRequest(http.MethodGet, "/api/conversations", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+}
+
+func TestMessagesSuccess(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{},
+		fakeMsgLister{msgs: []model.Message{{ID: 1, Role: model.MsgRoleUser, Content: "hi"}}})
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil), 7), "id", "1")
+	rec := httptest.NewRecorder()
+	h.Messages(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"hi"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMessagesBadID(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/notanid/messages", nil), 7)
+	rec := httptest.NewRecorder()
+	h.Messages(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestMessagesMissingUser(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.Messages(rec, httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+}
+
+func TestMessagesOwnershipMiss(t *testing.T) {
+	convErr := &convNotFoundErr{}
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{getByIDError: convErr}, fakeMsgLister{})
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil), 7), "id", "1")
+	rec := httptest.NewRecorder()
+	h.Messages(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", rec.Code)
+	}
+}
+
+type convNotFoundErr struct{}
+
+func (*convNotFoundErr) Error() string { return "not found" }
+
+func TestDeleteConversationSuccess(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
+	rec := httptest.NewRecorder()
+	h.DeleteConversation(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteConversationBadID(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	req := withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/notanid", nil), 7)
+	rec := httptest.NewRecorder()
+	h.DeleteConversation(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestDeleteConversationMissingUser(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.DeleteConversation(rec, httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", rec.Code)
 	}
 }
