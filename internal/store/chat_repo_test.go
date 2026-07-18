@@ -12,6 +12,14 @@ import (
 
 const testAliceUsername = "alice"
 
+// Shared test-fixture emails, reused across store_test files to avoid
+// goconst duplicate-literal warnings.
+const (
+	testEmailA = "a@x.io"
+	testEmailB = "b@x.io"
+	testEmailO = "o@x.io"
+)
+
 func TestConversationAndMessageFlow(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
@@ -20,7 +28,7 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	msgs := store.NewMessageRepository(pool)
 	ctx := context.Background()
 
-	u, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: "a@x.io", PasswordHash: "h", Role: model.RoleUser})
+	u, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -60,8 +68,8 @@ func TestConversationScopedToOwner(t *testing.T) {
 	convs := store.NewConversationRepository(pool)
 	ctx := context.Background()
 
-	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: "o@x.io", PasswordHash: "h", Role: model.RoleUser})
-	other, _ := users.Create(ctx, model.User{Username: "other", Email: "b@x.io", PasswordHash: "h", Role: model.RoleUser})
+	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
+	other, _ := users.Create(ctx, model.User{Username: "other", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, owner.ID, "secret")
 
 	if _, err := convs.GetByID(ctx, c.ID, other.ID); !errors.Is(err, store.ErrNotFound) {

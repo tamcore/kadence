@@ -58,8 +58,8 @@ func TestUserRepositoryListDeleteCount(t *testing.T) {
 	repo := store.NewUserRepository(pool)
 	ctx := context.Background()
 
-	a, _ := repo.Create(ctx, model.User{Username: "a", Email: "a@x.io", PasswordHash: "h", Role: model.RoleUser})
-	_, _ = repo.Create(ctx, model.User{Username: "b", Email: "b@x.io", PasswordHash: "h", Role: model.RoleUser})
+	a, _ := repo.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+	_, _ = repo.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 
 	all, err := repo.ListAll(ctx)
 	if err != nil || len(all) != 2 {
