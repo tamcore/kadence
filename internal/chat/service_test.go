@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestStreamNewConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs)
+		convs, msgs, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), 7, 0, "hi coach", sink); err != nil {
@@ -118,7 +119,7 @@ func TestStreamExistingConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs)
+		convs, msgs, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
@@ -138,7 +139,7 @@ func TestStreamConversationNotFound(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs)
+		convs, msgs, nil)
 
 	sink := &capturingSink{}
 	err := svc.Stream(context.Background(), testUserID, 99, "hi coach", sink)
@@ -155,7 +156,7 @@ func TestStreamProviderError(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{err: &providerErr{}},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs)
+		convs, msgs, nil)
 
 	sink := &capturingSink{}
 	err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink)
@@ -197,10 +198,76 @@ func TestStreamAppliesTimeout(t *testing.T) {
 			Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp,
 			SystemPrompt: testSystemMsg, Timeout: testTimeout,
 		},
-		convs, msgs)
+		convs, msgs, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
+	}
+}
+
+// recordingProvider records whether StreamChat was called; returns a canned reply.
+const (
+	testGuardrailClassifierModel = "c"
+	testGuardrailDomain          = "Coach"
+	testGuardrailTopics          = "training"
+	testGuardrailRefusal         = "nope, coaching only"
+)
+
+type recordingProvider struct{ called bool }
+
+func (p *recordingProvider) StreamChat(_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	p.called = true
+	_ = onToken("hello")
+	return "hello", nil
+}
+
+func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mainP := &recordingProvider{}
+	guard := chat.NewGuardrail(&verdictProvider{verdict: "OFF_TOPIC"}, chat.GuardrailConfig{
+		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
+		RefusalMessage: testGuardrailRefusal, HistoryWindow: 6,
+	})
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), 1, 0, "what's the stock market doing?", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if mainP.called {
+		t.Fatal("main provider should NOT be called on refusal")
+	}
+	last := msgs.added[len(msgs.added)-1]
+	if last.Role != model.MsgRoleAssistant || last.Content != testGuardrailRefusal {
+		t.Fatalf("refusal not persisted: %+v", last)
+	}
+	var streamed strings.Builder
+	for _, e := range sink.events {
+		if e.Type == chat.EventToken {
+			streamed.WriteString(e.Delta)
+		}
+	}
+	if streamed.String() != testGuardrailRefusal {
+		t.Fatalf("streamed = %q", streamed.String())
+	}
+}
+
+func TestStreamGuardrailFailsOpen(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mainP := &recordingProvider{}
+	guard := chat.NewGuardrail(&verdictProvider{err: errors.New("classifier down")}, chat.GuardrailConfig{
+		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
+		RefusalMessage: "nope", HistoryWindow: 6,
+	})
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard)
+
+	if err := svc.Stream(context.Background(), 1, 0, "how many rest days?", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if !mainP.called {
+		t.Fatal("guardrail error must fail open → main provider called")
 	}
 }
