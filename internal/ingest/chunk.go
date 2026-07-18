@@ -8,6 +8,10 @@ import "strings"
 // longer than maxChars is hard-split into maxChars-sized, rune-safe pieces.
 // Empty input yields nil. No chunk is ever empty.
 func ChunkText(text string, maxChars int) []string {
+	if maxChars <= 0 {
+		return nil
+	}
+
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil

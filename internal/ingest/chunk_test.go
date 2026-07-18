@@ -11,6 +11,15 @@ func TestChunkTextEmpty(t *testing.T) {
 	}
 }
 
+func TestChunkTextNonPositiveMaxChars(t *testing.T) {
+	if got := ChunkText("some text here", 0); got != nil {
+		t.Fatalf("maxChars=0 → nil, got %v", got)
+	}
+	if got := ChunkText("some text here", -5); got != nil {
+		t.Fatalf("maxChars<0 → nil, got %v", got)
+	}
+}
+
 func TestChunkTextSingleSmall(t *testing.T) {
 	got := ChunkText("hello world", 100)
 	if len(got) != 1 || got[0] != "hello world" {
