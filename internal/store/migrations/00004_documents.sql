@@ -17,6 +17,10 @@ ALTER TABLE chunks ALTER COLUMN user_id DROP NOT NULL;
 CREATE INDEX idx_chunks_document_id ON chunks(document_id);
 
 -- +goose Down
+-- NOTE: SET NOT NULL fails if any ownerless public-document chunks (user_id IS
+-- NULL) exist. Rolling back a populated corpus requires deleting those rows first
+-- (they are dropped anyway when the documents table below is removed via cascade,
+-- so run this Down only after clearing public document chunks, or on a clean schema).
 ALTER TABLE chunks DROP COLUMN document_id;
 ALTER TABLE chunks ALTER COLUMN user_id SET NOT NULL;
 DROP TABLE documents;
