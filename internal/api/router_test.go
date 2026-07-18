@@ -7,7 +7,7 @@ import (
 )
 
 func TestHealthzReturnsOK(t *testing.T) {
-	srv := httptest.NewServer(NewRouter())
+	srv := httptest.NewServer(NewRouter(Deps{}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/healthz")
@@ -30,7 +30,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 func TestRootServesPlaceholderWhenNoFrontend(t *testing.T) {
 	// In `go test` builds (no prodfrontend tag) web.Available() is false,
 	// so the root serves the placeholder page.
-	srv := httptest.NewServer(NewRouter())
+	srv := httptest.NewServer(NewRouter(Deps{}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/")

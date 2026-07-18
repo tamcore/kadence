@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/tamcore/kadence/internal/api"
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/model"
 )
@@ -31,14 +30,14 @@ func NewUsers(repo UsersRepo) *Users { return &Users{repo: repo} }
 func (h *Users) List(w http.ResponseWriter, r *http.Request) {
 	all, err := h.repo.ListAll(r.Context())
 	if err != nil {
-		api.RespondError(w, http.StatusInternalServerError, "could not list users")
+		RespondError(w, http.StatusInternalServerError, "could not list users")
 		return
 	}
 	out := make([]publicUser, 0, len(all))
 	for _, u := range all {
 		out = append(out, toPublic(u))
 	}
-	api.RespondJSON(w, http.StatusOK, out)
+	RespondJSON(w, http.StatusOK, out)
 }
 
 // Create creates a user (admin only). Password is hashed.
@@ -50,42 +49,42 @@ func (h *Users) Create(w http.ResponseWriter, r *http.Request) {
 		Role     string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		api.RespondError(w, http.StatusBadRequest, "invalid request body")
+		RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if body.Username == "" || body.Email == "" || body.Password == "" {
-		api.RespondError(w, http.StatusBadRequest, "username, email, and password are required")
+		RespondError(w, http.StatusBadRequest, "username, email, and password are required")
 		return
 	}
 	if body.Role != model.RoleAdmin && body.Role != model.RoleUser {
-		api.RespondError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
+		RespondError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
 		return
 	}
 	hash, err := auth.HashPassword(body.Password)
 	if err != nil {
-		api.RespondError(w, http.StatusInternalServerError, "could not hash password")
+		RespondError(w, http.StatusInternalServerError, "could not hash password")
 		return
 	}
 	created, err := h.repo.Create(r.Context(), model.User{
 		Username: body.Username, Email: body.Email, PasswordHash: hash, Role: body.Role,
 	})
 	if err != nil {
-		api.RespondError(w, http.StatusConflict, "could not create user (username or email may already exist)")
+		RespondError(w, http.StatusConflict, "could not create user (username or email may already exist)")
 		return
 	}
-	api.RespondJSON(w, http.StatusCreated, toPublic(created))
+	RespondJSON(w, http.StatusCreated, toPublic(created))
 }
 
 // Delete removes a user by id.
 func (h *Users) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		api.RespondError(w, http.StatusBadRequest, "invalid user id")
+		RespondError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		api.RespondError(w, http.StatusInternalServerError, "could not delete user")
+		RespondError(w, http.StatusInternalServerError, "could not delete user")
 		return
 	}
-	api.RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

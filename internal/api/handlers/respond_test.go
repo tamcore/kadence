@@ -1,4 +1,4 @@
-package api_test
+package handlers_test
 
 import (
 	"encoding/json"
@@ -6,12 +6,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tamcore/kadence/internal/api"
+	"github.com/tamcore/kadence/internal/api/handlers"
 )
 
 func TestRespondJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
-	api.RespondJSON(rec, http.StatusCreated, map[string]string{"hello": "world"})
+	handlers.RespondJSON(rec, http.StatusCreated, map[string]string{"hello": "world"})
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d", rec.Code)
@@ -30,7 +30,7 @@ func TestRespondJSON(t *testing.T) {
 
 func TestRespondError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	api.RespondError(rec, http.StatusBadRequest, "nope")
+	handlers.RespondError(rec, http.StatusBadRequest, "nope")
 	var env struct {
 		Data  any    `json:"data"`
 		Error string `json:"error"`
