@@ -1,0 +1,102 @@
+package handlers_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/tamcore/kadence/internal/api/handlers"
+	"github.com/tamcore/kadence/internal/auth"
+	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
+)
+
+type userGetter struct{ u model.User }
+
+func (g userGetter) GetByUsername(_ context.Context, name string) (model.User, error) {
+	if name == g.u.Username {
+		return g.u, nil
+	}
+	return model.User{}, store.ErrNotFound
+}
+
+type sessionStore struct{ created, deleted string }
+
+func (s *sessionStore) Create(_ context.Context, sess model.Session) error {
+	s.created = sess.ID
+	return nil
+}
+func (s *sessionStore) Delete(_ context.Context, id string) error { s.deleted = id; return nil }
+
+func newAuth(t *testing.T, pw string) (*handlers.Auth, *sessionStore) {
+	t.Helper()
+	hash, _ := auth.HashPassword(pw)
+	u := model.User{ID: 1, Username: "alice", Email: "a@x.io", PasswordHash: hash, Role: model.RoleUser}
+	ss := &sessionStore{}
+	return handlers.NewAuth(config.Config{}, userGetter{u}, ss), ss
+}
+
+func TestLoginSuccessSetsCookie(t *testing.T) {
+	h, ss := newAuth(t, "hunter2")
+	body := `{"username":"alice","password":"hunter2","remember":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Login(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ss.created == "" {
+		t.Fatal("session not created")
+	}
+	var setCookie string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "session_id" {
+			setCookie = c.Value
+		}
+	}
+	if setCookie == "" {
+		t.Fatal("session_id cookie not set")
+	}
+}
+
+func TestLoginWrongPassword(t *testing.T) {
+	h, _ := newAuth(t, "hunter2")
+	body := `{"username":"alice","password":"WRONG","remember":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Login(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestCurrentUserRequiresContext(t *testing.T) {
+	h, _ := newAuth(t, "x")
+	rec := httptest.NewRecorder()
+	h.CurrentUser(rec, httptest.NewRequest(http.MethodGet, "/api/session", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 9, Username: "bob"}))
+	h.CurrentUser(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var env struct {
+		Data struct {
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &env)
+	if env.Data.Username != "bob" {
+		t.Fatalf("bad current user: %s", rec.Body.String())
+	}
+}
