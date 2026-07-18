@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -43,11 +44,12 @@ type Service struct {
 	convs     ConversationStore
 	msgs      MessageStore
 	guardrail *Guardrail
+	rag       *RAG
 }
 
-// NewService constructs a chat Service. guardrail may be nil (disabled).
-func NewService(p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore, guardrail *Guardrail) *Service {
-	return &Service{provider: p, cfg: cfg, convs: convs, msgs: msgs, guardrail: guardrail}
+// NewService constructs a chat Service. guardrail and rag may be nil (disabled).
+func NewService(p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore, guardrail *Guardrail, rag *RAG) *Service {
+	return &Service{provider: p, cfg: cfg, convs: convs, msgs: msgs, guardrail: guardrail, rag: rag}
 }
 
 func (s *Service) systemPrompt() string {
@@ -85,7 +87,8 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 	if err != nil {
 		return s.fail(sink, "could not load history")
 	}
-	if _, err := s.msgs.Add(ctx, conversationID, model.MsgRoleUser, userText); err != nil {
+	userMsg, err := s.msgs.Add(ctx, conversationID, model.MsgRoleUser, userText)
+	if err != nil {
 		return s.fail(sink, "could not save message")
 	}
 
@@ -94,7 +97,7 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		MaxTokens:   s.cfg.MaxTokens,
 		Temperature: s.cfg.Temperature,
 	}
-	req.Messages = append(req.Messages, provider.Message{Role: "system", Content: s.systemPrompt()})
+	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: s.systemPrompt()})
 	for _, m := range history {
 		req.Messages = append(req.Messages, provider.Message{Role: m.Role, Content: m.Content})
 	}
@@ -129,6 +132,27 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		}
 	}
 
+	if s.rag != nil {
+		contexts, queryEmb, rErr := s.rag.Retrieve(ctx, userID, userText)
+		if rErr != nil {
+			slog.Warn("rag retrieve failed, proceeding", "err", rErr, "conversation", conversationID)
+		} else {
+			if len(contexts) > 0 {
+				var b strings.Builder
+				b.WriteString("Relevant notes from earlier conversations with this user (use if helpful):\n")
+				for _, c := range contexts {
+					b.WriteString("- ")
+					b.WriteString(c)
+					b.WriteString("\n")
+				}
+				req.Messages = insertAfterSystem(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: b.String()})
+			}
+			if err := s.rag.Store(ctx, userID, conversationID, userMsg.ID, userText, queryEmb); err != nil {
+				slog.Warn("rag store user chunk failed", "err", err)
+			}
+		}
+	}
+
 	full, err := s.provider.StreamChat(streamCtx, req, func(delta string) error {
 		if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
 			return e
@@ -143,14 +167,34 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		return s.fail(sink, "the assistant could not complete the response")
 	}
 
-	if _, err := s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, full); err != nil {
+	assistantMsg, err := s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, full)
+	if err != nil {
 		slog.Error("persist assistant message", "err", err)
+	}
+
+	if s.rag != nil && full != "" {
+		if emb, embErr := s.rag.Embed(ctx, full); embErr != nil {
+			slog.Warn("rag embed assistant failed", "err", embErr)
+		} else if storeErr := s.rag.Store(ctx, userID, conversationID, assistantMsg.ID, full, emb); storeErr != nil {
+			slog.Warn("rag store assistant chunk failed", "err", storeErr)
+		}
 	}
 
 	if err := sink.Send(ChatEvent{Type: EventDone}); err != nil {
 		return err
 	}
 	return sink.Flush()
+}
+
+// insertAfterSystem inserts m right after a leading system message, or
+// prepends it when there is no system message at index 0.
+func insertAfterSystem(msgs []provider.Message, m provider.Message) []provider.Message {
+	if len(msgs) > 0 && msgs[0].Role == model.MsgRoleSystem {
+		out := make([]provider.Message, 0, len(msgs)+1)
+		out = append(out, msgs[0], m)
+		return append(out, msgs[1:]...)
+	}
+	return append([]provider.Message{m}, msgs...)
 }
 
 func (s *Service) fail(sink EventSink, msg string) error {
