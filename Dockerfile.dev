@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# Multi-stage dev build used by local runs + the e2e CI job.
+# Builds the SvelteKit frontend, then compiles the Go binary with the
+# frontend embedded (-tags prodfrontend).
+
+FROM node:24-alpine AS frontend
+WORKDIR /src
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --silent
+COPY web ./
+RUN npm run build
+
+FROM golang:1.26-alpine AS backend
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+COPY --from=frontend /src/build ./web/build
+RUN CGO_ENABLED=0 go build -tags prodfrontend -ldflags "-s -w" -o /out/kadence ./cmd/server
+
+FROM gcr.io/distroless/static-debian12:nonroot AS app
+COPY --from=backend /out/kadence /kadence
+EXPOSE 8080
+USER 65532:65532
+ENTRYPOINT ["/kadence"]
