@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/api"
+	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
+	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/store"
 )
 
@@ -51,9 +54,27 @@ func Run() error {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
 
+	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
+
+	if cfg.ChatEnabled() {
+		convs := store.NewConversationRepository(pool)
+		msgs := store.NewMessageRepository(pool)
+		prov := provider.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey)
+		chatSvc := chat.NewService(prov, chat.ServiceConfig{
+			Model:        cfg.LLMModel,
+			MaxTokens:    cfg.LLMMaxTokens,
+			Temperature:  cfg.LLMTemperature,
+			SystemPrompt: cfg.SystemPrompt,
+		}, convs, msgs)
+		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
+		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
+	} else {
+		slog.Info("chat disabled (KADENCE_LLM_API_KEY not set)")
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: cfg}),
+		Handler:           api.NewRouter(deps),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
