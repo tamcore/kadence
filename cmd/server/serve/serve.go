@@ -60,13 +60,25 @@ func Run() error {
 		convs := store.NewConversationRepository(pool)
 		msgs := store.NewMessageRepository(pool)
 		prov := provider.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey)
+		var guardrail *chat.Guardrail
+		if cfg.GuardrailEnabled {
+			gProv := provider.NewOpenAICompat(cfg.ResolvedGuardrailBaseURL(), cfg.ResolvedGuardrailAPIKey())
+			guardrail = chat.NewGuardrail(gProv, chat.GuardrailConfig{
+				Model:          cfg.ResolvedGuardrailModel(),
+				DomainName:     cfg.DomainName,
+				AllowedTopics:  cfg.AllowedTopics,
+				RefusalMessage: cfg.RefusalMessage,
+				HistoryWindow:  cfg.GuardrailHistoryWindow,
+			})
+			slog.Info("guardrail enabled", "model", cfg.ResolvedGuardrailModel(), "base_url", cfg.ResolvedGuardrailBaseURL())
+		}
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
 			Model:        cfg.LLMModel,
 			MaxTokens:    cfg.LLMMaxTokens,
 			Temperature:  cfg.LLMTemperature,
 			SystemPrompt: cfg.SystemPrompt,
 			Timeout:      cfg.LLMTimeout,
-		}, convs, msgs, nil)
+		}, convs, msgs, guardrail)
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
