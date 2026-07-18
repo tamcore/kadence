@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/gorilla/csrf"
 
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/api/middleware"
@@ -21,6 +22,7 @@ type Deps struct {
 	Users    *store.UserRepository
 	Sessions *store.SessionRepository
 	Config   config.Config
+	Chat     *handlers.Chat
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -52,7 +54,7 @@ func mountAuth(r chi.Router, deps Deps) {
 	if len(secret) == 0 {
 		secret = randomSecret()
 	}
-	csrf := middleware.CSRF(secret, deps.Config.IsProd())
+	csrfProtect := middleware.CSRF(secret, deps.Config.IsProd())
 	loadUser := middleware.LoadUser(deps.Sessions, deps.Users)
 
 	// Login: reachable without a prior CSRF token (no session yet), but behind LoadUser.
@@ -61,10 +63,29 @@ func mountAuth(r chi.Router, deps Deps) {
 	// All other auth/admin routes: LoadUser + CSRF protection.
 	r.Group(func(r chi.Router) {
 		r.Use(loadUser)
-		r.Use(csrf)
+		if !deps.Config.IsProd() {
+			// gorilla/csrf enforces a same-origin Referer check on unsafe methods
+			// and rejects cleartext HTTP referers unless the request is marked
+			// plaintext. Outside production we always serve over plain HTTP
+			// (dev server, tests), so mark requests accordingly; production
+			// requests are unaffected and remain subject to the full check.
+			r.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					next.ServeHTTP(w, csrf.PlaintextHTTPRequest(req))
+				})
+			})
+		}
+		r.Use(csrfProtect)
 
 		r.Delete("/api/session", authH.Logout)
 		r.Get("/api/session", authH.CurrentUser)
+
+		if deps.Chat != nil {
+			r.Post("/api/chat", deps.Chat.Send)
+			r.Get("/api/conversations", deps.Chat.ListConversations)
+			r.Get("/api/conversations/{id}/messages", deps.Chat.Messages)
+			r.Delete("/api/conversations/{id}", deps.Chat.DeleteConversation)
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAuth)
