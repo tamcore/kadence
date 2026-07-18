@@ -48,7 +48,7 @@ func TestRAGStorePrivateMessageChunk(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 	c := fc.inserted[0]
-	if c.UserID != 7 || *c.ConversationID != 3 || *c.SourceID != 9 || c.Scope != model.ScopePrivate || c.Content != "hello" {
+	if c.UserID == nil || *c.UserID != 7 || *c.ConversationID != 3 || *c.SourceID != 9 || c.Scope != model.ScopePrivate || c.Content != "hello" {
 		t.Fatalf("bad chunk: %+v", c)
 	}
 }

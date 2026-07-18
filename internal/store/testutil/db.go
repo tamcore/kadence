@@ -65,7 +65,7 @@ func SetupTestDB(t *testing.T) *pgxpool.Pool {
 // CleanTables truncates all data tables for test isolation.
 func CleanTables(t *testing.T, p *pgxpool.Pool) {
 	t.Helper()
-	_, err := p.Exec(context.Background(), "TRUNCATE users, sessions RESTART IDENTITY CASCADE")
+	_, err := p.Exec(context.Background(), "TRUNCATE users, sessions, documents RESTART IDENTITY CASCADE")
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
