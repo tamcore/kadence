@@ -63,3 +63,37 @@ func TestValidateRequiresCSRFSecretInProd(t *testing.T) {
 		t.Fatal("Validate() = nil, want error for missing CSRF secret in prod")
 	}
 }
+
+func TestLoadLLMFields(t *testing.T) {
+	t.Setenv("KADENCE_LLM_BASE_URL", "https://api.example.com/v1")
+	t.Setenv("KADENCE_LLM_API_KEY", "sk-test")
+	t.Setenv("KADENCE_LLM_MODEL", "some-model")
+
+	cfg := Load()
+
+	if cfg.LLMBaseURL != "https://api.example.com/v1" || cfg.LLMModel != "some-model" {
+		t.Fatalf("llm fields not loaded: %+v", cfg)
+	}
+	if !cfg.ChatEnabled() {
+		t.Fatal("ChatEnabled() = false, want true when LLM API key set")
+	}
+}
+
+func TestChatDisabledWithoutKey(t *testing.T) {
+	t.Setenv("KADENCE_LLM_API_KEY", "")
+	if Load().ChatEnabled() {
+		t.Fatal("ChatEnabled() = true, want false without API key")
+	}
+}
+
+func TestLLMDefaults(t *testing.T) {
+	t.Setenv("KADENCE_LLM_BASE_URL", "")
+	t.Setenv("KADENCE_LLM_MODEL", "")
+	cfg := Load()
+	if cfg.LLMBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("default base url = %q", cfg.LLMBaseURL)
+	}
+	if cfg.LLMModel == "" || cfg.LLMMaxTokens == 0 || cfg.LLMTimeout == 0 {
+		t.Fatalf("llm defaults not applied: %+v", cfg)
+	}
+}
