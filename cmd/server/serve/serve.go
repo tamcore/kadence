@@ -65,6 +65,7 @@ func Run() error {
 			MaxTokens:    cfg.LLMMaxTokens,
 			Temperature:  cfg.LLMTemperature,
 			SystemPrompt: cfg.SystemPrompt,
+			Timeout:      cfg.LLMTimeout,
 		}, convs, msgs)
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
