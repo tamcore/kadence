@@ -85,6 +85,7 @@ var errBodyTooLarge = errors.New("uploaded file exceeds maximum size")
 // "file" field present) are returned as-is.
 func (d *Documents) readUploadedFile(w http.ResponseWriter, r *http.Request) (data []byte, filename, mimeType string, err error) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(d.maxBytes))
+	// #nosec G120 -- the request body is bounded by http.MaxBytesReader above, so ParseMultipartForm cannot exceed maxBytes.
 	if err := r.ParseMultipartForm(int64(d.maxBytes)); err != nil {
 		return nil, "", "", errBodyTooLarge
 	}
