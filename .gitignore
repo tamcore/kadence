@@ -1,1 +1,48 @@
+# Binaries
+/bin/
+/kadence
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary / output
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go workspace / vendor
+go.work
+go.work.sum
+/vendor/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Frontend
+/web/node_modules/
+/web/build/
+/web/.svelte-kit/
+/web/dist/
+/web/playwright-report/
+/web/test-results/
+/web/coverage/
+
+# Env
+.env
+.env.local
+.env.*.local
 .envrc
+
+# GoReleaser
+/dist/
+
+# Claude Code local state
+.claude/
