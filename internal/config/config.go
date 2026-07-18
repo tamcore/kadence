@@ -49,6 +49,10 @@ type Config struct {
 	EmbedAPIKey  string
 	EmbedModel   string
 	RAGTopK      int
+
+	// Ingestion.
+	UploadMaxBytes   int
+	IngestChunkChars int
 }
 
 const (
@@ -96,6 +100,9 @@ func Load() Config {
 	cfg.EmbedAPIKey = os.Getenv("KADENCE_EMBED_API_KEY")
 	cfg.EmbedModel = envOr("KADENCE_EMBED_MODEL", "text-embedding-3-small")
 	cfg.RAGTopK = envIntOr("KADENCE_RAG_TOP_K", 5)
+
+	cfg.UploadMaxBytes = envIntOr("KADENCE_UPLOAD_MAX_BYTES", 10485760)
+	cfg.IngestChunkChars = envIntOr("KADENCE_INGEST_CHUNK_CHARS", 1000)
 
 	return cfg
 }
