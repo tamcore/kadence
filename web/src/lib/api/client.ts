@@ -69,5 +69,7 @@ export const api = {
 	listUsers: () => request<User[]>('/users'),
 	createUser: (u: { username: string; email: string; password: string; role: string }) =>
 		request<User>('/users', { method: 'POST', body: JSON.stringify(u) }),
-	deleteUser: (id: number) => request<{ ok: boolean }>(`/users/${id}`, { method: 'DELETE' })
+	deleteUser: (id: number) => request<{ ok: boolean }>(`/users/${id}`, { method: 'DELETE' }),
+	get: <T,>(path: string) => request<T>(path),
+	del: <T,>(path: string) => request<T>(path, { method: 'DELETE' })
 };
