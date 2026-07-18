@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/model"
@@ -74,6 +75,7 @@ const (
 	testTemp      = 0.2
 	testUserID    = 7
 	testConvID    = 5
+	testConvTitle = "test"
 )
 
 func TestStreamNewConversation(t *testing.T) {
@@ -112,7 +114,7 @@ func TestStreamNewConversation(t *testing.T) {
 }
 
 func TestStreamExistingConversation(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: "test"}}}
+	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
@@ -149,7 +151,7 @@ func TestStreamConversationNotFound(t *testing.T) {
 }
 
 func TestStreamProviderError(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: "test"}}}
+	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{err: &providerErr{}},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
@@ -168,3 +170,37 @@ func TestStreamProviderError(t *testing.T) {
 type providerErr struct{}
 
 func (*providerErr) Error() string { return "provider failed" }
+
+const testTimeout = 5 * time.Second
+
+type deadlineAssertingProvider struct {
+	t     *testing.T
+	reply string
+}
+
+func (p deadlineAssertingProvider) StreamChat(ctx context.Context, _ provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	p.t.Helper()
+	if _, ok := ctx.Deadline(); !ok {
+		p.t.Fatal("expected ctx to have a deadline when ServiceConfig.Timeout is set")
+	}
+	if err := onToken(p.reply); err != nil {
+		return "", err
+	}
+	return p.reply, nil
+}
+
+func TestStreamAppliesTimeout(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(deadlineAssertingProvider{t: t, reply: testReply},
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp,
+			SystemPrompt: testSystemMsg, Timeout: testTimeout,
+		},
+		convs, msgs)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+}

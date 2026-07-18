@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
@@ -27,6 +28,7 @@ type ServiceConfig struct {
 	MaxTokens    int
 	Temperature  float64
 	SystemPrompt string
+	Timeout      time.Duration
 }
 
 const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging endurance-sports coach. " +
@@ -97,7 +99,14 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 	}
 	req.Messages = append(req.Messages, provider.Message{Role: "user", Content: userText})
 
-	full, err := s.provider.StreamChat(ctx, req, func(delta string) error {
+	streamCtx := ctx
+	if s.cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		streamCtx, cancel = context.WithTimeout(ctx, s.cfg.Timeout)
+		defer cancel()
+	}
+
+	full, err := s.provider.StreamChat(streamCtx, req, func(delta string) error {
 		if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
 			return e
 		}
