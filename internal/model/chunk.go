@@ -13,8 +13,9 @@ const (
 // Chunk is an embedded piece of retrievable content.
 type Chunk struct {
 	ID             int64
-	UserID         int64
+	UserID         *int64
 	ConversationID *int64
+	DocumentID     *int64
 	Scope          string
 	SourceKind     string
 	SourceID       *int64
