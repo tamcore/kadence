@@ -9,7 +9,7 @@ vi.mock('$lib/api/chat', () => ({
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
-import { activeId, chatError, messages, newChat, sendMessage } from './chat';
+import { activeId, chatError, messages, newChat, sendMessage, sending } from './chat';
 
 async function* events(evs: unknown[]) {
 	for (const e of evs) yield e;
@@ -43,5 +43,33 @@ describe('chat store', () => {
 		streamChatMock.mockReturnValueOnce(events([{ type: 'error', message: 'boom' }]));
 		await sendMessage('x');
 		expect(get(chatError)).toBe('boom');
+	});
+
+	it('does not set chatError when stream is intentionally aborted', async () => {
+		// Create a stream that yields meta and pauses, allowing us to abort mid-stream
+		streamChatMock.mockImplementationOnce(async function* () {
+			yield { type: 'meta', conversationId: 99 };
+			// Simulate a pause that allows newChat() to abort before done
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		});
+
+		// Start the send (will pause in the async generator)
+		const sendPromise = sendMessage('hi');
+
+		// Give it a tick to reach the await
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// Intentionally abort (simulating newChat())
+		newChat();
+
+		// Wait for the send to settle
+		const result = await sendPromise;
+
+		// An aborted send after receiving meta returns the convId
+		expect(result).toBe(99);
+		// chatError should NOT be set (was already cleared by newChat())
+		expect(get(chatError)).toBeNull();
+		// sending should be false
+		expect(get(sending)).toBe(false);
 	});
 });
