@@ -84,7 +84,7 @@ func TestStreamNewConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil)
+		convs, msgs, nil, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), 7, 0, "hi coach", sink); err != nil {
@@ -119,7 +119,7 @@ func TestStreamExistingConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil)
+		convs, msgs, nil, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
@@ -139,7 +139,7 @@ func TestStreamConversationNotFound(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil)
+		convs, msgs, nil, nil)
 
 	sink := &capturingSink{}
 	err := svc.Stream(context.Background(), testUserID, 99, "hi coach", sink)
@@ -156,7 +156,7 @@ func TestStreamProviderError(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{err: &providerErr{}},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil)
+		convs, msgs, nil, nil)
 
 	sink := &capturingSink{}
 	err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink)
@@ -198,7 +198,7 @@ func TestStreamAppliesTimeout(t *testing.T) {
 			Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp,
 			SystemPrompt: testSystemMsg, Timeout: testTimeout,
 		},
-		convs, msgs, nil)
+		convs, msgs, nil, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
@@ -230,7 +230,7 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: testGuardrailRefusal, HistoryWindow: 6,
 	})
-	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil)
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), 1, 0, "what's the stock market doing?", sink); err != nil {
@@ -262,12 +262,49 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: "nope", HistoryWindow: 6,
 	})
-	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil)
 
 	if err := svc.Stream(context.Background(), 1, 0, "how many rest days?", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if !mainP.called {
 		t.Fatal("guardrail error must fail open → main provider called")
+	}
+}
+
+// capturingProvider records the messages it was asked to stream.
+type capturingProvider struct {
+	reply       string
+	gotMessages []provider.Message
+}
+
+func (p *capturingProvider) StreamChat(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	p.gotMessages = req.Messages
+	_ = onToken(p.reply)
+	return p.reply, nil
+}
+
+func TestStreamInjectsRAGContextAndStores(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	fc := &fakeChunks{search: []model.Chunk{{Content: "you prefer morning runs"}}}
+	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, nil, rag)
+
+	if err := svc.Stream(context.Background(), 7, 0, "plan my week", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var hasNote bool
+	for _, m := range captP.gotMessages {
+		if m.Role == "system" && strings.Contains(m.Content, "you prefer morning runs") {
+			hasNote = true
+		}
+	}
+	if !hasNote {
+		t.Fatalf("RAG context not injected: %+v", captP.gotMessages)
+	}
+	if len(fc.inserted) != 2 {
+		t.Fatalf("expected 2 chunks stored (user+assistant), got %d", len(fc.inserted))
 	}
 }
