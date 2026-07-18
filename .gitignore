@@ -46,3 +46,6 @@ go.work.sum
 
 # Claude Code local state
 .claude/
+.superpowers
+docs/superpowers
+IDEA.md
