@@ -38,15 +38,16 @@ const titleMaxLen = 60
 
 // Service orchestrates a streaming chat turn.
 type Service struct {
-	provider provider.Provider
-	cfg      ServiceConfig
-	convs    ConversationStore
-	msgs     MessageStore
+	provider  provider.Provider
+	cfg       ServiceConfig
+	convs     ConversationStore
+	msgs      MessageStore
+	guardrail *Guardrail
 }
 
-// NewService constructs a chat Service.
-func NewService(p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore) *Service {
-	return &Service{provider: p, cfg: cfg, convs: convs, msgs: msgs}
+// NewService constructs a chat Service. guardrail may be nil (disabled).
+func NewService(p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore, guardrail *Guardrail) *Service {
+	return &Service{provider: p, cfg: cfg, convs: convs, msgs: msgs, guardrail: guardrail}
 }
 
 func (s *Service) systemPrompt() string {
@@ -104,6 +105,28 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		var cancel context.CancelFunc
 		streamCtx, cancel = context.WithTimeout(ctx, s.cfg.Timeout)
 		defer cancel()
+	}
+
+	if s.guardrail != nil {
+		classifierMsgs := make([]provider.Message, 0, len(req.Messages))
+		for _, m := range req.Messages {
+			if m.Role == model.MsgRoleSystem {
+				continue
+			}
+			classifierMsgs = append(classifierMsgs, m)
+		}
+		offTopic, gErr := s.guardrail.Classify(streamCtx, classifierMsgs)
+		switch {
+		case gErr != nil:
+			slog.Warn("guardrail classifier failed, proceeding", "err", gErr, "conversation", conversationID)
+		case offTopic:
+			refusal := s.guardrail.RefusalMessage()
+			_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, refusal)
+			_ = sink.Send(ChatEvent{Type: EventToken, Delta: refusal})
+			_ = sink.Flush()
+			_ = sink.Send(ChatEvent{Type: EventDone})
+			return sink.Flush()
+		}
 	}
 
 	full, err := s.provider.StreamChat(streamCtx, req, func(delta string) error {
