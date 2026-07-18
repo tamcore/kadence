@@ -17,6 +17,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/embed"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/store"
 )
@@ -72,13 +73,19 @@ func Run() error {
 			})
 			slog.Info("guardrail enabled", "model", cfg.ResolvedGuardrailModel(), "base_url", cfg.ResolvedGuardrailBaseURL())
 		}
+		var rag *chat.RAG
+		if cfg.RAGEnabled() {
+			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel)
+			rag = chat.NewRAG(embedder, store.NewChunkRepository(pool), cfg.RAGTopK)
+			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
+		}
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
 			Model:        cfg.LLMModel,
 			MaxTokens:    cfg.LLMMaxTokens,
 			Temperature:  cfg.LLMTemperature,
 			SystemPrompt: cfg.SystemPrompt,
 			Timeout:      cfg.LLMTimeout,
-		}, convs, msgs, guardrail, nil)
+		}, convs, msgs, guardrail, rag)
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
