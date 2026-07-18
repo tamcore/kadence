@@ -2,6 +2,7 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -26,21 +27,27 @@ func NewRouter() http.Handler {
 	r.Get("/api/healthz", healthz)
 
 	if web.Available() {
-		fs := http.FileServer(http.FS(web.FS))
-		r.NotFound(func(w http.ResponseWriter, req *http.Request) {
-			if hasEmbeddedFile(req.URL.Path) {
-				fs.ServeHTTP(w, req)
-				return
-			}
-			req2 := req.Clone(req.Context())
-			req2.URL.Path = "/"
-			req2.URL.RawPath = ""
-			fs.ServeHTTP(w, req2)
-		})
+		r.NotFound(staticHandler(web.FS).ServeHTTP)
 	} else {
 		r.Get("/", placeholder)
 	}
 	return r
+}
+
+// staticHandler serves files from fsys, falling back to the root document
+// (SPA entry point) for any path not present in fsys.
+func staticHandler(fsys fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if fileExists(fsys, req.URL.Path) {
+			fileServer.ServeHTTP(w, req)
+			return
+		}
+		req2 := req.Clone(req.Context())
+		req2.URL.Path = "/"
+		req2.URL.RawPath = ""
+		fileServer.ServeHTTP(w, req2)
+	})
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
@@ -55,15 +62,16 @@ func placeholder(w http.ResponseWriter, _ *http.Request) {
 		`<p>Backend running. Frontend not embedded (build without -tags prodfrontend).</p>`))
 }
 
-func hasEmbeddedFile(urlPath string) bool {
-	if web.FS == nil {
+// fileExists reports whether urlPath resolves to a regular file within fsys.
+func fileExists(fsys fs.FS, urlPath string) bool {
+	if fsys == nil {
 		return false
 	}
 	p := strings.TrimPrefix(urlPath, "/")
 	if p == "" {
 		return false
 	}
-	f, err := web.FS.Open(p)
+	f, err := fsys.Open(p)
 	if err != nil {
 		return false
 	}
