@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvector "github.com/pgvector/pgvector-go/pgx"
 )
 
 // Open creates a pgx connection pool from a DSN and verifies connectivity.
@@ -17,6 +19,10 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	cfg.MaxConns = 10
 	cfg.MaxConnLifetime = time.Hour
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_ = pgxvector.RegisterTypes(ctx, conn) // best-effort; vector type exists after migration 00003
+		return nil
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
