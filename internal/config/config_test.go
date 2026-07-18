@@ -155,3 +155,12 @@ func TestEmbedDefaultsAndRAGGating(t *testing.T) {
 		t.Fatal("RAG should enable when embed API key is set")
 	}
 }
+
+func TestIngestDefaults(t *testing.T) {
+	t.Setenv("KADENCE_UPLOAD_MAX_BYTES", "")
+	t.Setenv("KADENCE_INGEST_CHUNK_CHARS", "")
+	cfg := Load()
+	if cfg.UploadMaxBytes != 10485760 || cfg.IngestChunkChars != 1000 {
+		t.Fatalf("ingest defaults wrong: max=%d chunk=%d", cfg.UploadMaxBytes, cfg.IngestChunkChars)
+	}
+}
