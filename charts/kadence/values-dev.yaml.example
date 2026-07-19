@@ -36,3 +36,22 @@ postgres:
 
 externalDatabase:
   url: "" # postgres://user:pass@host:5432/db?sslmode=require
+
+# Example MCP server (commented out). Uncomment and adjust to add a remote
+# MCP tool server, reachable by the app via MCP_<NAME>_<SCOPE>_* env vars.
+# mcp:
+#   servers:
+#     - name: garmin
+#       scope: global
+#       image: example/garmin-mcp:latest
+#       transport: streamable-http
+#       port: 8000
+#       path: /mcp
+#       env:
+#         - name: GARMIN_MCP_TRANSPORT
+#           value: streamable-http
+#       existingSecret: garmin-creds
+#       persistence:
+#         enabled: true
+#         size: 1Gi
+#         mountPath: /root/.garminconnect

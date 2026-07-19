@@ -17,3 +17,6 @@ jobs:
       - run: helm lint ./charts/kadence
       - run: helm template kadence ./charts/kadence
       - run: helm template kadence ./charts/kadence -f ./charts/kadence/values-dev.yaml.example
+      - run: >
+          helm template kadence ./charts/kadence
+          --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]'

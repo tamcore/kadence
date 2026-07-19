@@ -66,6 +66,19 @@ spec:
               name: {{ include "kadence.fullname" . }}-secret
               key: KADENCE_DATABASE_URL
         {{- end }}
+        {{- range $server := .Values.mcp.servers }}
+        {{- $prefix := include "kadence.mcp.envPrefix" (dict "root" $ "server" $server) }}
+        {{- $svc := include "kadence.mcp.fullname" (dict "root" $ "server" $server) }}
+        {{- $secret := $.Values.mcp.basicAuth.existingSecret | default (include "kadence.mcp.authSecretName" $) }}
+        - name: {{ $prefix }}_URL
+          value: {{ printf "http://%s:8080%s" $svc ($server.path | default "/mcp") | quote }}
+        - name: {{ $prefix }}_TRANSPORT
+          value: {{ $server.transport | default "streamable-http" | quote }}
+        - name: {{ $prefix }}_AUTH_USER
+          valueFrom: { secretKeyRef: { name: {{ $secret }}, key: username } }
+        - name: {{ $prefix }}_AUTH_PASS
+          valueFrom: { secretKeyRef: { name: {{ $secret }}, key: password } }
+        {{- end }}
         envFrom:
         - configMapRef:
             name: {{ include "kadence.fullname" . }}-config
