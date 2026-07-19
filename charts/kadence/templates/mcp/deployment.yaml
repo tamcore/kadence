@@ -48,7 +48,7 @@ spec:
         - secretRef:
             name: {{ $server.existingSecret }}
         {{- end }}
-        {{- if $server.persistence.enabled }}
+        {{- if and $server.persistence $server.persistence.enabled }}
         volumeMounts:
         - name: data
           mountPath: {{ $server.persistence.mountPath }}
@@ -94,13 +94,13 @@ spec:
         emptyDir: {}
       - name: nginx-run
         emptyDir: {}
-      {{- if $server.persistence.enabled }}
+      {{- if and $server.persistence $server.persistence.enabled }}
       - name: data
         persistentVolumeClaim:
           claimName: {{ $fullname }}
       {{- end }}
 ---
-{{- if $server.persistence.enabled }}
+{{- if and $server.persistence $server.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
