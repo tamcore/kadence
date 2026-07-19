@@ -1,0 +1,28 @@
+{{- range .Values.mcp.servers }}
+{{- $server := . }}
+{{- $root := $ }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kadence.mcp.fullname" (dict "root" $root "server" $server) }}
+  labels:
+    {{- include "kadence.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: mcp
+    kadence.io/mcp-server: {{ $server.name }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: mcp
+      kadence.io/mcp-server: {{ $server.name }}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          {{- include "kadence.selectorLabels" $root | nindent 10 }}
+    ports:
+    - protocol: TCP
+      port: 8080
+{{- end }}

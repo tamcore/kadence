@@ -1,0 +1,23 @@
+{{- range .Values.mcp.servers }}
+{{- $server := . }}
+{{- $root := $ }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kadence.mcp.fullname" (dict "root" $root "server" $server) }}
+  labels:
+    {{- include "kadence.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: mcp
+    kadence.io/mcp-server: {{ $server.name }}
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "kadence.selectorLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: mcp
+    kadence.io/mcp-server: {{ $server.name }}
+{{- end }}
