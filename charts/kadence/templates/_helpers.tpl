@@ -63,3 +63,37 @@ app.kubernetes.io/component: postgres
 {{- include "kadence.selectorLabels" . }}
 app.kubernetes.io/component: postgres
 {{- end }}
+
+{{/*
+MCP server fully qualified name: <release>-mcp-<serverName>.
+Context: dict "root" $ "server" $server
+*/}}
+{{- define "kadence.mcp.fullname" -}}
+{{- printf "%s-mcp-%s" (include "kadence.fullname" .root) .server.name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+MCP server scope token: GLOBAL or USER_<username>.
+Context: dict "root" $ "server" $server
+*/}}
+{{- define "kadence.mcp.scopeToken" -}}
+{{- if kindIs "map" .server.scope -}}USER_{{ .server.scope.user }}{{- else if eq (toString .server.scope) "global" -}}GLOBAL{{- else -}}{{ fail (printf "mcp server %s: scope must be 'global' or {user: <name>}" .server.name) }}{{- end -}}
+{{- end -}}
+
+{{/*
+MCP env var prefix: MCP_<UPPER_NAME>_<SCOPE>. Fails if server name contains "_"
+(would corrupt internal/mcp/env.go's MCP_<NAME>_<SCOPE>_<FIELD> parser).
+Context: dict "root" $ "server" $server
+*/}}
+{{- define "kadence.mcp.envPrefix" -}}
+{{- if contains "_" .server.name }}{{ fail (printf "mcp server name %q must not contain '_'" .server.name) }}{{- end -}}
+{{- printf "MCP_%s_%s" (upper .server.name) (include "kadence.mcp.scopeToken" .) -}}
+{{- end -}}
+
+{{/*
+Global sticky MCP basicAuth Secret name: <release>-mcp-auth.
+Context: the root context (.), NOT a dict — shared by all servers.
+*/}}
+{{- define "kadence.mcp.authSecretName" -}}
+{{- printf "%s-mcp-auth" (include "kadence.fullname" .) -}}
+{{- end -}}

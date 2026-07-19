@@ -73,3 +73,12 @@ externalDatabase:
   url: "" # postgres://user:pass@host:5432/db?sslmode=require
   existingSecret: "" # optional: name of a secret holding the DB URL key
   existingSecretKey: "KADENCE_DATABASE_URL" # key within existingSecret holding the DB URL
+
+# MCP servers. Each entry -> a Deployment (MCP image) + nginx basicAuth sidecar
+# + Service + NetworkPolicy, and MCP_<NAME>_<SCOPE>_* env injected into the main app.
+# See values-dev.yaml.example.
+mcp:
+  servers: []
+  authUsername: kadence # basicAuth username the app uses for every MCP server
+  basicAuth:
+    existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated + sticky)
