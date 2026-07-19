@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 )
 
 const (
@@ -171,7 +172,10 @@ func stubAddr() string {
 func main() {
 	addr := stubAddr()
 	slog.Info("e2e-stub listening", "addr", addr)
-	if err := http.ListenAndServe(addr, handler()); err != nil { //nolint:gosec // test-only stub, no need for timeouts
+	// A real http.Server with a read-header timeout (satisfies gosec G114;
+	// standalone gosec honours #nosec, not //nolint).
+	srv := &http.Server{Addr: addr, Handler: handler(), ReadHeaderTimeout: 10 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("e2e-stub server error", "error", err)
 		os.Exit(1)
 	}
