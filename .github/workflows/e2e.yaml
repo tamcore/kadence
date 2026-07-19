@@ -1,0 +1,61 @@
+name: E2E
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-web:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: kadence
+          POSTGRES_PASSWORD: kadence
+          POSTGRES_DB: kadence
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kadence -d kadence"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Build SPA
+        working-directory: web
+        run: npm run build
+      - name: Build kadence binary (prodfrontend)
+        run: go build -tags prodfrontend -o bin/kadence ./cmd/server
+      - name: Build e2e stub
+        run: go build -o bin/e2e-stub ./e2e/stub
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright browser e2e
+        run: scripts/e2e-web.sh
+        env:
+          KADENCE_DATABASE_URL: postgres://kadence:kadence@localhost:5432/kadence?sslmode=disable
+          E2E_ADMIN_PASSWORD: e2e-admin-pw
+          CI: "true"
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          if-no-files-found: ignore
