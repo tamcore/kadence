@@ -184,3 +184,45 @@ func TestIsProdAcceptsProdAndProduction(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadTrustedOrigins(t *testing.T) {
+	t.Setenv("KADENCE_TRUSTED_ORIGINS", "a.example.com, b.example.com")
+
+	cfg := Load()
+
+	want := []string{"a.example.com", "b.example.com"}
+	if len(cfg.TrustedOrigins) != len(want) {
+		t.Fatalf("TrustedOrigins = %v, want %v", cfg.TrustedOrigins, want)
+	}
+	for i, v := range cfg.TrustedOrigins {
+		if v != want[i] {
+			t.Fatalf("TrustedOrigins[%d] = %q, want %q", i, v, want[i])
+		}
+	}
+}
+
+func TestLoadTrustedOriginsUnset(t *testing.T) {
+	t.Setenv("KADENCE_TRUSTED_ORIGINS", "")
+
+	cfg := Load()
+
+	if len(cfg.TrustedOrigins) > 0 {
+		t.Fatalf("TrustedOrigins = %v, want nil/empty when unset", cfg.TrustedOrigins)
+	}
+}
+
+func TestLoadTrustedOriginsWithWhitespace(t *testing.T) {
+	t.Setenv("KADENCE_TRUSTED_ORIGINS", "  a.example.com  ,  b.example.com  ,  ")
+
+	cfg := Load()
+
+	want := []string{"a.example.com", "b.example.com"}
+	if len(cfg.TrustedOrigins) != len(want) {
+		t.Fatalf("TrustedOrigins = %v, want %v", cfg.TrustedOrigins, want)
+	}
+	for i, v := range cfg.TrustedOrigins {
+		if v != want[i] {
+			t.Fatalf("TrustedOrigins[%d] = %q, want %q", i, v, want[i])
+		}
+	}
+}

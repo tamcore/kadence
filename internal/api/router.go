@@ -55,7 +55,7 @@ func mountAuth(r chi.Router, deps Deps) {
 	if len(secret) == 0 {
 		secret = randomSecret()
 	}
-	csrfProtect := middleware.CSRF(secret, deps.Config.IsProd())
+	csrfProtect := middleware.CSRF(secret, deps.Config.IsProd(), deps.Config.TrustedOrigins)
 	loadUser := middleware.LoadUser(deps.Sessions, deps.Users)
 
 	// Login: reachable without a prior CSRF token (no session yet), but behind LoadUser.
