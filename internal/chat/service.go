@@ -44,12 +44,18 @@ type ServiceConfig struct {
 	SystemPrompt     string
 	Timeout          time.Duration
 	MCPMaxIterations int
+	MCPMaxTools      int
 }
 
 const defaultMaxToolIterations = 5
+const defaultMaxTools = 100
 
 const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging endurance-sports coach. " +
-	"Give practical, safe, evidence-based training guidance. Be concise and supportive."
+	"Give practical, safe, evidence-based training guidance. Be concise and supportive. " +
+	"When tools are available, use them to answer questions about the user's data before responding. " +
+	"Do not tell the user that something does not exist based on a single empty tool result — if a tool " +
+	"returns nothing, consider whether a different, related tool would answer the question, and prefer " +
+	"the broadest relevant tool. Only state that data is absent after genuinely checking."
 
 const titleMaxLen = 60
 
@@ -63,6 +69,7 @@ type Service struct {
 	rag           *RAG
 	mcp           MCPTools
 	maxIterations int
+	maxTools      int
 }
 
 // Deps carries the chat Service's dependencies. Guardrail, RAG, and MCP may
@@ -82,9 +89,14 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	if maxIterations <= 0 {
 		maxIterations = defaultMaxToolIterations
 	}
+	maxTools := cfg.MCPMaxTools
+	if maxTools <= 0 {
+		maxTools = defaultMaxTools
+	}
 	return &Service{
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
-		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP, maxIterations: maxIterations,
+		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
+		maxIterations: maxIterations, maxTools: maxTools,
 	}
 }
 
@@ -176,6 +188,10 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 		if toolsErr != nil {
 			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
 		} else {
+			if len(tools) > s.maxTools {
+				slog.Warn("mcp tools capped", "have", len(tools), "cap", s.maxTools)
+				tools = tools[:s.maxTools]
+			}
 			req.Tools = tools
 		}
 	}

@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -549,6 +550,70 @@ func TestStreamMCPDisabledBehavesUnchanged(t *testing.T) {
 	}
 	if mcp.callInvoked {
 		t.Fatal("Call should not be invoked when mcp disabled")
+	}
+}
+
+// capturingToolsProvider records the tools it was asked to stream with, then
+// returns plain content (no tool calls).
+type capturingToolsProvider struct {
+	reply    string
+	gotTools []provider.ToolDefinition
+}
+
+func (p *capturingToolsProvider) StreamChat(_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	_ = onToken(p.reply)
+	return p.reply, nil
+}
+
+func (p *capturingToolsProvider) StreamChatWithTools(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	p.gotTools = req.Tools
+	_ = onToken(p.reply)
+	return provider.StreamResult{Content: p.reply}, nil
+}
+
+const testMCPMaxTools = 100
+
+func manyToolDefs(n int) []provider.ToolDefinition {
+	defs := make([]provider.ToolDefinition, n)
+	for i := range defs {
+		defs[i] = provider.ToolDefinition{Name: "tool_" + strconv.Itoa(i)}
+	}
+	return defs
+}
+
+func TestStreamCapsInjectedMCPTools(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &capturingToolsProvider{reply: testReply}
+	mcp := &fakeMCPTools{enabled: true, tools: manyToolDefs(130)}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, MCPMaxTools: testMCPMaxTools},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's my schedule", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if len(prov.gotTools) != testMCPMaxTools {
+		t.Fatalf("provider received %d tools, want capped at %d", len(prov.gotTools), testMCPMaxTools)
+	}
+}
+
+func TestStreamSmallToolSetPassesThroughUncapped(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &capturingToolsProvider{reply: testReply}
+	mcp := &fakeMCPTools{enabled: true, tools: manyToolDefs(3)}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, MCPMaxTools: testMCPMaxTools},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's my schedule", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if len(prov.gotTools) != 3 {
+		t.Fatalf("provider received %d tools, want 3 (uncapped)", len(prov.gotTools))
 	}
 }
 
