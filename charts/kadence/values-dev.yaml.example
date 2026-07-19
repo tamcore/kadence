@@ -1,0 +1,37 @@
+# Example dev-environment overrides. Copy to `values-dev.yaml` (gitignored)
+# and fill in your own infra values. Do NOT commit `values-dev.yaml`.
+
+image:
+  tag: "" # e.g. pin to a specific released tag
+
+ingress:
+  enabled: true
+  className: nginx
+  host: kadence.example.com
+  tls: true
+
+# Non-secret config overrides.
+config:
+  KADENCE_ENV: production
+  KADENCE_LLM_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
+  KADENCE_LLM_MODEL: "your-llm-model"
+  KADENCE_EMBED_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
+  KADENCE_EMBED_MODEL: "your-embedding-model"
+  KADENCE_ADMIN_USERNAME: "admin"
+  KADENCE_ADMIN_EMAIL: "admin@example.com"
+
+# Secret overrides. Replace CHANGEME with real secret values before deploying.
+secrets:
+  KADENCE_CSRF_SECRET: "CHANGEME"
+  KADENCE_LLM_API_KEY: "CHANGEME"
+  KADENCE_EMBED_API_KEY: "CHANGEME"
+  KADENCE_ADMIN_PASSWORD: "CHANGEME"
+
+# Database wiring lands in Task 3. Placeholders shown for forward-compatibility.
+postgres:
+  enabled: true
+  # storageClass: "" # set to your cluster's pgvector-capable SSD class
+  password: "CHANGEME"
+
+externalDatabase:
+  url: "" # postgres://user:pass@host:5432/db?sslmode=require

@@ -1,0 +1,13 @@
+{{- if and .Values.podDisruptionBudget.enabled (gt .Values.replicaCount 1.0) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kadence.fullname" . }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" . | nindent 6 }}
+{{- end }}

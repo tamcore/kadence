@@ -1,0 +1,61 @@
+image:
+  repository: ghcr.io/tamcore/kadence
+  tag: "" # defaults to .Chart.AppVersion
+  digest: "" # optional: pin by digest, e.g. sha256:...
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 2
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: nginx
+  host: "" # set in values-dev.yaml
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    kubernetes.io/tls-acme: "true"
+  tls: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+# Non-secret app config (rendered into a ConfigMap -> envFrom).
+config:
+  KADENCE_ENV: production
+  KADENCE_LLM_BASE_URL: ""
+  KADENCE_LLM_MODEL: ""
+  KADENCE_EMBED_BASE_URL: ""
+  KADENCE_EMBED_MODEL: ""
+  KADENCE_ADMIN_USERNAME: ""
+  KADENCE_ADMIN_EMAIL: ""
+
+# Secret app config (rendered into a Secret -> envFrom). Empty here; set in values-dev.yaml.
+secrets:
+  KADENCE_CSRF_SECRET: ""
+  KADENCE_LLM_API_KEY: ""
+  KADENCE_EMBED_API_KEY: ""
+  KADENCE_ADMIN_PASSWORD: ""
+
+# DATABASE_URL sourcing is handled in Task 3 (postgres/externalDatabase).
+postgres:
+  enabled: false
+
+externalDatabase:
+  url: "" # postgres://user:pass@host:5432/db?sslmode=require
+  existingSecret: "" # optional: name of a secret holding the DB URL key
