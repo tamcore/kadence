@@ -97,3 +97,19 @@ Context: the root context (.), NOT a dict — shared by all servers.
 {{- define "kadence.mcp.authSecretName" -}}
 {{- printf "%s-mcp-auth" (include "kadence.fullname" .) -}}
 {{- end -}}
+
+{{/*
+markitdown-mcp fully qualified name: <release>-markitdown.
+Context: the root context (.).
+*/}}
+{{- define "kadence.markitdown.fullname" -}}
+{{- printf "%s-markitdown" (include "kadence.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+Sticky markitdown basicAuth Secret name: <release>-markitdown-auth.
+Context: the root context (.).
+*/}}
+{{- define "kadence.markitdown.authSecretName" -}}
+{{- printf "%s-markitdown-auth" (include "kadence.fullname" .) -}}
+{{- end -}}

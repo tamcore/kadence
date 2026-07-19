@@ -79,6 +79,18 @@ spec:
         - name: {{ $prefix }}_AUTH_PASS
           valueFrom: { secretKeyRef: { name: {{ $secret }}, key: password } }
         {{- end }}
+        {{- if .Values.markitdown.enabled }}
+        {{- $mdSvc := include "kadence.markitdown.fullname" . }}
+        {{- $mdSecret := include "kadence.markitdown.authSecretName" . }}
+        - name: KADENCE_MARKITDOWN_URL
+          value: {{ printf "http://%s:8080%s" $mdSvc .Values.markitdown.path | quote }}
+        - name: KADENCE_MARKITDOWN_TRANSPORT
+          value: "streamable-http"
+        - name: KADENCE_MARKITDOWN_AUTH_USER
+          valueFrom: { secretKeyRef: { name: {{ $mdSecret }}, key: username } }
+        - name: KADENCE_MARKITDOWN_AUTH_PASS
+          valueFrom: { secretKeyRef: { name: {{ $mdSecret }}, key: password } }
+        {{- end }}
         envFrom:
         - configMapRef:
             name: {{ include "kadence.fullname" . }}-config

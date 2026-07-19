@@ -55,3 +55,10 @@ externalDatabase:
 #         enabled: true
 #         size: 1Gi
 #         mountPath: /root/.garminconnect
+
+# Example markitdown-mcp ingestion sidecar (commented out). Uncomment to
+# convert uploaded documents (PDF, images, office docs) via markitdown-mcp
+# instead of the built-in PDF-only extractor. Public image; no infra required.
+# markitdown:
+#   enabled: true
+#   image: mcp/markitdown:latest

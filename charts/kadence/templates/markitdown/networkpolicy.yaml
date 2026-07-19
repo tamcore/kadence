@@ -1,0 +1,25 @@
+{{- if .Values.markitdown.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kadence.markitdown.fullname" . }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: markitdown
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: markitdown
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          {{- include "kadence.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: app
+    ports:
+    - protocol: TCP
+      port: 8080
+{{- end }}

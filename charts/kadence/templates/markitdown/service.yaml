@@ -1,0 +1,19 @@
+{{- if .Values.markitdown.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kadence.markitdown.fullname" . }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: markitdown
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "kadence.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: markitdown
+{{- end }}

@@ -82,3 +82,18 @@ mcp:
   authUsername: kadence # basicAuth username the app uses for every MCP server
   basicAuth:
     existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated + sticky)
+
+# Optional markitdown-mcp ingestion sidecar. When enabled, renders a fixed
+# Deployment (markitdown-mcp) + nginx basicAuth sidecar + Service +
+# NetworkPolicy, and wires KADENCE_MARKITDOWN_* env into the main app so it
+# becomes the preferred document-ingestion extractor (PDF extractor is the
+# fallback). See values-dev.yaml.example.
+markitdown:
+  enabled: false
+  image: mcp/markitdown:latest # public image; pin a digest/tag in prod
+  port: 3001
+  path: /mcp
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi

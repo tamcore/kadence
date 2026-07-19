@@ -82,8 +82,9 @@ func Run() error {
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
 
 			docsRepo := store.NewDocumentRepository(pool)
+			extractors := buildIngestExtractors(cfg)
 			ingestSvc := ingest.NewService(
-				[]ingest.Extractor{ingest.NewPDFExtractor()},
+				extractors,
 				embedder, docsRepo, store.NewChunkRepository(pool), cfg.IngestChunkChars,
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
@@ -137,4 +138,28 @@ func Run() error {
 	shutdownCtx, cancel2 := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel2()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// buildIngestExtractors returns the document extractors used for RAG
+// ingestion. When markitdown-mcp is configured it is preferred (covers PDFs,
+// images, and office documents); the built-in PDF extractor is always kept
+// as a fallback. A markitdown connection failure is logged and does not
+// prevent startup.
+func buildIngestExtractors(cfg config.Config) []ingest.Extractor {
+	pdf := ingest.NewPDFExtractor()
+	if !cfg.MarkitdownEnabled() {
+		return []ingest.Extractor{pdf}
+	}
+
+	md, err := ingest.NewMarkitdownExtractor(
+		cfg.MarkitdownURL, cfg.MarkitdownAuthUser, cfg.MarkitdownAuthPass, cfg.MarkitdownTransport,
+	)
+	if err != nil {
+		slog.Warn("markitdown extractor unavailable, falling back to PDF-only ingestion",
+			"url", cfg.MarkitdownURL, "err", err)
+		return []ingest.Extractor{pdf}
+	}
+
+	slog.Info("markitdown extractor enabled", "url", cfg.MarkitdownURL)
+	return []ingest.Extractor{md, pdf}
 }
