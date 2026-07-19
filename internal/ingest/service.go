@@ -49,7 +49,7 @@ func (s *Service) Ingest(ctx context.Context, ownerUserID *int64, scope, filenam
 		return model.Document{}, err
 	}
 
-	res, err := extractor.Extract(ctx, data)
+	res, err := extractor.Extract(ctx, data, mime)
 	if err != nil {
 		return model.Document{}, fmt.Errorf("extract %s: %w", filename, err)
 	}

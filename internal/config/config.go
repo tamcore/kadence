@@ -57,6 +57,13 @@ type Config struct {
 	UploadMaxBytes   int
 	IngestChunkChars int
 
+	// Markitdown ingestion extractor (markitdown-mcp). Enabled iff
+	// MarkitdownURL != "".
+	MarkitdownURL       string
+	MarkitdownAuthUser  string
+	MarkitdownAuthPass  string
+	MarkitdownTransport string
+
 	// MCP orchestration.
 	MCPMaxIterations int
 	// MCPMaxTools caps the number of MCP tool definitions injected into a
@@ -117,6 +124,11 @@ func Load() Config {
 	cfg.UploadMaxBytes = envIntOr("KADENCE_UPLOAD_MAX_BYTES", 10485760)
 	cfg.IngestChunkChars = envIntOr("KADENCE_INGEST_CHUNK_CHARS", 1000)
 
+	cfg.MarkitdownURL = os.Getenv("KADENCE_MARKITDOWN_URL")
+	cfg.MarkitdownAuthUser = os.Getenv("KADENCE_MARKITDOWN_AUTH_USER")
+	cfg.MarkitdownAuthPass = os.Getenv("KADENCE_MARKITDOWN_AUTH_PASS")
+	cfg.MarkitdownTransport = envOr("KADENCE_MARKITDOWN_TRANSPORT", "streamable-http")
+
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 5)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 
@@ -133,6 +145,9 @@ func (c Config) ChatEnabled() bool { return c.LLMAPIKey != "" }
 
 // RAGEnabled reports whether retrieval-augmented memory is configured.
 func (c Config) RAGEnabled() bool { return c.EmbedAPIKey != "" }
+
+// MarkitdownEnabled reports whether the markitdown-mcp ingestion extractor is configured.
+func (c Config) MarkitdownEnabled() bool { return c.MarkitdownURL != "" }
 
 // Validate checks required runtime configuration. Call before starting the server.
 func (c Config) Validate() error {

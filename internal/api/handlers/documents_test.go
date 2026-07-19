@@ -22,7 +22,7 @@ const sampleUserID = int64(7)
 type fakeDocExtractor struct{}
 
 func (fakeDocExtractor) CanHandle(mime string) bool { return mime == "application/pdf" }
-func (fakeDocExtractor) Extract(_ context.Context, _ []byte) (ingest.Result, error) {
+func (fakeDocExtractor) Extract(_ context.Context, _ []byte, _ string) (ingest.Result, error) {
 	return ingest.Result{Markdown: "para one here.\n\npara two here.", SourceType: model.DocSourcePDF}, nil
 }
 

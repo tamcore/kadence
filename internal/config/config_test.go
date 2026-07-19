@@ -156,6 +156,37 @@ func TestEmbedDefaultsAndRAGGating(t *testing.T) {
 	}
 }
 
+func TestMarkitdownDefaultsAndGating(t *testing.T) {
+	t.Setenv("KADENCE_MARKITDOWN_URL", "")
+	t.Setenv("KADENCE_MARKITDOWN_AUTH_USER", "")
+	t.Setenv("KADENCE_MARKITDOWN_AUTH_PASS", "")
+	t.Setenv("KADENCE_MARKITDOWN_TRANSPORT", "")
+
+	cfg := Load()
+
+	if cfg.MarkitdownTransport != "streamable-http" {
+		t.Fatalf("MarkitdownTransport = %q, want %q", cfg.MarkitdownTransport, "streamable-http")
+	}
+	if cfg.MarkitdownEnabled() {
+		t.Fatal("MarkitdownEnabled() = true, want false without a markitdown URL")
+	}
+
+	t.Setenv("KADENCE_MARKITDOWN_URL", "http://markitdown.internal/mcp")
+	t.Setenv("KADENCE_MARKITDOWN_AUTH_USER", "u")
+	t.Setenv("KADENCE_MARKITDOWN_AUTH_PASS", "p")
+	t.Setenv("KADENCE_MARKITDOWN_TRANSPORT", "sse")
+
+	cfg = Load()
+
+	if !cfg.MarkitdownEnabled() {
+		t.Fatal("MarkitdownEnabled() = false, want true when markitdown URL set")
+	}
+	if cfg.MarkitdownURL != "http://markitdown.internal/mcp" || cfg.MarkitdownAuthUser != "u" ||
+		cfg.MarkitdownAuthPass != "p" || cfg.MarkitdownTransport != "sse" {
+		t.Fatalf("markitdown fields not loaded: %+v", cfg)
+	}
+}
+
 func TestIngestDefaults(t *testing.T) {
 	t.Setenv("KADENCE_UPLOAD_MAX_BYTES", "")
 	t.Setenv("KADENCE_INGEST_CHUNK_CHARS", "")

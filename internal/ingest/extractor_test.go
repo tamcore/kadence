@@ -24,7 +24,7 @@ func TestPDFExtractorExtractsText(t *testing.T) {
 	if err != nil {
 		t.Skipf("no sample.pdf fixture: %v", err)
 	}
-	res, err := NewPDFExtractor().Extract(context.Background(), data)
+	res, err := NewPDFExtractor().Extract(context.Background(), data, "application/pdf")
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
