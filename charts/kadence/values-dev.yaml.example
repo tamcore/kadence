@@ -27,10 +27,11 @@ secrets:
   KADENCE_EMBED_API_KEY: "CHANGEME"
   KADENCE_ADMIN_PASSWORD: "CHANGEME"
 
-# Database wiring lands in Task 3. Placeholders shown for forward-compatibility.
+# Bundled Postgres (pgvector). Set storageClass to your cluster's default
+# (or a specific pgvector-capable SSD class) if the empty default isn't suitable.
 postgres:
   enabled: true
-  # storageClass: "" # set to your cluster's pgvector-capable SSD class
+  storageClass: "" # e.g. a cluster-specific storage class; "" uses the cluster default
   password: "CHANGEME"
 
 externalDatabase:

@@ -43,6 +43,28 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        env:
+        {{- if .Values.postgres.enabled }}
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "kadence.fullname" . }}-secret
+              key: POSTGRES_PASSWORD
+        - name: KADENCE_DATABASE_URL
+          value: "postgres://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ include "kadence.fullname" . }}-postgres:5432/{{ .Values.postgres.database }}?sslmode=disable"
+        {{- else if .Values.externalDatabase.existingSecret }}
+        - name: KADENCE_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.externalDatabase.existingSecret }}
+              key: {{ .Values.externalDatabase.existingSecretKey | default "KADENCE_DATABASE_URL" }}
+        {{- else }}
+        - name: KADENCE_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "kadence.fullname" . }}-secret
+              key: KADENCE_DATABASE_URL
+        {{- end }}
         envFrom:
         - configMapRef:
             name: {{ include "kadence.fullname" . }}-config
