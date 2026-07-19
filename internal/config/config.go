@@ -59,6 +59,10 @@ type Config struct {
 
 	// MCP orchestration.
 	MCPMaxIterations int
+	// MCPMaxTools caps the number of MCP tool definitions injected into a
+	// single chat request, as defense-in-depth against provider tool-count
+	// limits (e.g. OpenAI's 128-tool cap) when many MCP servers are configured.
+	MCPMaxTools int
 }
 
 const (
@@ -114,6 +118,7 @@ func Load() Config {
 	cfg.IngestChunkChars = envIntOr("KADENCE_INGEST_CHUNK_CHARS", 1000)
 
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 5)
+	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 
 	return cfg
 }

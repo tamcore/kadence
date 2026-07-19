@@ -172,6 +172,13 @@ func TestMCPMaxIterationsDefault(t *testing.T) {
 	}
 }
 
+func TestMCPMaxToolsDefault(t *testing.T) {
+	t.Setenv("KADENCE_MCP_MAX_TOOLS", "")
+	if cfg := Load(); cfg.MCPMaxTools != 100 {
+		t.Fatalf("MCPMaxTools default = %d, want 100", cfg.MCPMaxTools)
+	}
+}
+
 func TestIsProdAcceptsProdAndProduction(t *testing.T) {
 	for _, v := range []string{"prod", "production"} {
 		if !(Config{Env: v}).IsProd() {
