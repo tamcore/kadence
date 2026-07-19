@@ -164,3 +164,10 @@ func TestIngestDefaults(t *testing.T) {
 		t.Fatalf("ingest defaults wrong: max=%d chunk=%d", cfg.UploadMaxBytes, cfg.IngestChunkChars)
 	}
 }
+
+func TestMCPMaxIterationsDefault(t *testing.T) {
+	t.Setenv("KADENCE_MCP_MAX_ITERATIONS", "")
+	if cfg := Load(); cfg.MCPMaxIterations != 5 {
+		t.Fatalf("MCPMaxIterations default = %d, want 5", cfg.MCPMaxIterations)
+	}
+}
