@@ -171,3 +171,16 @@ func TestMCPMaxIterationsDefault(t *testing.T) {
 		t.Fatalf("MCPMaxIterations default = %d, want 5", cfg.MCPMaxIterations)
 	}
 }
+
+func TestIsProdAcceptsProdAndProduction(t *testing.T) {
+	for _, v := range []string{"prod", "production"} {
+		if !(Config{Env: v}).IsProd() {
+			t.Fatalf("IsProd should be true for Env=%q", v)
+		}
+	}
+	for _, v := range []string{"dev", "", "staging"} {
+		if (Config{Env: v}).IsProd() {
+			t.Fatalf("IsProd should be false for Env=%q", v)
+		}
+	}
+}
