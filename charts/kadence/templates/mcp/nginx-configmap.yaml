@@ -21,7 +21,9 @@ data:
         proxy_pass http://127.0.0.1:{{ $server.port }};
         proxy_http_version 1.1;
         proxy_set_header Connection "";
-        proxy_set_header Host $host;
+        # Upstream is a fixed localhost MCP container; use an explicit Host
+        # (never the attacker-controllable request Host header).
+        proxy_set_header Host "localhost";
         proxy_buffering off;
         proxy_read_timeout 3600s;
       }
