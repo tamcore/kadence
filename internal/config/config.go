@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,8 @@ type Config struct {
 	DatabaseURL string
 	// CSRFSecret is the gorilla/csrf secret (KADENCE_CSRF_SECRET).
 	CSRFSecret string
+	// TrustedOrigins are CSRF-trusted origins (KADENCE_TRUSTED_ORIGINS, comma-split, trimmed).
+	TrustedOrigins []string
 
 	// Admin bootstrap (used once, on first run, when the users table is empty).
 	AdminUsername string
@@ -75,13 +78,14 @@ const (
 // Load reads configuration from the environment, applying defaults.
 func Load() Config {
 	cfg := Config{
-		ListenAddr:    envOr("KADENCE_LISTEN_ADDR", defaultListenAddr),
-		Env:           envOr("KADENCE_ENV", defaultEnv),
-		DatabaseURL:   os.Getenv("KADENCE_DATABASE_URL"),
-		CSRFSecret:    os.Getenv("KADENCE_CSRF_SECRET"),
-		AdminUsername: os.Getenv("KADENCE_ADMIN_USERNAME"),
-		AdminEmail:    os.Getenv("KADENCE_ADMIN_EMAIL"),
-		AdminPassword: os.Getenv("KADENCE_ADMIN_PASSWORD"),
+		ListenAddr:     envOr("KADENCE_LISTEN_ADDR", defaultListenAddr),
+		Env:            envOr("KADENCE_ENV", defaultEnv),
+		DatabaseURL:    os.Getenv("KADENCE_DATABASE_URL"),
+		CSRFSecret:     os.Getenv("KADENCE_CSRF_SECRET"),
+		TrustedOrigins: loadTrustedOrigins(os.Getenv("KADENCE_TRUSTED_ORIGINS")),
+		AdminUsername:  os.Getenv("KADENCE_ADMIN_USERNAME"),
+		AdminEmail:     os.Getenv("KADENCE_ADMIN_EMAIL"),
+		AdminPassword:  os.Getenv("KADENCE_ADMIN_PASSWORD"),
 	}
 
 	cfg.LLMBaseURL = envOr("KADENCE_LLM_BASE_URL", "https://api.openai.com/v1")
@@ -201,4 +205,22 @@ func envBoolOr(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+func loadTrustedOrigins(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	var origins []string
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			origins = append(origins, trimmed)
+		}
+	}
+	if len(origins) == 0 {
+		return nil
+	}
+	return origins
 }
