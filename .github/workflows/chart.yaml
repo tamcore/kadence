@@ -1,0 +1,19 @@
+name: Chart
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - run: helm lint ./charts/kadence
+      - run: helm template kadence ./charts/kadence
+      - run: helm template kadence ./charts/kadence -f ./charts/kadence/values-dev.yaml.example
