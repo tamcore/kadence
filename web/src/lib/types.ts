@@ -19,8 +19,14 @@ export interface ChatMessage {
 export type ChatEvent =
 	| { type: 'meta'; conversationId: number }
 	| { type: 'token'; delta: string }
+	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error' }
 	| { type: 'done' }
 	| { type: 'error'; message: string };
+
+export interface ToolActivity {
+	tool: string;
+	status: 'running' | 'done' | 'error';
+}
 
 export interface Document {
 	id: number;

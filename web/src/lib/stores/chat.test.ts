@@ -9,7 +9,7 @@ vi.mock('$lib/api/chat', () => ({
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
-import { activeId, chatError, messages, newChat, sendMessage, sending } from './chat';
+import { activeId, chatError, messages, newChat, sendMessage, sending, toolActivity } from './chat';
 
 async function* events(evs: unknown[]) {
 	for (const e of evs) yield e;
@@ -71,5 +71,32 @@ describe('chat store', () => {
 		expect(get(chatError)).toBeNull();
 		// sending should be false
 		expect(get(sending)).toBe(false);
+	});
+
+	it('transitions a running tool entry to done without duplicating it', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 1 },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{ type: 'token', delta: 'You ran 10km.' },
+			{ type: 'done' }
+		]));
+
+		await sendMessage('hi');
+
+		expect(get(toolActivity)).toEqual([{ tool: 'garmin__get_activities', status: 'done' }]);
+	});
+
+	it('clears toolActivity at the start of a new sendMessage', async () => {
+		toolActivity.set([{ tool: 'garmin__get_activities', status: 'running' }]);
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 1 },
+			{ type: 'token', delta: 'hi' },
+			{ type: 'done' }
+		]));
+
+		await sendMessage('hi');
+
+		expect(get(toolActivity)).toEqual([]);
 	});
 });
