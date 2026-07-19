@@ -16,7 +16,7 @@ import (
 
 // ChatStreamer runs a streaming chat turn.
 type ChatStreamer interface {
-	Stream(ctx context.Context, userID, conversationID int64, text string, sink chat.EventSink) error
+	Stream(ctx context.Context, userID int64, username string, conversationID int64, text string, sink chat.EventSink) error
 }
 
 // ConvLister lists/gets/deletes conversations for a user.
@@ -81,7 +81,7 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	sink := &sseSink{w: w, rc: http.NewResponseController(w)}
-	_ = h.svc.Stream(r.Context(), u.ID, body.ConversationID, body.Message, sink)
+	_ = h.svc.Stream(r.Context(), u.ID, u.Username, body.ConversationID, body.Message, sink)
 }
 
 type conversationDTO struct {

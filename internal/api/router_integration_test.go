@@ -128,7 +128,7 @@ func TestChatEndToEnd(t *testing.T) {
 	u, _ := users.Create(context.Background(), model.User{Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser})
 
 	chatSvc := chat.NewService(chatFakeProvider{reply: "Hi!"},
-		chat.ServiceConfig{Model: "m", MaxTokens: 32, Temperature: 0.2}, convs, msgs, nil, nil)
+		chat.ServiceConfig{Model: "m", MaxTokens: 32, Temperature: 0.2}, convs, msgs, nil, nil, nil)
 	chatH := handlers.NewChat(chatSvc, convs, msgs)
 
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
