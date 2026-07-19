@@ -90,7 +90,7 @@ func TestStreamNewConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil, nil)
+		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi coach", sink); err != nil {
@@ -125,7 +125,7 @@ func TestStreamExistingConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil, nil)
+		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, testConvID, "hi coach", sink); err != nil {
@@ -145,7 +145,7 @@ func TestStreamConversationNotFound(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil, nil)
+		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
 	err := svc.Stream(context.Background(), testUserID, testUsername, 99, "hi coach", sink)
@@ -162,7 +162,7 @@ func TestStreamProviderError(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{err: &providerErr{}},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil, nil)
+		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
 	err := svc.Stream(context.Background(), testUserID, testUsername, testConvID, "hi coach", sink)
@@ -209,7 +209,7 @@ func TestStreamAppliesTimeout(t *testing.T) {
 			Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp,
 			SystemPrompt: testSystemMsg, Timeout: testTimeout,
 		},
-		convs, msgs, nil, nil, nil)
+		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, testConvID, "hi coach", sink); err != nil {
@@ -246,7 +246,7 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: testGuardrailRefusal, HistoryWindow: 6,
 	})
-	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil, nil)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), 1, testUsername, 0, "what's the stock market doing?", sink); err != nil {
@@ -278,7 +278,7 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: "nope", HistoryWindow: 6,
 	})
-	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil, nil)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard})
 
 	if err := svc.Stream(context.Background(), 1, testUsername, 0, "how many rest days?", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -311,7 +311,7 @@ func TestStreamInjectsRAGContextAndStores(t *testing.T) {
 	captP := &capturingProvider{reply: "ok"}
 	fc := &fakeChunks{search: []model.Chunk{{Content: "you prefer morning runs"}}}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
-	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, nil, rag, nil)
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, RAG: rag})
 
 	if err := svc.Stream(context.Background(), 7, testUsername, 0, "plan my week", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -416,7 +416,7 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 		tools:      []provider.ToolDefinition{{Name: testToolName}},
 		callResult: testToolReply,
 	}
-	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, mcp)
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's the weather", sink); err != nil {
@@ -481,7 +481,7 @@ func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
 		tools:   []provider.ToolDefinition{{Name: testToolName}},
 		callErr: errors.New("tool exploded"),
 	}
-	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, mcp)
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's the weather", sink); err != nil {
@@ -518,7 +518,7 @@ func TestStreamMCPNilBehavesUnchanged(t *testing.T) {
 	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
-		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, nil)
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "hi coach", sink); err != nil {
@@ -536,7 +536,7 @@ func TestStreamMCPDisabledBehavesUnchanged(t *testing.T) {
 	msgs := &fakeMsgs{}
 	mcp := &fakeMCPTools{enabled: false}
 	svc := chat.NewService(fakeProvider{reply: testReply},
-		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, mcp)
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "hi coach", sink); err != nil {
@@ -563,7 +563,7 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 	}
 	const maxIter = 3
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, MCPMaxIterations: maxIter},
-		convs, msgs, nil, nil, mcp)
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "loop forever", sink); err != nil {

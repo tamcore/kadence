@@ -65,18 +65,26 @@ type Service struct {
 	maxIterations int
 }
 
-// NewService constructs a chat Service. guardrail, rag, and mcp may be nil (disabled).
-func NewService(
-	p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore,
-	guardrail *Guardrail, rag *RAG, mcp MCPTools,
-) *Service {
+// Deps carries the chat Service's dependencies. Guardrail, RAG, and MCP may
+// be nil (disabled).
+type Deps struct {
+	Convs     ConversationStore
+	Msgs      MessageStore
+	Guardrail *Guardrail
+	RAG       *RAG
+	MCP       MCPTools
+}
+
+// NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
+// may be nil (disabled).
+func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	maxIterations := cfg.MCPMaxIterations
 	if maxIterations <= 0 {
 		maxIterations = defaultMaxToolIterations
 	}
 	return &Service{
-		provider: p, cfg: cfg, convs: convs, msgs: msgs,
-		guardrail: guardrail, rag: rag, mcp: mcp, maxIterations: maxIterations,
+		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
+		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP, maxIterations: maxIterations,
 	}
 }
 
