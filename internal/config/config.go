@@ -61,6 +61,8 @@ type Config struct {
 const (
 	defaultListenAddr = ":8080"
 	defaultEnv        = "dev"
+	envProd           = "prod"
+	envProduction     = "production"
 
 	defaultDomainName    = "Kadence, an endurance-sports coaching assistant"
 	defaultAllowedTopics = "endurance training and racing (running, cycling, swimming, triathlon), " +
@@ -113,7 +115,9 @@ func Load() Config {
 }
 
 // IsProd reports whether the server runs in the production environment.
-func (c Config) IsProd() bool { return c.Env == "prod" }
+// Accepts both "prod" and "production" so a conventional KADENCE_ENV value
+// still enables production behaviour (Secure cookies, strict CSRF origin checks).
+func (c Config) IsProd() bool { return c.Env == envProd || c.Env == envProduction }
 
 // ChatEnabled reports whether LLM chat is configured.
 func (c Config) ChatEnabled() bool { return c.LLMAPIKey != "" }
