@@ -50,3 +50,16 @@ Selector labels
 {{- define "kadence.selectorLabels" -}}
 app: {{ include "kadence.name" . }}
 {{- end }}
+
+{{/*
+Postgres StatefulSet/Service labels and selector labels.
+*/}}
+{{- define "kadence.postgres.labels" -}}
+{{- include "kadence.labels" . }}
+app.kubernetes.io/component: postgres
+{{- end }}
+
+{{- define "kadence.postgres.selectorLabels" -}}
+{{- include "kadence.selectorLabels" . }}
+app.kubernetes.io/component: postgres
+{{- end }}

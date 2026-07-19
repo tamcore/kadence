@@ -52,10 +52,24 @@ secrets:
   KADENCE_EMBED_API_KEY: ""
   KADENCE_ADMIN_PASSWORD: ""
 
-# DATABASE_URL sourcing is handled in Task 3 (postgres/externalDatabase).
+# Bundled Postgres (pgvector). When enabled, the chart runs its own
+# StatefulSet + Service and wires KADENCE_DATABASE_URL to it.
+# migration 00003 requires `CREATE EXTENSION vector`, hence the pgvector image.
 postgres:
   enabled: false
+  image: pgvector/pgvector:pg17
+  storage: 10Gi
+  storageClass: "" # set in values-dev.yaml to a pgvector-capable class
+  database: kadence
+  username: kadence
+  password: "" # required when enabled; set in values-dev.yaml
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
 
+# External database. Used only when postgres.enabled=false.
 externalDatabase:
   url: "" # postgres://user:pass@host:5432/db?sslmode=require
   existingSecret: "" # optional: name of a secret holding the DB URL key
+  existingSecretKey: "KADENCE_DATABASE_URL" # key within existingSecret holding the DB URL
