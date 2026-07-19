@@ -180,3 +180,8 @@ func (f chatFakeProvider) StreamChat(_ context.Context, _ provider.ChatRequest, 
 	_ = onToken(f.reply)
 	return f.reply, nil
 }
+
+func (f chatFakeProvider) StreamChatWithTools(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	content, err := f.StreamChat(ctx, req, onToken)
+	return provider.StreamResult{Content: content}, err
+}
