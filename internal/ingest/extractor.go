@@ -21,8 +21,8 @@ type Result struct {
 type Extractor interface {
 	// CanHandle reports whether this extractor supports the given MIME type.
 	CanHandle(mime string) bool
-	// Extract parses data and returns the extracted text.
-	Extract(ctx context.Context, data []byte) (Result, error)
+	// Extract parses data (of the given MIME type) and returns the extracted text.
+	Extract(ctx context.Context, data []byte, mime string) (Result, error)
 }
 
 // ErrUnsupportedType is returned by Select when no extractor handles the

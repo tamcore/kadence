@@ -34,6 +34,27 @@ type mcpClient interface {
 	Close() error
 }
 
+// Client is the exported subset of mcpClient (tool invocation + shutdown,
+// no discovery) reusable by callers outside this package that talk to a
+// single, known remote MCP server — e.g. the ingest package's markitdown
+// extractor.
+type Client interface {
+	CallTool(ctx context.Context, name, argsJSON string) (string, error)
+	Close() error
+}
+
+// NewClient builds and initializes an exported MCP client for a single
+// remote server, reusing the same streamable-http/sse transport and
+// basic-auth plumbing as the internal registry client.
+func NewClient(ctx context.Context, url, transport, authUser, authPass string) (Client, error) {
+	return newClient(ctx, Server{
+		URL:       url,
+		Transport: transport,
+		AuthUser:  authUser,
+		AuthPass:  authPass,
+	})
+}
+
 // realMCPClient wraps a mark3labs/mcp-go client over a network transport
 // (streamable-http or sse), with an initialized MCP session.
 type realMCPClient struct {
