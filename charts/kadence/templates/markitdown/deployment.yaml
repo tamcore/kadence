@@ -1,0 +1,86 @@
+{{- if .Values.markitdown.enabled }}
+{{- $fullname := include "kadence.markitdown.fullname" . }}
+{{- $authSecretName := include "kadence.markitdown.authSecretName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: markitdown
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: markitdown
+  template:
+    metadata:
+      labels:
+        {{- include "kadence.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: markitdown
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: markitdown
+        image: {{ .Values.markitdown.image }}
+        args:
+        - "--http"
+        - "--host"
+        - "0.0.0.0"
+        - "--port"
+        - {{ .Values.markitdown.port | quote }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - containerPort: {{ .Values.markitdown.port }}
+          name: markitdown
+        resources:
+          {{- toYaml .Values.markitdown.resources | nindent 10 }}
+      - name: nginx
+        image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: nginx-conf
+          mountPath: /etc/nginx/conf.d/default.conf
+          subPath: default.conf
+        - name: nginx-auth
+          mountPath: /etc/nginx/.htpasswd
+          subPath: htpasswd
+        - name: nginx-tmp
+          mountPath: /tmp
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      volumes:
+      - name: nginx-conf
+        configMap:
+          name: {{ $fullname }}-nginx
+      - name: nginx-auth
+        secret:
+          secretName: {{ $authSecretName }}
+          items:
+          - key: htpasswd
+            path: htpasswd
+      - name: nginx-tmp
+        emptyDir: {}
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
+{{- end }}
