@@ -59,3 +59,70 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           if-no-files-found: ignore
+
+  e2e-kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Build SPA
+        working-directory: web
+        run: npm run build
+      - name: Build CI image
+        run: docker build -f Dockerfile.dev -t kadence:ci .
+      - name: Create KinD cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: kadence-ci
+      - name: Load image into KinD
+        run: kind load docker-image kadence:ci --name kadence-ci
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - name: helm install
+        run: >
+          helm install kadence charts/kadence -n kadence --create-namespace
+          -f charts/kadence/values-ci.yaml
+          --set image.repository=kadence
+          --set image.tag=ci
+          --wait --timeout 5m
+      - name: Wait for rollout
+        run: kubectl -n kadence rollout status deploy/kadence --timeout=180s
+      - name: Smoke test via port-forward
+        run: |
+          kubectl -n kadence port-forward svc/kadence 8080:8080 &
+          for i in $(seq 1 30); do
+            curl -fsS localhost:8080/api/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+          curl -fsS localhost:8080/api/healthz | grep -q ok
+
+          curl -fsS -c cookies.txt -b cookies.txt \
+            -H 'Content-Type: application/json' \
+            -X POST localhost:8080/api/session \
+            -d '{"username":"admin","password":"e2e-admin-pw","remember":false}' >/dev/null
+
+          session_headers=$(curl -fsS -D - -o session.json -c cookies.txt -b cookies.txt localhost:8080/api/session)
+          echo "$session_headers"
+          csrf_token=$(echo "$session_headers" | grep -i '^X-CSRF-Token:' | awk '{print $2}' | tr -d '\r')
+          grep -q '"username":"admin"' session.json
+
+          users_status=$(curl -fsS -o /dev/null -w '%{http_code}' -b cookies.txt \
+            -H "X-CSRF-Token: $csrf_token" localhost:8080/api/users)
+          if [ "$users_status" != "200" ]; then
+            echo "GET /api/users returned $users_status"
+            exit 1
+          fi
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n kadence get pods -o wide
+          kubectl -n kadence logs -l app.kubernetes.io/component=app --tail=100
+          kubectl -n kadence describe pods -l app.kubernetes.io/component=app

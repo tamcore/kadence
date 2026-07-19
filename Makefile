@@ -9,7 +9,7 @@ KUBE_CONTEXT   ?=
 _HELM_CTX   = $(if $(KUBE_CONTEXT),--kube-context $(KUBE_CONTEXT),)
 _KUBECTL_CTX = $(if $(KUBE_CONTEXT),--context $(KUBE_CONTEXT),)
 
-.PHONY: help build build-prod fmt vet test coverage lint goreleaser-check helm-lint dev-deploy-k8s e2e-web clean
+.PHONY: help build build-prod fmt vet test coverage lint goreleaser-check helm-lint dev-deploy-k8s e2e-web e2e-kind clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -43,6 +43,22 @@ e2e-web: ## Build + run Playwright browser e2e (needs KADENCE_DATABASE_URL)
 	@go build -ldflags "$(LDFLAGS)" -tags prodfrontend -o bin/kadence ./cmd/server
 	@go build -ldflags "$(LDFLAGS)" -o bin/e2e-stub ./e2e/stub
 	@bash scripts/e2e-web.sh
+
+e2e-kind: ## Build image, KinD, helm install, smoke
+	cd web && npm ci --silent && npm run build
+	docker build -f Dockerfile.dev -t kadence:ci .
+	kind create cluster --name kadence-ci 2>/dev/null || true
+	kind load docker-image kadence:ci --name kadence-ci
+	helm install kadence charts/kadence -n kadence --create-namespace \
+		-f charts/kadence/values-ci.yaml \
+		--set image.repository=kadence \
+		--set image.tag=ci \
+		--wait --timeout 5m
+	kubectl -n kadence rollout status deploy/kadence --timeout=180s
+	kubectl -n kadence port-forward svc/kadence 8080:8080 & \
+	sleep 3; \
+	curl -fsS localhost:8080/api/healthz | grep -q ok
+	@echo "Smoke passed. Run 'kind delete cluster --name kadence-ci' to clean up."
 
 helm-lint: ## Lint the Helm chart
 	helm lint ./charts/kadence -f ./charts/kadence/values.yaml
