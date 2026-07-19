@@ -1,0 +1,123 @@
+{{- range .Values.mcp.servers }}
+{{- $server := . }}
+{{- $root := $ }}
+{{- $fullname := include "kadence.mcp.fullname" (dict "root" $root "server" $server) }}
+{{- $authSecretName := $root.Values.mcp.basicAuth.existingSecret | default (include "kadence.mcp.authSecretName" $root) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kadence.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: mcp
+    kadence.io/mcp-server: {{ $server.name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: mcp
+      kadence.io/mcp-server: {{ $server.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kadence.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: mcp
+        kadence.io/mcp-server: {{ $server.name }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: mcp
+        image: {{ $server.image }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - containerPort: {{ $server.port }}
+          name: mcp
+        {{- with $server.env }}
+        env:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $server.existingSecret }}
+        envFrom:
+        - secretRef:
+            name: {{ $server.existingSecret }}
+        {{- end }}
+        {{- if $server.persistence.enabled }}
+        volumeMounts:
+        - name: data
+          mountPath: {{ $server.persistence.mountPath }}
+        {{- end }}
+      - name: nginx
+        image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: nginx-conf
+          mountPath: /etc/nginx/conf.d/default.conf
+          subPath: default.conf
+        - name: nginx-auth
+          mountPath: /etc/nginx/.htpasswd
+          subPath: htpasswd
+        - name: nginx-tmp
+          mountPath: /tmp
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      volumes:
+      - name: nginx-conf
+        configMap:
+          name: {{ $fullname }}-nginx
+      - name: nginx-auth
+        secret:
+          secretName: {{ $authSecretName }}
+          items:
+          - key: htpasswd
+            path: htpasswd
+      - name: nginx-tmp
+        emptyDir: {}
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
+      {{- if $server.persistence.enabled }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ $fullname }}
+      {{- end }}
+---
+{{- if $server.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kadence.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: mcp
+    kadence.io/mcp-server: {{ $server.name }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  {{- with $server.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $server.persistence.size }}
+{{- end }}
+---
+{{- end }}
