@@ -306,6 +306,32 @@ func (p *capturingProvider) StreamChatWithTools(ctx context.Context, req provide
 	return provider.StreamResult{Content: content}, err
 }
 
+func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	fixed := time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC)
+	svc := chat.NewService(captP,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32, Now: func() time.Time { return fixed }},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "what's my next workout", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var systemContent string
+	for _, m := range captP.gotMessages {
+		if m.Role == "system" {
+			systemContent = m.Content
+		}
+	}
+	for _, want := range []string{"2026-07-19", fixed.Weekday().String()} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system prompt missing %q; got: %s", want, systemContent)
+		}
+	}
+}
+
 func TestStreamInjectsRAGContextAndStores(t *testing.T) {
 	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
 	msgs := &fakeMsgs{}

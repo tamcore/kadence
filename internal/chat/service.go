@@ -45,6 +45,9 @@ type ServiceConfig struct {
 	Timeout          time.Duration
 	MCPMaxIterations int
 	MCPMaxTools      int
+	// Now supplies the current time used to stamp the system prompt with
+	// today's date. Defaults to time.Now when nil (overridable in tests).
+	Now func() time.Time
 }
 
 const defaultMaxToolIterations = 5
@@ -70,6 +73,7 @@ type Service struct {
 	mcp           MCPTools
 	maxIterations int
 	maxTools      int
+	now           func() time.Time
 }
 
 // Deps carries the chat Service's dependencies. Guardrail, RAG, and MCP may
@@ -93,18 +97,28 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	if maxTools <= 0 {
 		maxTools = defaultMaxTools
 	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Service{
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
-		maxIterations: maxIterations, maxTools: maxTools,
+		maxIterations: maxIterations, maxTools: maxTools, now: now,
 	}
 }
 
 func (s *Service) systemPrompt() string {
+	base := defaultSystemPrompt
 	if s.cfg.SystemPrompt != "" {
-		return s.cfg.SystemPrompt
+		base = s.cfg.SystemPrompt
 	}
-	return defaultSystemPrompt
+	// Stamp the current date so the model resolves relative dates ("today",
+	// "next week") and date-range tool arguments against the correct day
+	// rather than its training cutoff.
+	today := s.now()
+	return base + "\n\nToday's date is " + today.Format("Monday, 2006-01-02") +
+		". Use it to resolve relative dates and to choose date ranges when calling tools."
 }
 
 // Stream runs one chat turn: resolve/create the conversation, persist the user
