@@ -29,6 +29,11 @@ func (f fakeProvider) StreamChat(_ context.Context, _ provider.ChatRequest, onTo
 	return f.reply, nil
 }
 
+func (f fakeProvider) StreamChatWithTools(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	content, err := f.StreamChat(ctx, req, onToken)
+	return provider.StreamResult{Content: content}, err
+}
+
 type fakeConvs struct {
 	created *model.Conversation
 	byID    map[int64]model.Conversation
@@ -190,6 +195,11 @@ func (p deadlineAssertingProvider) StreamChat(ctx context.Context, _ provider.Ch
 	return p.reply, nil
 }
 
+func (p deadlineAssertingProvider) StreamChatWithTools(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	content, err := p.StreamChat(ctx, req, onToken)
+	return provider.StreamResult{Content: content}, err
+}
+
 func TestStreamAppliesTimeout(t *testing.T) {
 	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
@@ -220,6 +230,11 @@ func (p *recordingProvider) StreamChat(_ context.Context, _ provider.ChatRequest
 	p.called = true
 	_ = onToken("hello")
 	return "hello", nil
+}
+
+func (p *recordingProvider) StreamChatWithTools(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	content, err := p.StreamChat(ctx, req, onToken)
+	return provider.StreamResult{Content: content}, err
 }
 
 func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
@@ -282,6 +297,11 @@ func (p *capturingProvider) StreamChat(_ context.Context, req provider.ChatReque
 	p.gotMessages = req.Messages
 	_ = onToken(p.reply)
 	return p.reply, nil
+}
+
+func (p *capturingProvider) StreamChatWithTools(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	content, err := p.StreamChat(ctx, req, onToken)
+	return provider.StreamResult{Content: content}, err
 }
 
 func TestStreamInjectsRAGContextAndStores(t *testing.T) {

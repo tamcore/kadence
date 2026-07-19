@@ -31,6 +31,11 @@ func (p *verdictProvider) StreamChat(_ context.Context, req provider.ChatRequest
 	return p.verdict, p.err
 }
 
+func (p *verdictProvider) StreamChatWithTools(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	content, err := p.StreamChat(ctx, req, onToken)
+	return provider.StreamResult{Content: content}, err
+}
+
 func newGuardrail(v *verdictProvider) *chat.Guardrail {
 	return chat.NewGuardrail(v, chat.GuardrailConfig{
 		Model: testClassifierModel, DomainName: testDomainName, AllowedTopics: testAllowedTopics,
