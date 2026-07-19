@@ -1,0 +1,32 @@
+# CI-only values for the KinD chart-deploy smoke test (.github/workflows/e2e.yaml,
+# job e2e-kind). Ephemeral cluster, ephemeral test creds — safe to commit.
+# LLM/EMBED base URLs are intentionally unset: chat/RAG/documents stay disabled,
+# so this is a pure deploy + migrate + auth smoke (no external dependency).
+
+image:
+  pullPolicy: Never # image is kind-loaded, never pulled from a registry
+
+ingress:
+  enabled: false
+
+replicaCount: 1
+
+podDisruptionBudget:
+  enabled: false
+
+config:
+  KADENCE_ENV: production
+
+secrets:
+  KADENCE_CSRF_SECRET: "ci-csrf-secret-0123456789abcdef0123456789abcdef"
+  KADENCE_ADMIN_USERNAME: admin
+  KADENCE_ADMIN_EMAIL: admin@example.com
+  KADENCE_ADMIN_PASSWORD: e2e-admin-pw
+
+postgres:
+  enabled: true
+  password: ci-postgres-pw
+  storageClass: ""
+
+mcp:
+  servers: []
