@@ -1,0 +1,15 @@
+Kadence has been deployed.
+
+{{- if .Values.ingress.enabled }}
+
+Application URL:
+  https://{{ .Values.ingress.host }}
+{{- else }}
+
+Service is ClusterIP-only. Port-forward to access it locally:
+  kubectl port-forward svc/{{ include "kadence.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080
+{{- end }}
+
+Check rollout status:
+  kubectl rollout status deployment/{{ include "kadence.fullname" . }}
