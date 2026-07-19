@@ -23,14 +23,30 @@ type MessageStore interface {
 	ListByConversation(ctx context.Context, conversationID int64) ([]model.Message, error)
 }
 
+// MCPTools is the MCP tool-calling surface the chat service needs: the set
+// of tools available to a user, and dispatching a tool call. Satisfied by
+// *mcp.Registry.
+type MCPTools interface {
+	// Enabled reports whether any MCP servers are configured.
+	Enabled() bool
+	// ToolsFor returns the tool definitions available to the given user.
+	ToolsFor(ctx context.Context, username string) ([]provider.ToolDefinition, error)
+	// Call invokes a named tool with JSON-encoded arguments and returns its
+	// (also JSON-ish/plain text) result.
+	Call(ctx context.Context, username, toolName, argsJSON string) (string, error)
+}
+
 // ServiceConfig carries model params + system prompt.
 type ServiceConfig struct {
-	Model        string
-	MaxTokens    int
-	Temperature  float64
-	SystemPrompt string
-	Timeout      time.Duration
+	Model            string
+	MaxTokens        int
+	Temperature      float64
+	SystemPrompt     string
+	Timeout          time.Duration
+	MCPMaxIterations int
 }
+
+const defaultMaxToolIterations = 5
 
 const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging endurance-sports coach. " +
 	"Give practical, safe, evidence-based training guidance. Be concise and supportive."
@@ -39,17 +55,29 @@ const titleMaxLen = 60
 
 // Service orchestrates a streaming chat turn.
 type Service struct {
-	provider  provider.Provider
-	cfg       ServiceConfig
-	convs     ConversationStore
-	msgs      MessageStore
-	guardrail *Guardrail
-	rag       *RAG
+	provider      provider.Provider
+	cfg           ServiceConfig
+	convs         ConversationStore
+	msgs          MessageStore
+	guardrail     *Guardrail
+	rag           *RAG
+	mcp           MCPTools
+	maxIterations int
 }
 
-// NewService constructs a chat Service. guardrail and rag may be nil (disabled).
-func NewService(p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore, guardrail *Guardrail, rag *RAG) *Service {
-	return &Service{provider: p, cfg: cfg, convs: convs, msgs: msgs, guardrail: guardrail, rag: rag}
+// NewService constructs a chat Service. guardrail, rag, and mcp may be nil (disabled).
+func NewService(
+	p provider.Provider, cfg ServiceConfig, convs ConversationStore, msgs MessageStore,
+	guardrail *Guardrail, rag *RAG, mcp MCPTools,
+) *Service {
+	maxIterations := cfg.MCPMaxIterations
+	if maxIterations <= 0 {
+		maxIterations = defaultMaxToolIterations
+	}
+	return &Service{
+		provider: p, cfg: cfg, convs: convs, msgs: msgs,
+		guardrail: guardrail, rag: rag, mcp: mcp, maxIterations: maxIterations,
+	}
 }
 
 func (s *Service) systemPrompt() string {
@@ -61,7 +89,7 @@ func (s *Service) systemPrompt() string {
 
 // Stream runs one chat turn: resolve/create the conversation, persist the user
 // message, stream the assistant reply (persisting it), emitting SSE events.
-func (s *Service) Stream(ctx context.Context, userID, conversationID int64, userText string, sink EventSink) error {
+func (s *Service) Stream(ctx context.Context, userID int64, username string, conversationID int64, userText string, sink EventSink) error {
 	if conversationID == 0 {
 		title := userText
 		if len(title) > titleMaxLen {
@@ -110,26 +138,8 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		defer cancel()
 	}
 
-	if s.guardrail != nil {
-		classifierMsgs := make([]provider.Message, 0, len(req.Messages))
-		for _, m := range req.Messages {
-			if m.Role == model.MsgRoleSystem {
-				continue
-			}
-			classifierMsgs = append(classifierMsgs, m)
-		}
-		offTopic, gErr := s.guardrail.Classify(streamCtx, classifierMsgs)
-		switch {
-		case gErr != nil:
-			slog.Warn("guardrail classifier failed, proceeding", "err", gErr, "conversation", conversationID)
-		case offTopic:
-			refusal := s.guardrail.RefusalMessage()
-			_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, refusal)
-			_ = sink.Send(ChatEvent{Type: EventToken, Delta: refusal})
-			_ = sink.Flush()
-			_ = sink.Send(ChatEvent{Type: EventDone})
-			return sink.Flush()
-		}
+	if refused, err := s.applyGuardrail(ctx, streamCtx, conversationID, req.Messages, sink); refused {
+		return err
 	}
 
 	if s.rag != nil {
@@ -153,18 +163,18 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		}
 	}
 
-	full, err := s.provider.StreamChat(streamCtx, req, func(delta string) error {
-		if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
-			return e
+	if s.mcp != nil && s.mcp.Enabled() {
+		tools, toolsErr := s.mcp.ToolsFor(ctx, username)
+		if toolsErr != nil {
+			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
+		} else {
+			req.Tools = tools
 		}
-		return sink.Flush()
-	})
+	}
+
+	full, err := s.runToolLoop(ctx, streamCtx, conversationID, username, req, sink)
 	if err != nil {
-		slog.Error("chat stream failed", "err", err, "conversation", conversationID)
-		if full != "" {
-			_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, full)
-		}
-		return s.fail(sink, "the assistant could not complete the response")
+		return err
 	}
 
 	assistantMsg, err := s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, full)
@@ -184,6 +194,104 @@ func (s *Service) Stream(ctx context.Context, userID, conversationID int64, user
 		return err
 	}
 	return sink.Flush()
+}
+
+// applyGuardrail classifies the conversation and, if it's off-topic, streams
+// the refusal message, persists it, and sends EventDone. It reports
+// refused=true when Stream should return immediately with the returned err
+// (which may be nil). A classifier failure fails open (refused=false).
+func (s *Service) applyGuardrail(
+	ctx, streamCtx context.Context, conversationID int64, reqMessages []provider.Message, sink EventSink,
+) (refused bool, err error) {
+	if s.guardrail == nil {
+		return false, nil
+	}
+
+	classifierMsgs := make([]provider.Message, 0, len(reqMessages))
+	for _, m := range reqMessages {
+		if m.Role == model.MsgRoleSystem {
+			continue
+		}
+		classifierMsgs = append(classifierMsgs, m)
+	}
+
+	offTopic, gErr := s.guardrail.Classify(streamCtx, classifierMsgs)
+	if gErr != nil {
+		slog.Warn("guardrail classifier failed, proceeding", "err", gErr, "conversation", conversationID)
+		return false, nil
+	}
+	if !offTopic {
+		return false, nil
+	}
+
+	refusal := s.guardrail.RefusalMessage()
+	_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, refusal)
+	_ = sink.Send(ChatEvent{Type: EventToken, Delta: refusal})
+	_ = sink.Flush()
+	_ = sink.Send(ChatEvent{Type: EventDone})
+	return true, sink.Flush()
+}
+
+// runToolLoop streams the assistant reply, handling any MCP tool calls the
+// model requests, up to s.maxIterations rounds. It returns the final
+// tool-free assistant content (persistence and RAG-embedding happen in the
+// caller).
+func (s *Service) runToolLoop(
+	ctx, streamCtx context.Context, conversationID int64, username string, req provider.ChatRequest, sink EventSink,
+) (string, error) {
+	maxIter := s.maxIterations
+	if maxIter <= 0 {
+		maxIter = defaultMaxToolIterations
+	}
+
+	for i := 0; i < maxIter; i++ {
+		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, func(delta string) error {
+			if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
+				return e
+			}
+			return sink.Flush()
+		})
+		if streamErr != nil {
+			slog.Error("chat stream failed", "err", streamErr, "conversation", conversationID)
+			if result.Content != "" {
+				_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, result.Content)
+			}
+			return "", s.fail(sink, "the assistant could not complete the response")
+		}
+		if len(result.ToolCalls) == 0 {
+			return result.Content, nil
+		}
+
+		req.Messages = append(req.Messages, provider.Message{
+			Role: model.MsgRoleAssistant, Content: result.Content, ToolCalls: result.ToolCalls,
+		})
+		for _, tc := range result.ToolCalls {
+			req.Messages = append(req.Messages, s.runToolCall(ctx, username, tc, sink))
+		}
+	}
+
+	return "", nil
+}
+
+// runToolCall dispatches a single tool call through s.mcp, emitting
+// running/done/error tool events on sink, and returns the resulting
+// role:"tool" message to append to the provider request.
+func (s *Service) runToolCall(ctx context.Context, username string, tc provider.ToolCall, sink EventSink) provider.Message {
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: "running"})
+	_ = sink.Flush()
+
+	out, cErr := s.mcp.Call(ctx, username, tc.Name, tc.Arguments)
+	status := "done"
+	if cErr != nil {
+		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", cErr)
+		out = "error: " + cErr.Error()
+		status = "error"
+	}
+
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
+	_ = sink.Flush()
+
+	return provider.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Name, Content: out}
 }
 
 // insertAfterSystem inserts m right after a leading system message, or

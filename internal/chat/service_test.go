@@ -80,6 +80,7 @@ const (
 	testMaxTokens = 64
 	testTemp      = 0.2
 	testUserID    = 7
+	testUsername  = "alice"
 	testConvID    = 5
 	testConvTitle = "test"
 )
@@ -89,10 +90,10 @@ func TestStreamNewConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil)
+		convs, msgs, nil, nil, nil)
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 7, 0, "hi coach", sink); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -124,10 +125,10 @@ func TestStreamExistingConversation(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil)
+		convs, msgs, nil, nil, nil)
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, testConvID, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -144,10 +145,10 @@ func TestStreamConversationNotFound(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil)
+		convs, msgs, nil, nil, nil)
 
 	sink := &capturingSink{}
-	err := svc.Stream(context.Background(), testUserID, 99, "hi coach", sink)
+	err := svc.Stream(context.Background(), testUserID, testUsername, 99, "hi coach", sink)
 	if err == nil || err.Error() != "conversation not found" {
 		t.Fatalf("expected 'conversation not found' error, got: %v", err)
 	}
@@ -161,10 +162,10 @@ func TestStreamProviderError(t *testing.T) {
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{err: &providerErr{}},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
-		convs, msgs, nil, nil)
+		convs, msgs, nil, nil, nil)
 
 	sink := &capturingSink{}
-	err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink)
+	err := svc.Stream(context.Background(), testUserID, testUsername, testConvID, "hi coach", sink)
 	if err == nil || err.Error() != "the assistant could not complete the response" {
 		t.Fatalf("expected provider error, got: %v", err)
 	}
@@ -208,10 +209,10 @@ func TestStreamAppliesTimeout(t *testing.T) {
 			Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp,
 			SystemPrompt: testSystemMsg, Timeout: testTimeout,
 		},
-		convs, msgs, nil, nil)
+		convs, msgs, nil, nil, nil)
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testConvID, "hi coach", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, testConvID, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 }
@@ -245,10 +246,10 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: testGuardrailRefusal, HistoryWindow: 6,
 	})
-	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil, nil)
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 1, 0, "what's the stock market doing?", sink); err != nil {
+	if err := svc.Stream(context.Background(), 1, testUsername, 0, "what's the stock market doing?", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if mainP.called {
@@ -277,9 +278,9 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: "nope", HistoryWindow: 6,
 	})
-	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, guard, nil, nil)
 
-	if err := svc.Stream(context.Background(), 1, 0, "how many rest days?", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 1, testUsername, 0, "how many rest days?", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if !mainP.called {
@@ -310,9 +311,9 @@ func TestStreamInjectsRAGContextAndStores(t *testing.T) {
 	captP := &capturingProvider{reply: "ok"}
 	fc := &fakeChunks{search: []model.Chunk{{Content: "you prefer morning runs"}}}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
-	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, nil, rag)
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, convs, msgs, nil, rag, nil)
 
-	if err := svc.Stream(context.Background(), 7, 0, "plan my week", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "plan my week", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var hasNote bool
@@ -326,5 +327,252 @@ func TestStreamInjectsRAGContextAndStores(t *testing.T) {
 	}
 	if len(fc.inserted) != 2 {
 		t.Fatalf("expected 2 chunks stored (user+assistant), got %d", len(fc.inserted))
+	}
+}
+
+// toolThenContentProvider returns a tool call on the first StreamChatWithTools
+// call and plain content on the second.
+type toolThenContentProvider struct {
+	toolName    string
+	toolArgs    string
+	finalReply  string
+	calls       int
+	gotMessages [][]provider.Message
+}
+
+func (p *toolThenContentProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", errors.New("StreamChat should not be called when tools are in play")
+}
+
+func (p *toolThenContentProvider) StreamChatWithTools(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	p.gotMessages = append(p.gotMessages, req.Messages)
+	p.calls++
+	if p.calls == 1 {
+		return provider.StreamResult{
+			ToolCalls: []provider.ToolCall{{ID: "call_1", Name: p.toolName, Arguments: p.toolArgs}},
+		}, nil
+	}
+	if err := onToken(p.finalReply); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: p.finalReply}, nil
+}
+
+// alwaysToolProvider always returns a tool call, to exercise max-iterations.
+type alwaysToolProvider struct {
+	toolName string
+	calls    int
+}
+
+func (p *alwaysToolProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", errors.New("StreamChat should not be called when tools are in play")
+}
+
+func (p *alwaysToolProvider) StreamChatWithTools(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (provider.StreamResult, error) {
+	p.calls++
+	return provider.StreamResult{
+		ToolCalls: []provider.ToolCall{{ID: "call", Name: p.toolName, Arguments: "{}"}},
+	}, nil
+}
+
+// fakeMCPTools is a canned MCPTools implementation for tests.
+type fakeMCPTools struct {
+	enabled     bool
+	tools       []provider.ToolDefinition
+	callResult  string
+	callErr     error
+	gotUsername string
+	gotToolName string
+	gotArgsJSON string
+	callInvoked bool
+}
+
+func (f *fakeMCPTools) Enabled() bool { return f.enabled }
+
+func (f *fakeMCPTools) ToolsFor(_ context.Context, _ string) ([]provider.ToolDefinition, error) {
+	return f.tools, nil
+}
+
+func (f *fakeMCPTools) Call(_ context.Context, username, toolName, argsJSON string) (string, error) {
+	f.callInvoked = true
+	f.gotUsername = username
+	f.gotToolName = toolName
+	f.gotArgsJSON = argsJSON
+	return f.callResult, f.callErr
+}
+
+const (
+	testToolName  = "weather__get_forecast"
+	testToolArgs  = `{"city":"Berlin"}`
+	testToolReply = "sunny, 22C"
+)
+
+func TestStreamRunsToolCallThenFinishes(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
+	mcp := &fakeMCPTools{
+		enabled:    true,
+		tools:      []provider.ToolDefinition{{Name: testToolName}},
+		callResult: testToolReply,
+	}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, mcp)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's the weather", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if !mcp.callInvoked {
+		t.Fatal("expected MCPTools.Call to be invoked")
+	}
+	if mcp.gotUsername != testUsername || mcp.gotToolName != testToolName || mcp.gotArgsJSON != testToolArgs {
+		t.Fatalf("Call invoked with wrong args: user=%q tool=%q args=%q", mcp.gotUsername, mcp.gotToolName, mcp.gotArgsJSON)
+	}
+
+	var toolEvents []chat.ChatEvent
+	for _, e := range sink.events {
+		if e.Type == chat.EventTool {
+			toolEvents = append(toolEvents, e)
+		}
+	}
+	if len(toolEvents) != 2 || toolEvents[0].Status != "running" || toolEvents[1].Status != "done" {
+		t.Fatalf("expected running then done tool events, got: %+v", toolEvents)
+	}
+	if toolEvents[0].Tool != testToolName || toolEvents[1].Tool != testToolName {
+		t.Fatalf("tool events missing tool name: %+v", toolEvents)
+	}
+
+	var streamed strings.Builder
+	for _, e := range sink.events {
+		if e.Type == chat.EventToken {
+			streamed.WriteString(e.Delta)
+		}
+	}
+	if streamed.String() != testReply {
+		t.Fatalf("final content not streamed: %q", streamed.String())
+	}
+	last := msgs.added[len(msgs.added)-1]
+	if last.Role != model.MsgRoleAssistant || last.Content != testReply {
+		t.Fatalf("final content not persisted: %+v", last)
+	}
+
+	if len(prov.gotMessages) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(prov.gotMessages))
+	}
+	secondCallMsgs := prov.gotMessages[1]
+	var hasToolResult bool
+	for _, m := range secondCallMsgs {
+		if m.Role == "tool" && m.ToolCallID == "call_1" && m.Content == testToolReply {
+			hasToolResult = true
+		}
+	}
+	if !hasToolResult {
+		t.Fatalf("expected tool result message forwarded to provider: %+v", secondCallMsgs)
+	}
+}
+
+func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
+	mcp := &fakeMCPTools{
+		enabled: true,
+		tools:   []provider.ToolDefinition{{Name: testToolName}},
+		callErr: errors.New("tool exploded"),
+	}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, mcp)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's the weather", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var toolEvents []chat.ChatEvent
+	for _, e := range sink.events {
+		if e.Type == chat.EventTool {
+			toolEvents = append(toolEvents, e)
+		}
+	}
+	if len(toolEvents) != 2 || toolEvents[1].Status != "error" {
+		t.Fatalf("expected error status tool event, got: %+v", toolEvents)
+	}
+
+	secondCallMsgs := prov.gotMessages[1]
+	var hasErrResult bool
+	for _, m := range secondCallMsgs {
+		if m.Role == "tool" && strings.HasPrefix(m.Content, "error: ") {
+			hasErrResult = true
+		}
+	}
+	if !hasErrResult {
+		t.Fatalf("expected error tool result forwarded to provider: %+v", secondCallMsgs)
+	}
+	// Stream still completes.
+	if sink.events[len(sink.events)-1].Type != chat.EventDone {
+		t.Fatalf("expected stream to finish with done event, got: %+v", sink.events[len(sink.events)-1])
+	}
+}
+
+func TestStreamMCPNilBehavesUnchanged(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, nil)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "hi coach", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for _, e := range sink.events {
+		if e.Type == chat.EventTool {
+			t.Fatalf("expected no tool events when mcp is nil, got: %+v", sink.events)
+		}
+	}
+}
+
+func TestStreamMCPDisabledBehavesUnchanged(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mcp := &fakeMCPTools{enabled: false}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, convs, msgs, nil, nil, mcp)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "hi coach", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for _, e := range sink.events {
+		if e.Type == chat.EventTool {
+			t.Fatalf("expected no tool events when mcp disabled, got: %+v", sink.events)
+		}
+	}
+	if mcp.callInvoked {
+		t.Fatal("Call should not be invoked when mcp disabled")
+	}
+}
+
+func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &alwaysToolProvider{toolName: testToolName}
+	mcp := &fakeMCPTools{
+		enabled:    true,
+		tools:      []provider.ToolDefinition{{Name: testToolName}},
+		callResult: "ok",
+	}
+	const maxIter = 3
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, MCPMaxIterations: maxIter},
+		convs, msgs, nil, nil, mcp)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "loop forever", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if prov.calls != maxIter {
+		t.Fatalf("expected provider called exactly %d times, got %d", maxIter, prov.calls)
+	}
+	if sink.events[len(sink.events)-1].Type != chat.EventDone {
+		t.Fatalf("expected stream to finish with done event even after exhausting iterations, got: %+v", sink.events[len(sink.events)-1])
 	}
 }
