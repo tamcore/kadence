@@ -21,3 +21,12 @@ export type ChatEvent =
 	| { type: 'token'; delta: string }
 	| { type: 'done' }
 	| { type: 'error'; message: string };
+
+export interface Document {
+	id: number;
+	filename: string;
+	mime: string;
+	source_type: string;
+	scope: 'private' | 'public';
+	created_at: string;
+}
