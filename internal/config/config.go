@@ -53,6 +53,9 @@ type Config struct {
 	// Ingestion.
 	UploadMaxBytes   int
 	IngestChunkChars int
+
+	// MCP orchestration.
+	MCPMaxIterations int
 }
 
 const (
@@ -103,6 +106,8 @@ func Load() Config {
 
 	cfg.UploadMaxBytes = envIntOr("KADENCE_UPLOAD_MAX_BYTES", 10485760)
 	cfg.IngestChunkChars = envIntOr("KADENCE_INGEST_CHUNK_CHARS", 1000)
+
+	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 5)
 
 	return cfg
 }
