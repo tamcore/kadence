@@ -102,7 +102,7 @@ func Run() error {
 			SystemPrompt:     cfg.SystemPrompt,
 			Timeout:          cfg.LLMTimeout,
 			MCPMaxIterations: cfg.MCPMaxIterations,
-		}, convs, msgs, guardrail, rag, mcpTools)
+		}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools})
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
