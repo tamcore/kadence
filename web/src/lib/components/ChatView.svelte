@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { activeId, chatError, messages, sendMessage, sending } from '$lib/stores/chat';
+	import { activeId, chatError, messages, sendMessage, sending, toolActivity } from '$lib/stores/chat';
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Button from '$lib/components/Button.svelte';
 
@@ -15,6 +15,15 @@
 		const id = await sendMessage(text);
 		if (wasNew && id != null && onNewConversation) onNewConversation(id);
 	}
+
+	function prettifyTool(name: string): string {
+		const [server, ...rest] = name.split('__');
+		const tool = rest.join('__').replace(/_/g, ' ');
+		return rest.length ? `${server} · ${tool}` : name.replace(/_/g, ' ');
+	}
+	function statusIcon(status: string): string {
+		return status === 'done' ? '✓' : status === 'error' ? '✗' : '⏳';
+	}
 </script>
 
 <div class="chat">
@@ -28,6 +37,13 @@
 				{/if}
 			</div>
 		{/each}
+		{#if $toolActivity.length > 0}
+			<div class="tools" role="status" aria-label="Tool activity">
+				{#each $toolActivity as t, i (i)}
+					<span class="tool-chip {t.status}">{statusIcon(t.status)} {prettifyTool(t.tool)}</span>
+				{/each}
+			</div>
+		{/if}
 		{#if $chatError}<div class="error" role="alert">{$chatError}</div>{/if}
 	</div>
 
@@ -55,6 +71,12 @@
 	.msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 	.msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
 	.msg p { margin: 0; }
+	.tools { display: flex; flex-wrap: wrap; gap: 6px; align-self: flex-start; }
+	.tool-chip {
+		font-size: 0.8rem; padding: 3px 8px; border-radius: var(--radius);
+		border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+	}
+	.tool-chip.error { color: var(--danger); border-color: var(--danger); }
 	.error { color: var(--danger); }
 	.composer { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--border); padding-top: 12px; }
 	textarea { flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; resize: vertical; }
