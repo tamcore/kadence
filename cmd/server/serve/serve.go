@@ -19,6 +19,7 @@ import (
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/embed"
 	"github.com/tamcore/kadence/internal/ingest"
+	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/store"
 )
@@ -87,13 +88,21 @@ func Run() error {
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
 		}
+		var mcpTools chat.MCPTools // nil interface = disabled
+		if servers, sErr := mcp.ServersFromEnv(os.Environ()); sErr != nil {
+			slog.Warn("failed to parse MCP env, continuing without tools", "err", sErr)
+		} else if len(servers) > 0 {
+			mcpTools = mcp.NewRegistry(servers)
+			slog.Info("mcp enabled", "servers", len(servers))
+		}
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
-			Model:        cfg.LLMModel,
-			MaxTokens:    cfg.LLMMaxTokens,
-			Temperature:  cfg.LLMTemperature,
-			SystemPrompt: cfg.SystemPrompt,
-			Timeout:      cfg.LLMTimeout,
-		}, convs, msgs, guardrail, rag, nil)
+			Model:            cfg.LLMModel,
+			MaxTokens:        cfg.LLMMaxTokens,
+			Temperature:      cfg.LLMTemperature,
+			SystemPrompt:     cfg.SystemPrompt,
+			Timeout:          cfg.LLMTimeout,
+			MCPMaxIterations: cfg.MCPMaxIterations,
+		}, convs, msgs, guardrail, rag, mcpTools)
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
