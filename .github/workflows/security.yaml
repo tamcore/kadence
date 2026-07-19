@@ -31,7 +31,58 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run govulncheck
-        run: go tool govulncheck ./...
+        # GO-2025-3884 (gorilla/csrf TrustedOrigins ignores the origin scheme):
+        # no upstream fix exists and gorilla/csrf remains our CSRF library. The
+        # exposure is limited — TrustedOrigins is operator-configured, opt-in via
+        # KADENCE_TRUSTED_ORIGINS (empty by default), and only affects the
+        # http/https distinction for explicitly trusted extra hosts. Temporarily
+        # allowlisted below; any OTHER called vulnerability still fails the job.
+        # Review whenever gorilla/csrf ships a fix or we migrate off it.
+        run: |
+          set -o pipefail
+          go tool govulncheck -format json ./... > govulncheck.json || true
+          python3 - <<'PY'
+          import json, sys
+
+          # OSV IDs consciously accepted; see the step comment for rationale.
+          ALLOWLIST = {"GO-2025-3884"}
+
+          raw = open("govulncheck.json").read().strip()
+          if not raw:
+              print("govulncheck produced no output — treating as failure")
+              sys.exit(1)
+
+          decoder = json.JSONDecoder()
+          idx, called = 0, {}
+          while idx < len(raw):
+              while idx < len(raw) and raw[idx].isspace():
+                  idx += 1
+              if idx >= len(raw):
+                  break
+              obj, idx = decoder.raw_decode(raw, idx)
+              finding = obj.get("finding")
+              if not finding:
+                  continue
+              trace = finding.get("trace") or [{}]
+              # A finding with a function in its top trace frame is actually
+              # reachable from our code (mirrors govulncheck's non-zero exit).
+              if trace[0].get("function"):
+                  called.setdefault(finding["osv"], set()).add(
+                      trace[0].get("module", "?")
+                  )
+
+          unexpected = {osv: mods for osv, mods in called.items() if osv not in ALLOWLIST}
+          if unexpected:
+              print("Unwhitelisted vulnerabilities called by our code:")
+              for osv, mods in sorted(unexpected.items()):
+                  print(f"  {osv}: {sorted(mods)}")
+              sys.exit(1)
+
+          if called:
+              print("Only allowlisted vulnerabilities found:", sorted(called))
+          else:
+              print("No called vulnerabilities found.")
+          PY
 
   semgrep:
     runs-on: ubuntu-latest
