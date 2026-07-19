@@ -22,6 +22,7 @@ spec:
     - podSelector:
         matchLabels:
           {{- include "kadence.selectorLabels" $root | nindent 10 }}
+          app.kubernetes.io/component: app
     ports:
     - protocol: TCP
       port: 8080
