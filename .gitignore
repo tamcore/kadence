@@ -52,3 +52,6 @@ IDEA.md
 
 # Stray root-level node deps (frontend lives in web/)
 /node_modules/
+
+# Local dev Helm values (contains internal registry/ingress host)
+charts/kadence/values-dev.yaml
