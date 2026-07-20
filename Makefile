@@ -3,7 +3,7 @@ LDFLAGS := -s -w
 
 IMAGE_REGISTRY ?= ghcr.io/tamcore
 IMAGE_NAME     ?= kadence
-IMAGE_TAG      ?= $(shell openssl rand -hex 8)   # fresh random per invocation (cache-bust)
+IMAGE_TAG      := $(if $(IMAGE_TAG),$(IMAGE_TAG),$(shell openssl rand -hex 8))   # single expansion (a recursive ?= re-runs openssl per reference → build/push/deploy tag mismatch); honors an env/CLI override
 KUBE_CONTEXT   ?=
 
 _HELM_CTX   = $(if $(KUBE_CONTEXT),--kube-context $(KUBE_CONTEXT),)
