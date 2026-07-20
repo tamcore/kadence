@@ -91,6 +91,7 @@ func Run() error {
 				embedder, docsRepo, store.NewChunkRepository(pool), cfg.IngestChunkChars,
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
+			deps.Context = handlers.NewContext(store.NewChunkRepository(pool), docsRepo)
 		}
 		var mcpTools chat.MCPTools // nil interface = disabled
 		if servers, sErr := mcp.ServersFromEnv(os.Environ()); sErr != nil {
