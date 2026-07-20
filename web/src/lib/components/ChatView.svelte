@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { activeId, chatError, messages, sendMessage, sending } from '$lib/stores/chat';
+	import { activeId, chatError, credentialRequest, messages, sendMessage, sending } from '$lib/stores/chat';
 	import type { MessagePart } from '$lib/types';
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Composer from '$lib/components/Composer.svelte';
+	import CredentialPrompt from '$lib/components/CredentialPrompt.svelte';
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
@@ -84,6 +85,9 @@
 	</div>
 
 	<div class="composer-area">
+		{#if $credentialRequest}
+			<CredentialPrompt request={$credentialRequest} />
+		{/if}
 		<Composer disabled={$sending} onSubmit={(t) => submit(t)} />
 	</div>
 </div>
@@ -124,6 +128,10 @@
 		flex: none;
 		border-top: 1px solid var(--border);
 		padding: 12px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
 	}
 	.composer-area :global(.composer) { max-width: 760px; margin: 0 auto; }
+	.composer-area :global(.credential-prompt) { max-width: 760px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 </style>
