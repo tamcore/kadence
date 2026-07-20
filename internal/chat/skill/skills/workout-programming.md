@@ -2,9 +2,12 @@
 name: workout-programming
 description: Build proper, specifically-typed structured workouts instead of generic steps.
 triggers:
-  - "*_workout"
-  - "*create*workout*"
-  - "*schedule*workout*"
+  # Only workout CREATION/edit tools — never reads or scheduling. A broader
+  # pattern like "*schedule*workout*" wrongly matched get_scheduled_workouts
+  # (a read), pre-gating it so the calendar was never fetched.
+  - "*create_*_workout"
+  - "*update_workout"
+  - "*upload_workout*"
 ---
 When you create or edit a structured workout through a tool, build a proper,
 specific workout of the correct type.
