@@ -38,6 +38,8 @@ func Run() error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.SlogLevel()})))
+
 	startupCtx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
 

@@ -3,6 +3,7 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +14,8 @@ import (
 type Config struct {
 	ListenAddr string
 	Env        string
+	// LogLevel is the slog level (KADENCE_LOG_LEVEL): debug|info|warn|error.
+	LogLevel string
 
 	// DatabaseURL is the Postgres DSN (KADENCE_DATABASE_URL).
 	DatabaseURL string
@@ -91,6 +94,7 @@ func Load() Config {
 	cfg := Config{
 		ListenAddr:     envOr("KADENCE_LISTEN_ADDR", defaultListenAddr),
 		Env:            envOr("KADENCE_ENV", defaultEnv),
+		LogLevel:       envOr("KADENCE_LOG_LEVEL", "info"),
 		DatabaseURL:    os.Getenv("KADENCE_DATABASE_URL"),
 		CSRFSecret:     os.Getenv("KADENCE_CSRF_SECRET"),
 		TrustedOrigins: loadTrustedOrigins(os.Getenv("KADENCE_TRUSTED_ORIGINS")),
@@ -139,6 +143,20 @@ func Load() Config {
 // Accepts both "prod" and "production" so a conventional KADENCE_ENV value
 // still enables production behaviour (Secure cookies, strict CSRF origin checks).
 func (c Config) IsProd() bool { return c.Env == envProd || c.Env == envProduction }
+
+// SlogLevel maps LogLevel to a slog.Level, defaulting to Info for unknown values.
+func (c Config) SlogLevel() slog.Level {
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
 
 // ChatEnabled reports whether LLM chat is configured.
 func (c Config) ChatEnabled() bool { return c.LLMAPIKey != "" }

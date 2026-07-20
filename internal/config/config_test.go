@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"log/slog"
+	"testing"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("KADENCE_LISTEN_ADDR", "")
@@ -261,6 +264,22 @@ func TestLoadTrustedOriginsWithWhitespace(t *testing.T) {
 	for i, v := range cfg.TrustedOrigins {
 		if v != want[i] {
 			t.Fatalf("TrustedOrigins[%d] = %q, want %q", i, v, want[i])
+		}
+	}
+}
+
+func TestSlogLevelMapping(t *testing.T) {
+	cases := map[string]slog.Level{
+		"debug": slog.LevelDebug,
+		"info":  slog.LevelInfo,
+		"warn":  slog.LevelWarn,
+		"error": slog.LevelError,
+		"":      slog.LevelInfo,
+		"bogus": slog.LevelInfo,
+	}
+	for in, want := range cases {
+		if got := (Config{LogLevel: in}).SlogLevel(); got != want {
+			t.Fatalf("SlogLevel(%q) = %v, want %v", in, got, want)
 		}
 	}
 }
