@@ -385,7 +385,11 @@ func (s *Service) runToolLoop(
 		if streamErr != nil {
 			slog.Error("chat stream failed", "err", streamErr, "conversation", conversationID)
 			if result.Content != "" {
-				_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, result.Content)
+				content := result.Content
+				if s.secrets != nil {
+					content = secret.Redact(content, redactor.snapshot(s.secrets, userID))
+				}
+				_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, content)
 			}
 			return "", s.fail(sink, "the assistant could not complete the response")
 		}
@@ -673,12 +677,14 @@ func (s *Service) runToolCall(
 	out, cErr := s.mcp.Call(ctx, username, tc.Name, callArgs)
 	status := toolStatusDone
 	if cErr != nil {
-		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", cErr)
-		out = "error: " + cErr.Error()
+		errText := cErr.Error()
+		if s.secrets != nil {
+			errText = secret.Redact(errText, redactValues)
+		}
+		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", errText)
+		out = "error: " + errText
 		status = toolStatusError
-	}
-
-	if s.secrets != nil {
+	} else if s.secrets != nil {
 		out = secret.Redact(out, redactValues)
 	}
 

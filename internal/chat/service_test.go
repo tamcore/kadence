@@ -1,9 +1,11 @@
 package chat_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -931,6 +933,7 @@ type requestCredentialsProvider struct {
 
 const credsToolName = "kadence__request_credentials"
 const testCredsCallID = "call_creds"
+const testMCPCallID = "call_mcp"
 
 func (p *requestCredentialsProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
 	return "", errors.New("StreamChat should not be called when tools are in play")
@@ -950,7 +953,7 @@ func (p *requestCredentialsProvider) StreamChatWithTools(_ context.Context, req 
 			token := p.tokenFromToolResult(req.Messages)
 			args := `{"password":"` + token + `"}`
 			return provider.StreamResult{
-				ToolCalls: []provider.ToolCall{{ID: "call_mcp", Name: p.mcpToolName, Arguments: args}},
+				ToolCalls: []provider.ToolCall{{ID: testMCPCallID, Name: p.mcpToolName, Arguments: args}},
 			}, nil
 		}
 	}
@@ -1136,7 +1139,7 @@ func TestRequestCredentialsSubstitutesAndRedacts(t *testing.T) {
 	// any secret echoed in the tool RESULT content must be redacted.
 	for _, callMsgs := range prov.gotMessages {
 		for _, m := range callMsgs {
-			if m.Role == toolMsgRole && m.ToolCallID == "call_mcp" {
+			if m.Role == toolMsgRole && m.ToolCallID == testMCPCallID {
 				if strings.Contains(m.Content, secretValue) {
 					t.Fatalf("tool result message leaked the raw secret: %q", m.Content)
 				}
@@ -1165,6 +1168,108 @@ func TestRequestCredentialsSubstitutesAndRedacts(t *testing.T) {
 	last := msgs.added[len(msgs.added)-1]
 	if strings.Contains(last.Content, secretValue) {
 		t.Fatalf("persisted assistant message leaked the raw secret: %+v", last)
+	}
+}
+
+// TestMCPErrorRedactsSecretBeforeLogging is a regression test for the
+// MCP-error log path: when a tool call fails and the error text embeds the
+// submitted secret value (e.g. a login tool echoing the invalid password
+// back), the raw secret must never reach slog, the tool result, or the SSE
+// stream — only the redacted "[redacted]" placeholder may appear.
+func TestMCPErrorRedactsSecretBeforeLogging(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	broker := secret.NewBroker()
+	const secretValue = "s3cr3t-value"
+	fields := `[{"name":"` + testCredsFieldName + `","label":"Password","secret":true}]`
+
+	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}}
+	// The MCP tool server rejects the credential and echoes it back in the
+	// error text, as a real login tool might ("invalid password 's3cr3t-value'").
+	mcp.callErr = errors.New("invalid password '" + secretValue + "'")
+
+	prov := &requestCredentialsProvider{
+		reqReason: testCredsReason, reqFields: fields,
+		mcpToolName:  testToolName,
+		mcpFieldName: testCredsFieldName,
+		finalReply:   "done, " + secretValue,
+	}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Secrets: broker})
+
+	// Swap slog's default handler for a text handler writing into a buffer,
+	// so we can assert on exactly what got logged. Restore afterwards.
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	sink := &syncCapturingSink{}
+	go func() {
+		for {
+			for _, e := range sink.snapshot() {
+				if e.Type == chat.EventCredentials && e.RequestID != "" {
+					_ = broker.Submit(testUserID, e.RequestID, map[string]string{testCredsFieldName: secretValue})
+					return
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "log me into garmin", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if !mcp.callInvoked {
+		t.Fatal("expected MCP Call to be invoked")
+	}
+
+	// The raw secret must never appear in the captured logs.
+	if strings.Contains(logBuf.String(), secretValue) {
+		t.Fatalf("raw secret leaked into logs: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "[redacted]") {
+		t.Fatalf("expected redacted placeholder in logs: %s", logBuf.String())
+	}
+
+	// The role:"tool" error result forwarded to the provider must be redacted.
+	var foundToolResult bool
+	for _, callMsgs := range prov.gotMessages {
+		for _, m := range callMsgs {
+			if m.Role == toolMsgRole && m.ToolCallID == testMCPCallID {
+				foundToolResult = true
+				if strings.Contains(m.Content, secretValue) {
+					t.Fatalf("tool result message leaked the raw secret: %q", m.Content)
+				}
+				if !strings.Contains(m.Content, "[redacted]") {
+					t.Fatalf("expected tool result to be redacted: %q", m.Content)
+				}
+			}
+		}
+	}
+	if !foundToolResult {
+		t.Fatal("expected an error tool result forwarded to the provider")
+	}
+
+	// Streamed content must never leak the raw secret either.
+	events := sink.snapshot()
+	var streamed strings.Builder
+	for _, e := range events {
+		if e.Type == chat.EventToken {
+			streamed.WriteString(e.Delta)
+		}
+	}
+	if strings.Contains(streamed.String(), secretValue) {
+		t.Fatalf("streamed content leaked the raw secret: %q", streamed.String())
+	}
+
+	// Persisted assistant message must not leak the raw secret.
+	if len(msgs.added) > 0 {
+		last := msgs.added[len(msgs.added)-1]
+		if strings.Contains(last.Content, secretValue) {
+			t.Fatalf("persisted assistant message leaked the raw secret: %+v", last)
+		}
 	}
 }
 
