@@ -3,13 +3,21 @@
 	import { goto } from '$app/navigation';
 	import Composer from '$lib/components/Composer.svelte';
 	import { currentUser } from '$lib/stores/auth';
-	import { newChat, sendMessage, sending } from '$lib/stores/chat';
+	import { activeId, newChat, sendMessage, sending } from '$lib/stores/chat';
 
 	onMount(() => newChat()); // fresh state on landing
 
-	async function start(text: string): Promise<void> {
-		const id = await sendMessage(text); // streams; meta event sets activeId
-		if (id != null) await goto(`/chat/${id}`); // seamless: store already holds the live stream
+	// Navigate to /chat/[id] as soon as the conversation id is known (on the
+	// `meta` stream event), not after the whole stream completes — the stream
+	// keeps rendering inside /chat/[id] since it isn't tied to this component.
+	function start(text: string): void {
+		void sendMessage(text);
+		const unsubscribe = activeId.subscribe((id) => {
+			if (id != null) {
+				void goto(`/chat/${id}`);
+				queueMicrotask(() => unsubscribe());
+			}
+		});
 	}
 </script>
 

@@ -95,4 +95,41 @@ describe('Sidebar', () => {
 		await fireEvent.click(screen.getByRole('button', { name: /new chat/i }));
 		expect(newChatMock).toHaveBeenCalled();
 	});
+
+	it('navigates home and closes the drawer when deleting the active conversation', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		removeConversationMock.mockResolvedValueOnce(undefined);
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, title: 'First chat' }
+		]);
+		(page as unknown as { set: (v: unknown) => void }).set({
+			params: { id: '1' },
+			url: { pathname: '/chat/1' }
+		});
+		render(Sidebar, { props: {} });
+		await fireEvent.click(screen.getByRole('button', { name: /delete conversation/i }));
+
+		expect(removeConversationMock).toHaveBeenCalledWith(1);
+		expect(gotoMock).toHaveBeenCalledWith('/');
+		expect(closeSidebarMock).toHaveBeenCalled();
+	});
+
+	it('does not navigate when deleting a non-active conversation', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		removeConversationMock.mockResolvedValueOnce(undefined);
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, title: 'First chat' },
+			{ id: 2, title: 'Second chat' }
+		]);
+		(page as unknown as { set: (v: unknown) => void }).set({
+			params: { id: '2' },
+			url: { pathname: '/chat/2' }
+		});
+		render(Sidebar, { props: {} });
+		const deleteButtons = screen.getAllByRole('button', { name: /delete conversation/i });
+		await fireEvent.click(deleteButtons[0]);
+
+		expect(removeConversationMock).toHaveBeenCalledWith(1);
+		expect(gotoMock).not.toHaveBeenCalled();
+	});
 });
