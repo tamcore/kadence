@@ -1,10 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { refreshConversations } from '$lib/stores/chat';
-
+	// History is loaded by the global Sidebar (shell); this layout just renders
+	// the chat pages into the shell's main pane.
 	let { children } = $props();
-
-	onMount(refreshConversations);
 </script>
 
 {@render children()}
