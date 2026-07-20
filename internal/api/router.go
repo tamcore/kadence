@@ -19,12 +19,13 @@ import (
 
 // Deps carries the dependencies the router needs.
 type Deps struct {
-	Users     *store.UserRepository
-	Sessions  *store.SessionRepository
-	Config    config.Config
-	Chat      *handlers.Chat
-	Documents *handlers.Documents
-	Context   *handlers.Context
+	Users       *store.UserRepository
+	Sessions    *store.SessionRepository
+	Config      config.Config
+	Chat        *handlers.Chat
+	Documents   *handlers.Documents
+	Context     *handlers.Context
+	Credentials *handlers.Credentials
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -98,6 +99,10 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Post("/api/documents", deps.Documents.Upload)
 			r.Get("/api/documents", deps.Documents.List)
 			r.Delete("/api/documents/{id}", deps.Documents.Delete)
+		}
+
+		if deps.Credentials != nil {
+			r.Post("/api/credentials/{requestId}", deps.Credentials.Submit)
 		}
 
 		r.Group(func(r chi.Router) {

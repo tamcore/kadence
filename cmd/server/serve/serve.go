@@ -122,6 +122,7 @@ func Run() error {
 			Secrets: broker,
 		})
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
+		deps.Credentials = handlers.NewCredentials(broker)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
 		slog.Info("chat disabled (KADENCE_LLM_API_KEY not set)")
