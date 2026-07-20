@@ -11,22 +11,22 @@ export interface Conversation {
 	createdAt: string;
 }
 
+export type MessagePart =
+	| { kind: 'text'; content: string }
+	| { kind: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string };
+
 export interface ChatMessage {
 	role: 'user' | 'assistant';
 	content: string;
+	parts?: MessagePart[];
 }
 
 export type ChatEvent =
 	| { type: 'meta'; conversationId: number }
 	| { type: 'token'; delta: string }
-	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error' }
+	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'done' }
 	| { type: 'error'; message: string };
-
-export interface ToolActivity {
-	tool: string;
-	status: 'running' | 'done' | 'error';
-}
 
 export interface Document {
 	id: number;

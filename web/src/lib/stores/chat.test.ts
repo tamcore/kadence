@@ -9,7 +9,7 @@ vi.mock('$lib/api/chat', () => ({
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
-import { activeId, chatError, messages, newChat, sendMessage, sending, toolActivity } from './chat';
+import { activeId, chatError, messages, newChat, sendMessage, sending } from './chat';
 
 async function* events(evs: unknown[]) {
 	for (const e of evs) yield e;
@@ -36,7 +36,11 @@ describe('chat store', () => {
 		expect(get(activeId)).toBe(42);
 		const msgs = get(messages);
 		expect(msgs[0]).toEqual({ role: 'user', content: 'hi coach' });
-		expect(msgs[1]).toEqual({ role: 'assistant', content: 'Hello' });
+		expect(msgs[1]).toEqual({
+			role: 'assistant',
+			content: 'Hello',
+			parts: [{ kind: 'text', content: 'Hello' }]
+		});
 	});
 
 	it('surfaces an error event', async () => {
@@ -76,7 +80,7 @@ describe('chat store', () => {
 	it('transitions a running tool entry to done without duplicating it', async () => {
 		streamChatMock.mockReturnValueOnce(events([
 			{ type: 'meta', conversationId: 1 },
-			{ type: 'tool', tool: 'garmin__get_activities', status: 'running' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
 			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
 			{ type: 'token', delta: 'You ran 10km.' },
 			{ type: 'done' }
@@ -84,19 +88,31 @@ describe('chat store', () => {
 
 		await sendMessage('hi');
 
-		expect(get(toolActivity)).toEqual([{ tool: 'garmin__get_activities', status: 'done' }]);
+		const assistant = get(messages)[1];
+		expect(assistant.parts).toEqual([
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'text', content: 'You ran 10km.' }
+		]);
+		expect(assistant.content).toBe('You ran 10km.');
 	});
 
-	it('clears toolActivity at the start of a new sendMessage', async () => {
-		toolActivity.set([{ tool: 'garmin__get_activities', status: 'running' }]);
+	it('places tool parts inline and in order before later text', async () => {
 		streamChatMock.mockReturnValueOnce(events([
 			{ type: 'meta', conversationId: 1 },
-			{ type: 'token', delta: 'hi' },
+			{ type: 'token', delta: 'Sure, checking...' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{ type: 'token', delta: 'You ran 10km.' },
 			{ type: 'done' }
 		]));
 
 		await sendMessage('hi');
 
-		expect(get(toolActivity)).toEqual([]);
+		const assistant = get(messages)[1];
+		expect(assistant.parts).toEqual([
+			{ kind: 'text', content: 'Sure, checking...' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'text', content: 'You ran 10km.' }
+		]);
 	});
 });

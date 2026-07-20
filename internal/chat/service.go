@@ -315,7 +315,7 @@ func (s *Service) runToolLoop(
 // running/done/error tool events on sink, and returns the resulting
 // role:"tool" message to append to the provider request.
 func (s *Service) runToolCall(ctx context.Context, username string, tc provider.ToolCall, sink EventSink) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: "running"})
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: "running", Arguments: tc.Arguments})
 	_ = sink.Flush()
 
 	out, cErr := s.mcp.Call(ctx, username, tc.Name, tc.Arguments)

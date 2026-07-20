@@ -469,6 +469,12 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 	if toolEvents[0].Tool != testToolName || toolEvents[1].Tool != testToolName {
 		t.Fatalf("tool events missing tool name: %+v", toolEvents)
 	}
+	if toolEvents[0].Arguments != testToolArgs {
+		t.Fatalf("expected running tool event to carry arguments %q, got: %+v", testToolArgs, toolEvents[0])
+	}
+	if toolEvents[1].Arguments != "" {
+		t.Fatalf("expected done tool event to omit arguments, got: %+v", toolEvents[1])
+	}
 
 	var streamed strings.Builder
 	for _, e := range sink.events {

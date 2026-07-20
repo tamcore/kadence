@@ -1,5 +1,5 @@
 import { get, writable } from 'svelte/store';
-import type { ChatMessage, Conversation, ToolActivity } from '$lib/types';
+import type { ChatMessage, Conversation, MessagePart } from '$lib/types';
 import * as chatApi from '$lib/api/chat';
 
 export const messages = writable<ChatMessage[]>([]);
@@ -7,7 +7,6 @@ export const conversations = writable<Conversation[]>([]);
 export const activeId = writable<number | null>(null);
 export const sending = writable(false);
 export const chatError = writable<string | null>(null);
-export const toolActivity = writable<ToolActivity[]>([]);
 
 let abort: AbortController | null = null;
 
@@ -18,7 +17,6 @@ export function newChat(): void {
 	activeId.set(null);
 	chatError.set(null);
 	sending.set(false);
-	toolActivity.set([]);
 }
 
 export async function refreshConversations(): Promise<void> {
@@ -33,7 +31,6 @@ export async function loadConversation(id: number): Promise<void> {
 	if (get(activeId) === id && get(messages).length > 0) return;
 	activeId.set(id);
 	chatError.set(null);
-	toolActivity.set([]);
 	try {
 		messages.set(await chatApi.getMessages(id));
 	} catch {
@@ -47,14 +44,57 @@ export async function removeConversation(id: number): Promise<void> {
 	await refreshConversations();
 }
 
+// appendTextDelta returns a copy of parts with delta appended to the trailing
+// text part, adding a new text part first if the last part is a tool (or none exist).
+function appendTextDelta(parts: MessagePart[], delta: string): MessagePart[] {
+	const last = parts[parts.length - 1];
+	if (last && last.kind === 'text') {
+		const copy = [...parts];
+		copy[copy.length - 1] = { kind: 'text', content: last.content + delta };
+		return copy;
+	}
+	return [...parts, { kind: 'text', content: delta }];
+}
+
+// updateToolPart returns a copy of parts with the most recent running part for
+// `tool` transitioned to `status`, or appends a new tool part if none is running.
+function updateToolPart(
+	parts: MessagePart[],
+	tool: string,
+	status: 'done' | 'error'
+): MessagePart[] {
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const part = parts[i];
+		if (part.kind === 'tool' && part.tool === tool && part.status === 'running') {
+			const copy = [...parts];
+			copy[i] = { ...part, status };
+			return copy;
+		}
+	}
+	return [...parts, { kind: 'tool', tool, status }];
+}
+
 // sendMessage streams a reply; returns the conversation id (new or existing), or null on error.
 export async function sendMessage(text: string): Promise<number | null> {
 	chatError.set(null);
-	toolActivity.set([]);
 	sending.set(true);
 	messages.update((m) => [...m, { role: 'user', content: text }]);
-	messages.update((m) => [...m, { role: 'assistant', content: '' }]);
+	messages.update((m) => [...m, { role: 'assistant', content: '', parts: [] }]);
 	const assistantIdx = get(messages).length - 1;
+
+	function updateAssistantParts(update: (parts: MessagePart[]) => MessagePart[]): void {
+		messages.update((m) => {
+			const copy = [...m];
+			const current = copy[assistantIdx];
+			const nextParts = update(current.parts ?? []);
+			const textContent = nextParts
+				.filter((p): p is Extract<MessagePart, { kind: 'text' }> => p.kind === 'text')
+				.map((p) => p.content)
+				.join('');
+			copy[assistantIdx] = { role: 'assistant', content: textContent, parts: nextParts };
+			return copy;
+		});
+	}
 
 	const localAbort = new AbortController();
 	abort = localAbort;
@@ -66,26 +106,18 @@ export async function sendMessage(text: string): Promise<number | null> {
 				convId = ev.conversationId;
 				if (get(activeId) === null) activeId.set(convId);
 			} else if (ev.type === 'token') {
-				messages.update((m) => {
-					const copy = [...m];
-					copy[assistantIdx] = { role: 'assistant', content: copy[assistantIdx].content + ev.delta };
-					return copy;
-				});
+				updateAssistantParts((parts) => appendTextDelta(parts, ev.delta));
 			} else if (ev.type === 'tool') {
-				toolActivity.update((list) => {
-					if (ev.status === 'running') {
-						return [...list, { tool: ev.tool, status: 'running' }];
-					}
-					// transition the most recent running entry for this tool
-					const copy = [...list];
-					for (let i = copy.length - 1; i >= 0; i--) {
-						if (copy[i].tool === ev.tool && copy[i].status === 'running') {
-							copy[i] = { tool: ev.tool, status: ev.status };
-							return copy;
-						}
-					}
-					return [...copy, { tool: ev.tool, status: ev.status }];
-				});
+				const tool = ev.tool;
+				const status = ev.status;
+				if (status === 'running') {
+					updateAssistantParts((parts) => [
+						...parts,
+						{ kind: 'tool', tool, status: 'running', arguments: ev.arguments }
+					]);
+				} else {
+					updateAssistantParts((parts) => updateToolPart(parts, tool, status));
+				}
 			} else if (ev.type === 'error') {
 				chatError.set(ev.message);
 				break;
