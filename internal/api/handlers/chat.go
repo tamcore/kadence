@@ -18,7 +18,8 @@ import (
 
 // sseKeepaliveInterval is how often an SSE comment line is written to keep
 // proxies from closing an idle connection during long tool-loop turns.
-const sseKeepaliveInterval = 15 * time.Second
+// sseKeepaliveInterval is a var (not const) so tests can shorten it.
+var sseKeepaliveInterval = 15 * time.Second
 
 // ChatStreamer runs a streaming chat turn.
 type ChatStreamer interface {
@@ -108,7 +109,9 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 
 	sink := &sseSink{w: w, rc: http.NewResponseController(w)}
 	done := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		t := time.NewTicker(sseKeepaliveInterval)
 		defer t.Stop()
 		for {
@@ -121,7 +124,10 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	_ = h.svc.Stream(r.Context(), u.ID, u.Username, body.ConversationID, body.Message, sink)
+	// Signal the keepalive goroutine to stop and wait for it to exit before
+	// returning, so it can never write to w after the handler has returned.
 	close(done)
+	<-stopped
 }
 
 type conversationDTO struct {
