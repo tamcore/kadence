@@ -68,6 +68,7 @@
 
 	<nav class="links">
 		<a href="/documents" onclick={closeSidebar}>Documents</a>
+		<a href="/context" onclick={closeSidebar}>Context</a>
 		{#if $isAdmin}
 			<a href="/admin/users" onclick={closeSidebar}>Users</a>
 			<a href="/admin/documents" onclick={closeSidebar}>Public Docs</a>
