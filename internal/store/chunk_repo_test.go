@@ -68,3 +68,53 @@ func TestChunkCascadeOnConversationDelete(t *testing.T) {
 		t.Fatalf("chunks should be gone after conversation delete: %+v", got)
 	}
 }
+
+func TestListContentForUserReturnsOwnAndPublicNotOthersPrivate(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	chunks := store.NewChunkRepository(pool)
+	ctx := context.Background()
+	userA, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+	userB, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
+
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userA.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "a-doc-chunk"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userA.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "a-message-chunk"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userA.ID, Scope: model.ScopePublic, SourceKind: model.ChunkSourceDocument, Content: "public-chunk"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userB.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "b-private-chunk"}, []float32{1, 0, 0})
+
+	got, err := chunks.ListContentForUser(ctx, userA.ID)
+	if err != nil {
+		t.Fatalf("ListContentForUser: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 chunks (2 own + 1 public), got %d: %+v", len(got), got)
+	}
+	for _, ref := range got {
+		if ref.Content == "b-private-chunk" {
+			t.Fatalf("user B's private chunk must not leak to user A: %+v", got)
+		}
+	}
+}
+
+func TestSearchContentForUserFiltersByContent(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	chunks := store.NewChunkRepository(pool)
+	ctx := context.Background()
+	userA, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+	userB, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
+
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userA.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "contains the search term here"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userA.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "unrelated content"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &userB.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "also has the search term"}, []float32{1, 0, 0})
+
+	got, err := chunks.SearchContentForUser(ctx, userA.ID, "search term", 20)
+	if err != nil {
+		t.Fatalf("SearchContentForUser: %v", err)
+	}
+	if len(got) != 1 || got[0].Content != "contains the search term here" {
+		t.Fatalf("expected only user A's matching chunk, got %+v", got)
+	}
+}

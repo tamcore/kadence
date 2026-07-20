@@ -24,6 +24,7 @@ type Deps struct {
 	Config    config.Config
 	Chat      *handlers.Chat
 	Documents *handlers.Documents
+	Context   *handlers.Context
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -86,6 +87,11 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Get("/api/conversations", deps.Chat.ListConversations)
 			r.Get("/api/conversations/{id}/messages", deps.Chat.Messages)
 			r.Delete("/api/conversations/{id}", deps.Chat.DeleteConversation)
+		}
+
+		if deps.Context != nil {
+			r.Get("/api/context/overview", deps.Context.Overview)
+			r.Get("/api/context/search", deps.Context.Search)
 		}
 
 		if deps.Documents != nil {

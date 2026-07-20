@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
@@ -51,6 +52,60 @@ func (r *ChunkRepository) SearchTopK(ctx context.Context, userID int64, embeddin
 			return nil, fmt.Errorf("scan chunk: %w", err)
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ChunkRef is a lightweight projection of a chunk used by the context
+// explorer, omitting the embedding and other fields not needed there.
+type ChunkRef struct {
+	Content    string
+	SourceKind string
+	DocumentID *int64
+}
+
+// maxOverviewChunks caps how many chunks ListContentForUser scans, so the
+// context overview stays bounded even for large corpora.
+const maxOverviewChunks = 5000
+
+// ListContentForUser returns the content of a user's own chunks plus any
+// public chunks, newest first, capped at maxOverviewChunks.
+func (r *ChunkRepository) ListContentForUser(ctx context.Context, userID int64) ([]ChunkRef, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT content, source_kind, document_id FROM chunks
+		 WHERE user_id = $1 OR scope = 'public'
+		 ORDER BY created_at DESC LIMIT $2`, userID, maxOverviewChunks)
+	if err != nil {
+		return nil, fmt.Errorf("list chunks for user: %w", err)
+	}
+	defer rows.Close()
+	return scanChunkRefRows(rows)
+}
+
+// SearchContentForUser returns chunks (the user's own plus any public) whose
+// content contains term (case-insensitive), newest first, capped at limit.
+func (r *ChunkRepository) SearchContentForUser(ctx context.Context, userID int64, term string, limit int) ([]ChunkRef, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT content, source_kind, document_id FROM chunks
+		 WHERE (user_id = $1 OR scope = 'public') AND content ILIKE '%' || $2 || '%'
+		 ORDER BY created_at DESC LIMIT $3`, userID, term, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search chunks for user: %w", err)
+	}
+	defer rows.Close()
+	return scanChunkRefRows(rows)
+}
+
+// scanChunkRefRows scans rows selected as (content, source_kind, document_id)
+// into ChunkRef values.
+func scanChunkRefRows(rows pgx.Rows) ([]ChunkRef, error) {
+	var out []ChunkRef
+	for rows.Next() {
+		var ref ChunkRef
+		if err := rows.Scan(&ref.Content, &ref.SourceKind, &ref.DocumentID); err != nil {
+			return nil, fmt.Errorf("scan chunk ref: %w", err)
+		}
+		out = append(out, ref)
 	}
 	return out, rows.Err()
 }
