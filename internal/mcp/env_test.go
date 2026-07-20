@@ -33,6 +33,34 @@ func TestServersFromEnv(t *testing.T) {
 	}
 }
 
+func TestServersFromEnvParsesTools(t *testing.T) {
+	env := []string{
+		"MCP_GARMIN_GLOBAL_URL=http://x/mcp",
+		"MCP_GARMIN_GLOBAL_TOOLS=get_activity*, *_workout ,get_exercise_types",
+	}
+	servers, err := ServersFromEnv(env)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("servers=%d err=%v", len(servers), err)
+	}
+	got := servers[0].Tools
+	want := []string{"get_activity*", "*_workout", "get_exercise_types"}
+	if len(got) != len(want) {
+		t.Fatalf("Tools=%v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Tools[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestServersFromEnvNoToolsMeansNil(t *testing.T) {
+	servers, _ := ServersFromEnv([]string{"MCP_GARMIN_GLOBAL_URL=http://x/mcp"})
+	if servers[0].Tools != nil {
+		t.Fatalf("expected nil Tools, got %v", servers[0].Tools)
+	}
+}
+
 func TestScopeAppliesToUser(t *testing.T) {
 	if !(Server{Scope: "GLOBAL"}).AppliesTo("anyone") {
 		t.Fatal("GLOBAL applies to everyone")
