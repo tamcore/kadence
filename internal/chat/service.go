@@ -16,13 +16,13 @@ import (
 // ConversationStore is the conversation persistence the service needs.
 type ConversationStore interface {
 	Create(ctx context.Context, userID int64, title string) (model.Conversation, error)
-	GetByID(ctx context.Context, id, userID int64) (model.Conversation, error)
+	GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error)
 }
 
 // MessageStore is the message persistence the service needs.
 type MessageStore interface {
-	Add(ctx context.Context, conversationID int64, role, content string) (model.Message, error)
-	ListByConversation(ctx context.Context, conversationID int64) ([]model.Message, error)
+	Add(ctx context.Context, conversationID string, role, content string) (model.Message, error)
+	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 }
 
 // MCPTools is the MCP tool-calling surface the chat service needs: the set
@@ -143,8 +143,8 @@ func (s *Service) systemPrompt() string {
 
 // Stream runs one chat turn: resolve/create the conversation, persist the user
 // message, stream the assistant reply (persisting it), emitting SSE events.
-func (s *Service) Stream(ctx context.Context, userID int64, username string, conversationID int64, userText string, sink EventSink) error {
-	if conversationID == 0 {
+func (s *Service) Stream(ctx context.Context, userID int64, username string, conversationID string, userText string, sink EventSink) error {
+	if conversationID == "" {
 		title := userText
 		if len(title) > titleMaxLen {
 			title = title[:titleMaxLen]
@@ -254,7 +254,7 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 // refused=true when Stream should return immediately with the returned err
 // (which may be nil). A classifier failure fails open (refused=false).
 func (s *Service) applyGuardrail(
-	ctx, streamCtx context.Context, conversationID int64, reqMessages []provider.Message, sink EventSink,
+	ctx, streamCtx context.Context, conversationID string, reqMessages []provider.Message, sink EventSink,
 ) (refused bool, err error) {
 	if s.guardrail == nil {
 		return false, nil
@@ -290,7 +290,7 @@ func (s *Service) applyGuardrail(
 // tool-free assistant content (persistence and RAG-embedding happen in the
 // caller).
 func (s *Service) runToolLoop(
-	ctx, streamCtx context.Context, conversationID int64, username string, req provider.ChatRequest, sink EventSink,
+	ctx, streamCtx context.Context, conversationID string, username string, req provider.ChatRequest, sink EventSink,
 ) (string, error) {
 	maxIter := s.maxIterations
 	if maxIter <= 0 {

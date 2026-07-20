@@ -58,7 +58,7 @@ func TestChunkCascadeOnConversationDelete(t *testing.T) {
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, u.ID, "chat")
 
-	_ = chunks.Insert(ctx, model.Chunk{UserID: &u.ID, ConversationID: new(c.ID), Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "remember this"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &u.ID, ConversationID: &c.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "remember this"}, []float32{1, 0, 0})
 
 	if err := convs.Delete(ctx, c.ID, u.ID); err != nil {
 		t.Fatalf("delete conversation: %v", err)

@@ -14,7 +14,7 @@ const (
 type ChatEvent struct {
 	Type           string `json:"type"`
 	Delta          string `json:"delta,omitempty"`
-	ConversationID int64  `json:"conversationId,omitempty"`
+	ConversationID string `json:"conversationId,omitempty"`
 	Message        string `json:"message,omitempty"`
 	Tool           string `json:"tool,omitempty"`
 	Status         string `json:"status,omitempty"`

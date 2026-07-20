@@ -18,11 +18,11 @@ func NewMessageRepository(pool *pgxpool.Pool) *MessageRepository {
 }
 
 // Add appends a message to a conversation.
-func (r *MessageRepository) Add(ctx context.Context, conversationID int64, role, content string) (model.Message, error) {
+func (r *MessageRepository) Add(ctx context.Context, conversationID string, role, content string) (model.Message, error) {
 	var m model.Message
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)
-		 RETURNING id, conversation_id, role, content, created_at`, conversationID, role, content).
+		`INSERT INTO messages (conversation_id, role, content) VALUES ($1::uuid, $2, $3)
+		 RETURNING id, conversation_id::text, role, content, created_at`, conversationID, role, content).
 		Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.CreatedAt)
 	if err != nil {
 		return model.Message{}, fmt.Errorf("insert message: %w", err)
@@ -31,10 +31,10 @@ func (r *MessageRepository) Add(ctx context.Context, conversationID int64, role,
 }
 
 // ListByConversation returns a conversation's messages in chronological order.
-func (r *MessageRepository) ListByConversation(ctx context.Context, conversationID int64) ([]model.Message, error) {
+func (r *MessageRepository) ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id, role, content, created_at FROM messages
-		 WHERE conversation_id = $1 ORDER BY id`, conversationID)
+		`SELECT id, conversation_id::text, role, content, created_at FROM messages
+		 WHERE conversation_id = $1::uuid ORDER BY id`, conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("list messages: %w", err)
 	}

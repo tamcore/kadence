@@ -16,9 +16,9 @@ import (
 
 type fakeStreamer struct{ gotText string }
 
-func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ string, _ int64, text string, sink chat.EventSink) error {
+func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ string, _ string, text string, sink chat.EventSink) error {
 	f.gotText = text
-	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: 5})
+	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: "conv-uuid-1"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventToken, Delta: "hi"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone})
 	return sink.Flush()
@@ -33,17 +33,17 @@ type fakeConvLister struct {
 func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation, error) {
 	return f.list, nil
 }
-func (f fakeConvLister) GetByID(_ context.Context, id, userID int64) (model.Conversation, error) {
+func (f fakeConvLister) GetByID(_ context.Context, id string, userID int64) (model.Conversation, error) {
 	if f.getByIDError != nil {
 		return model.Conversation{}, f.getByIDError
 	}
 	return model.Conversation{ID: id, UserID: userID}, nil
 }
-func (f fakeConvLister) Delete(context.Context, int64, int64) error { return f.deleteError }
+func (f fakeConvLister) Delete(context.Context, string, int64) error { return f.deleteError }
 
 type fakeMsgLister struct{ msgs []model.Message }
 
-func (f fakeMsgLister) ListByConversation(context.Context, int64) ([]model.Message, error) {
+func (f fakeMsgLister) ListByConversation(context.Context, string) ([]model.Message, error) {
 	return f.msgs, nil
 }
 
@@ -88,7 +88,7 @@ func TestChatSendRequiresUser(t *testing.T) {
 }
 
 func TestListConversations(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{list: []model.Conversation{{ID: 1, Title: "a"}}}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{list: []model.Conversation{{ID: "conv-uuid-1", Title: "a"}}}, fakeMsgLister{})
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
 	rec := httptest.NewRecorder()
 	h.ListConversations(rec, req)
@@ -117,9 +117,9 @@ func TestMessagesSuccess(t *testing.T) {
 	}
 }
 
-func TestMessagesBadID(t *testing.T) {
+func TestMessagesEmptyID(t *testing.T) {
 	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/notanid/messages", nil), 7)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations//messages", nil), 7), "id", "")
 	rec := httptest.NewRecorder()
 	h.Messages(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -161,9 +161,9 @@ func TestDeleteConversationSuccess(t *testing.T) {
 	}
 }
 
-func TestDeleteConversationBadID(t *testing.T) {
+func TestDeleteConversationEmptyID(t *testing.T) {
 	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	req := withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/notanid", nil), 7)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/", nil), 7), "id", "")
 	rec := httptest.NewRecorder()
 	h.DeleteConversation(rec, req)
 	if rec.Code != http.StatusBadRequest {
