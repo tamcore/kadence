@@ -464,12 +464,27 @@ func (s *Service) runToolCall(ctx context.Context, username string, tc provider.
 		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", cErr)
 		out = "error: " + cErr.Error()
 		status = toolStatusError
+	} else {
+		// Debug-only: surfaces exactly what a tool returned (enable via
+		// KADENCE_LOG_LEVEL=debug) to diagnose "tool returned X but the model
+		// said Y" cases. Result is truncated to keep logs bounded.
+		slog.Debug("mcp tool call", "tool", tc.Name, "args", tc.Arguments,
+			"result_bytes", len(out), "result_preview", preview(out, 500))
 	}
 
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
 	_ = sink.Flush()
 
 	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: out}
+}
+
+// preview returns s truncated to at most n bytes (with an ellipsis marker),
+// for bounded debug logging of tool results.
+func preview(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…(truncated)"
 }
 
 // insertAfterSystem inserts m right after a leading system message, or
