@@ -39,10 +39,12 @@ func (p *OpenAICompat) StreamChatWithTools(ctx context.Context, req ChatRequest,
 	msgs := buildMessages(req.Messages)
 
 	params := openai.ChatCompletionNewParams{
-		Model:       req.Model,
-		Messages:    msgs,
-		MaxTokens:   param.NewOpt(int64(req.MaxTokens)),
-		Temperature: param.NewOpt(req.Temperature),
+		Model:    req.Model,
+		Messages: msgs,
+		// max_completion_tokens (not the deprecated max_tokens) — required by
+		// GPT-5-family models and accepted by older ones.
+		MaxCompletionTokens: param.NewOpt(int64(req.MaxTokens)),
+		Temperature:         param.NewOpt(req.Temperature),
 	}
 	if len(req.Tools) > 0 {
 		tools, toolsErr := buildTools(req.Tools)
