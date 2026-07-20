@@ -20,7 +20,7 @@ import (
 // tokenPrefix is prepended to every minted placeholder token and requestID
 // so both are easy to recognize (and grep-exclude from logs) without leaking
 // any information about the underlying random bytes.
-const tokenPrefix = "kadence_secret_"
+const tokenPrefix = "kadence_secret_" // #nosec G101 -- a placeholder-token name prefix, not a credential
 
 // tokenRandomBytes is the amount of crypto/rand entropy used per token and
 // per requestID, making both practically unguessable.
