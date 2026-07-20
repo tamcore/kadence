@@ -6,7 +6,7 @@
 
 	onMount(newChat);
 
-	function onNewConversation(id: number) {
+	function onNewConversation(id: string) {
 		// Make the URL shareable without remounting mid-stream (the store owns the stream).
 		goto(`/chat/${id}`, { replaceState: true, noScroll: true, keepFocus: true });
 	}

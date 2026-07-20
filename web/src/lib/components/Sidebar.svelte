@@ -17,10 +17,10 @@
 		closeSidebar();
 	}
 
-	async function del(id: number, e: Event): Promise<void> {
+	async function del(id: string, e: Event): Promise<void> {
 		e.preventDefault();
 		e.stopPropagation();
-		const wasActive = String(id) === $page.params.id;
+		const wasActive = id === $page.params.id;
 		await removeConversation(id);
 		if (wasActive) {
 			goto('/');
@@ -52,7 +52,7 @@
 					<li>
 						<a
 							href={`/chat/${c.id}`}
-							class:active={String(c.id) === $page.params.id}
+							class:active={c.id === $page.params.id}
 							onclick={closeSidebar}
 						>
 							{c.title || 'Untitled'}

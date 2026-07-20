@@ -6,7 +6,7 @@ export interface User {
 }
 
 export interface Conversation {
-	id: number;
+	id: string;
 	title: string;
 	createdAt: string;
 }
@@ -22,7 +22,7 @@ export interface ChatMessage {
 }
 
 export type ChatEvent =
-	| { type: 'meta'; conversationId: number }
+	| { type: 'meta'; conversationId: string }
 	| { type: 'token'; delta: string }
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'done' }

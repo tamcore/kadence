@@ -4,7 +4,7 @@ import * as chatApi from '$lib/api/chat';
 
 export const messages = writable<ChatMessage[]>([]);
 export const conversations = writable<Conversation[]>([]);
-export const activeId = writable<number | null>(null);
+export const activeId = writable<string | null>(null);
 export const sending = writable(false);
 export const chatError = writable<string | null>(null);
 
@@ -27,7 +27,7 @@ export async function refreshConversations(): Promise<void> {
 	}
 }
 
-export async function loadConversation(id: number): Promise<void> {
+export async function loadConversation(id: string): Promise<void> {
 	// Already live/loaded — this covers the just-created conversation from the
 	// home composer, whose in-flight stream must not be clobbered by a refetch.
 	if (get(activeId) === id) return;
@@ -40,7 +40,7 @@ export async function loadConversation(id: number): Promise<void> {
 	}
 }
 
-export async function removeConversation(id: number): Promise<void> {
+export async function removeConversation(id: string): Promise<void> {
 	await chatApi.deleteConversation(id);
 	if (get(activeId) === id) newChat();
 	await refreshConversations();
@@ -77,7 +77,7 @@ function updateToolPart(
 }
 
 // sendMessage streams a reply; returns the conversation id (new or existing), or null on error.
-export async function sendMessage(text: string): Promise<number | null> {
+export async function sendMessage(text: string): Promise<string | null> {
 	chatError.set(null);
 	sending.set(true);
 	messages.update((m) => [...m, { role: 'user', content: text }]);
@@ -101,7 +101,7 @@ export async function sendMessage(text: string): Promise<number | null> {
 	const localAbort = new AbortController();
 	abort = localAbort;
 	const body = { conversationId: get(activeId) ?? undefined, message: text };
-	let convId = get(activeId);
+	let convId: string | null = get(activeId);
 	try {
 		for await (const ev of chatApi.streamChat(body, localAbort.signal)) {
 			if (ev.type === 'meta') {

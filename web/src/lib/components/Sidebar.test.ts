@@ -66,8 +66,8 @@ describe('Sidebar', () => {
 
 	it('renders conversation titles', () => {
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: 1, title: 'First chat' },
-			{ id: 2, title: 'Second chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' },
+			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat' }
 		]);
 		render(Sidebar, { props: {} });
 		expect(screen.getByText('First chat')).toBeInTheDocument();
@@ -76,12 +76,12 @@ describe('Sidebar', () => {
 
 	it('marks the conversation matching the current route as active', () => {
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: 1, title: 'First chat' },
-			{ id: 2, title: 'Second chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' },
+			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat' }
 		]);
 		(page as unknown as { set: (v: unknown) => void }).set({
-			params: { id: '2' },
-			url: { pathname: '/chat/2' }
+			params: { id: '22222222-2222-2222-2222-222222222222' },
+			url: { pathname: '/chat/22222222-2222-2222-2222-222222222222' }
 		});
 		render(Sidebar, { props: {} });
 		const link = screen.getByText('Second chat').closest('a');
@@ -101,16 +101,16 @@ describe('Sidebar', () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		removeConversationMock.mockResolvedValueOnce(undefined);
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: 1, title: 'First chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
 		]);
 		(page as unknown as { set: (v: unknown) => void }).set({
-			params: { id: '1' },
-			url: { pathname: '/chat/1' }
+			params: { id: '11111111-1111-1111-1111-111111111111' },
+			url: { pathname: '/chat/11111111-1111-1111-1111-111111111111' }
 		});
 		render(Sidebar, { props: {} });
 		await fireEvent.click(screen.getByRole('button', { name: /delete conversation/i }));
 
-		expect(removeConversationMock).toHaveBeenCalledWith(1);
+		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
 		expect(gotoMock).toHaveBeenCalledWith('/');
 		expect(closeSidebarMock).toHaveBeenCalled();
 	});
@@ -119,18 +119,18 @@ describe('Sidebar', () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		removeConversationMock.mockResolvedValueOnce(undefined);
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: 1, title: 'First chat' },
-			{ id: 2, title: 'Second chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' },
+			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat' }
 		]);
 		(page as unknown as { set: (v: unknown) => void }).set({
-			params: { id: '2' },
-			url: { pathname: '/chat/2' }
+			params: { id: '22222222-2222-2222-2222-222222222222' },
+			url: { pathname: '/chat/22222222-2222-2222-2222-222222222222' }
 		});
 		render(Sidebar, { props: {} });
 		const deleteButtons = screen.getAllByRole('button', { name: /delete conversation/i });
 		await fireEvent.click(deleteButtons[0]);
 
-		expect(removeConversationMock).toHaveBeenCalledWith(1);
+		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
 		expect(gotoMock).not.toHaveBeenCalled();
 	});
 });
