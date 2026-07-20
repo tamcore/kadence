@@ -81,6 +81,21 @@ describe('ChatView', () => {
 		expect(screen.getByText(/"name": "Leg day"/)).toBeVisible();
 	});
 
+	it('scrolls the thread to the bottom when a new message arrives', async () => {
+		const { container } = render(ChatView, { props: {} });
+		const threadEl = container.querySelector('.thread') as HTMLDivElement;
+
+		Object.defineProperty(threadEl, 'scrollHeight', { value: 500, configurable: true });
+		threadEl.scrollTop = 0;
+
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ role: 'assistant', content: '**hi**' },
+			{ role: 'user', content: 'hello there' }
+		]);
+
+		await waitFor(() => expect(threadEl.scrollTop).toBe(500));
+	});
+
 	it('renders tool parts before later text parts, in order', () => {
 		(messages as unknown as { set: (v: unknown[]) => void }).set([
 			{

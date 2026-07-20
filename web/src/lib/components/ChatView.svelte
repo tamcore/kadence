@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { activeId, chatError, messages, sendMessage, sending } from '$lib/stores/chat';
 	import type { MessagePart } from '$lib/types';
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
@@ -6,11 +7,26 @@
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
+	let threadEl = $state<HTMLDivElement | null>(null);
+
+	async function scrollToBottom(): Promise<void> {
+		await tick();
+		if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+	}
+
+	$effect(() => {
+		const lastMessage = $messages[$messages.length - 1];
+		void $messages.length;
+		void lastMessage?.content.length;
+		void scrollToBottom();
+	});
+
 	async function submit(text: string) {
 		if ($sending) return;
 		const wasNew = $activeId === null;
 		const id = await sendMessage(text);
 		if (wasNew && id != null && onNewConversation) onNewConversation(id);
+		void scrollToBottom();
 	}
 
 	function toolLabel(name: string): string {
@@ -30,7 +46,7 @@
 </script>
 
 <div class="chat">
-	<div class="thread">
+	<div class="thread" bind:this={threadEl}>
 		<div class="thread-inner">
 			{#each $messages as m, i (i)}
 				<div class="msg {m.role}">
