@@ -129,7 +129,7 @@ func Load() Config {
 	cfg.MarkitdownAuthPass = os.Getenv("KADENCE_MARKITDOWN_AUTH_PASS")
 	cfg.MarkitdownTransport = envOr("KADENCE_MARKITDOWN_TRANSPORT", "streamable-http")
 
-	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 5)
+	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 8)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 
 	return cfg

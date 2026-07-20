@@ -16,6 +16,7 @@ import (
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
+	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/embed"
 	"github.com/tamcore/kadence/internal/ingest"
@@ -96,6 +97,10 @@ func Run() error {
 			mcpTools = mcp.NewRegistry(servers)
 			slog.Info("mcp enabled", "servers", len(servers))
 		}
+		skills, err := skill.Load()
+		if err != nil {
+			return fmt.Errorf("load skills: %w", err)
+		}
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
 			Model:            cfg.LLMModel,
 			MaxTokens:        cfg.LLMMaxTokens,
@@ -104,7 +109,7 @@ func Run() error {
 			Timeout:          cfg.LLMTimeout,
 			MCPMaxIterations: cfg.MCPMaxIterations,
 			MCPMaxTools:      cfg.MCPMaxTools,
-		}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools})
+		}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills})
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
