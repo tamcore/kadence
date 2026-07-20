@@ -58,7 +58,7 @@ type ServiceConfig struct {
 const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
 const loadSkillToolName = "kadence__load_skill"
-const credsToolName = "kadence__request_credentials"
+const credsToolName = "kadence__request_credentials" // #nosec G101 -- a tool name, not a credential
 
 // maxCredentialFields bounds how many fields a request_credentials tool call
 // may ask for in a single call (mirrors internal/secret's own cap; enforced
@@ -68,7 +68,7 @@ const maxCredentialFields = 8
 // credentialsNotCompletedResult is the tool result returned to the model when
 // a credential request times out or is cancelled (e.g. the client
 // disconnected). It carries no secret, no token — only a benign status.
-const credentialsNotCompletedResult = "the credential request was not completed; do not retry automatically."
+const credentialsNotCompletedResult = "the credential request was not completed; do not retry automatically." // #nosec G101 -- a benign status message, not a credential
 
 // credentialsInstructionSuffix is appended to the token map returned to the
 // model on a successful credential submission.
