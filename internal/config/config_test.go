@@ -198,8 +198,8 @@ func TestIngestDefaults(t *testing.T) {
 
 func TestMCPMaxIterationsDefault(t *testing.T) {
 	t.Setenv("KADENCE_MCP_MAX_ITERATIONS", "")
-	if cfg := Load(); cfg.MCPMaxIterations != 5 {
-		t.Fatalf("MCPMaxIterations default = %d, want 5", cfg.MCPMaxIterations)
+	if cfg := Load(); cfg.MCPMaxIterations != 8 {
+		t.Fatalf("MCPMaxIterations default = %d, want 8", cfg.MCPMaxIterations)
 	}
 }
 

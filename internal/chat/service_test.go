@@ -333,35 +333,67 @@ func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
 	}
 }
 
-func TestStreamDefaultSystemPromptIncludesWorkoutAndMemoryGuidance(t *testing.T) {
+func TestDefaultSystemPromptIsSlimAndPointsToSkills(t *testing.T) {
 	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	captP := &capturingProvider{reply: "ok"}
-	// No SystemPrompt override → the default prompt is used.
-	svc := chat.NewService(captP,
-		chat.ServiceConfig{Model: "m", MaxTokens: 32},
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs})
-
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "make me a strength workout", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
-
-	var systemContent string
+	var sys string
 	for _, m := range captP.gotMessages {
 		if m.Role == model.MsgRoleSystem {
-			systemContent = m.Content
+			sys = m.Content
 		}
 	}
-	// Workout-programming skill: catalog-first, no generic steps.
-	for _, want := range []string{"catalog", "generic", "sets, reps, and rest"} {
-		if !strings.Contains(systemContent, want) {
-			t.Fatalf("default system prompt missing workout guidance %q; got: %s", want, systemContent)
+	if !strings.Contains(sys, "load_skill") {
+		t.Fatalf("system prompt should point to load_skill; got: %s", sys)
+	}
+	if strings.Contains(sys, "sets, reps, and rest") {
+		t.Fatal("workout guidance should have moved out of the base prompt")
+	}
+}
+
+func TestMemorySkillInjectedWithRAGNotes(t *testing.T) {
+	reg, _ := skill.Load()
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	fc := &fakeChunks{search: []model.Chunk{{Content: "you prefer morning runs"}}}
+	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, RAG: rag, Skills: reg})
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "plan my week", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var joined strings.Builder
+	for _, m := range captP.gotMessages {
+		if m.Role == model.MsgRoleSystem {
+			joined.WriteString("\n" + m.Content)
 		}
 	}
-	// Memory reliance.
-	for _, want := range []string{"authoritative history", "past"} {
-		if !strings.Contains(systemContent, want) {
-			t.Fatalf("default system prompt missing memory guidance %q; got: %s", want, systemContent)
+	if !strings.Contains(joined.String(), "authoritative history") {
+		t.Fatalf("memory skill should be injected when RAG notes are present; system msgs: %s", joined.String())
+	}
+}
+
+func TestMemorySkillNotInjectedWithoutNotes(t *testing.T) {
+	reg, _ := skill.Load()
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	fc := &fakeChunks{search: nil} // no notes
+	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, RAG: rag, Skills: reg})
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for _, m := range captP.gotMessages {
+		if m.Role == model.MsgRoleSystem && strings.Contains(m.Content, "authoritative history") {
+			t.Fatal("memory skill must not be injected when there are no RAG notes")
 		}
 	}
 }

@@ -52,7 +52,7 @@ type ServiceConfig struct {
 	Now func() time.Time
 }
 
-const defaultMaxToolIterations = 5
+const defaultMaxToolIterations = 8
 const defaultMaxTools = 100
 const loadSkillToolName = "kadence__load_skill"
 
@@ -72,20 +72,8 @@ const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging en
 	"Do not tell the user that something does not exist based on a single empty tool result — if a tool " +
 	"returns nothing, consider whether a different, related tool would answer the question, and prefer " +
 	"the broadest relevant tool. Only state that data is absent after genuinely checking.\n\n" +
-	"Programming workouts: when you create or edit a structured workout through a tool, always build a " +
-	"proper, specific workout of the correct type. Pick the builder tool that matches the activity (a run " +
-	"builder for runs, a strength builder for strength, and so on) — never force one type into another. " +
-	"Never fill a workout with generic, unnamed, or placeholder steps. If a tool exposes a catalog of valid " +
-	"exercise or step types, call that catalog tool FIRST and set every step to a specific entry from it, " +
-	"using the exact identifier the catalog returns; free-text or approximate exercise names are commonly " +
-	"downgraded by the tool to a single generic step, which is wrong. Give each strength exercise concrete " +
-	"sets, reps, and rest, and each run or interval step a concrete duration or distance and target. After " +
-	"creating a workout, confirm it actually contains the intended, specifically-typed exercises before you " +
-	"tell the user it is done.\n\n" +
-	"Your memory of this user: notes retrieved from earlier conversations are supplied to you as context and " +
-	"are your authoritative history with this user. Rely on them — do not claim you lack access to past " +
-	"conversations when relevant notes are present, and use what you already know (workouts you previously " +
-	"created, the user's goals, constraints, and preferences) instead of asking the user to repeat it."
+	"Domain skills may be available to you: call the load_skill tool to load one when relevant, and when a " +
+	"tool call returns skill guidance instead of running, follow it and re-issue the call correctly before proceeding."
 
 const titleMaxLen = 60
 
@@ -222,6 +210,12 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 					b.WriteString("\n")
 				}
 				req.Messages = insertAfterSystem(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: b.String()})
+				if s.skills != nil {
+					for _, sk := range s.skills.ForHistory() {
+						req.Messages = insertAfterSystem(req.Messages,
+							provider.Message{Role: model.MsgRoleSystem, Content: sk.Body})
+					}
+				}
 			}
 			if err := s.rag.Store(ctx, userID, conversationID, userMsg.ID, userText, queryEmb); err != nil {
 				slog.Warn("rag store user chunk failed", "err", err)
