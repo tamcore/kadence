@@ -65,6 +65,19 @@ func TestMarkitdownExtractor_CanHandle(t *testing.T) {
 	}
 }
 
+func TestMarkitdownExtractor_ConstructorDoesNotConnect(t *testing.T) {
+	// The constructor must not dial the server: the markitdown pod may not be
+	// ready when the app boots, and ingestion must not permanently degrade to
+	// PDF-only just because of startup ordering. Connection happens per Extract.
+	ex, err := ingest.NewMarkitdownExtractor("http://127.0.0.1:1/mcp", "", "", "streamable-http")
+	if err != nil {
+		t.Fatalf("NewMarkitdownExtractor must succeed without connecting: %v", err)
+	}
+	if ex == nil {
+		t.Fatal("NewMarkitdownExtractor returned nil extractor")
+	}
+}
+
 func TestMarkitdownExtractor_ExtractPDF(t *testing.T) {
 	ts, receivedURI := newFakeMarkitdownServer(t)
 

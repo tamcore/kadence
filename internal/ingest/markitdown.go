@@ -36,18 +36,23 @@ var markitdownMimePrefixes = []string{
 // formats, ...) to markdown by delegating to a remote markitdown-mcp server
 // over MCP, via its single convert_to_markdown(uri) tool.
 type MarkitdownExtractor struct {
-	client mcp.Client
+	url       string
+	transport string
+	authUser  string
+	authPass  string
 }
 
-// NewMarkitdownExtractor builds a MarkitdownExtractor connected to the
+// NewMarkitdownExtractor builds a MarkitdownExtractor targeting the
 // markitdown-mcp server at url over the given transport ("streamable-http"
-// or "sse"), with optional HTTP Basic auth credentials.
+// or "sse"), with optional HTTP Basic auth credentials. It does not connect;
+// each Extract dials a fresh client, so app startup does not depend on the
+// markitdown server being ready and a server restart cannot leave the
+// extractor wedged to a dead connection.
 func NewMarkitdownExtractor(url, authUser, authPass, transport string) (*MarkitdownExtractor, error) {
-	client, err := mcp.NewClient(context.Background(), url, transport, authUser, authPass)
-	if err != nil {
-		return nil, fmt.Errorf("markitdown: connect to %s: %w", url, err)
+	if url == "" {
+		return nil, fmt.Errorf("markitdown: url is required")
 	}
-	return &MarkitdownExtractor{client: client}, nil
+	return &MarkitdownExtractor{url: url, transport: transport, authUser: authUser, authPass: authPass}, nil
 }
 
 // CanHandle reports whether mime is one markitdown-mcp is expected to
@@ -71,7 +76,13 @@ func (e *MarkitdownExtractor) Extract(ctx context.Context, data []byte, mime str
 		return Result{}, fmt.Errorf("markitdown: marshal arguments: %w", err)
 	}
 
-	markdown, err := e.client.CallTool(ctx, convertToolName, string(argsJSON))
+	client, err := mcp.NewClient(ctx, e.url, e.transport, e.authUser, e.authPass)
+	if err != nil {
+		return Result{}, fmt.Errorf("markitdown: connect to %s: %w", e.url, err)
+	}
+	defer func() { _ = client.Close() }()
+
+	markdown, err := client.CallTool(ctx, convertToolName, string(argsJSON))
 	if err != nil {
 		return Result{}, fmt.Errorf("markitdown: convert_to_markdown: %w", err)
 	}
@@ -80,11 +91,6 @@ func (e *MarkitdownExtractor) Extract(ctx context.Context, data []byte, mime str
 		Markdown:   markdown,
 		SourceType: sourceTypeForMime(mime),
 	}, nil
-}
-
-// Close releases the underlying MCP client connection.
-func (e *MarkitdownExtractor) Close() error {
-	return e.client.Close()
 }
 
 // sourceTypeForMime maps a MIME type to one of the model.DocSource*
