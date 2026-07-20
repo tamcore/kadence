@@ -35,7 +35,10 @@ spec:
           m.MAXIMUM_MESSAGE_SIZE = {{ mul .Values.markitdown.maxMessageSizeMB 1048576 }}
           import sys
           from markitdown_mcp.__main__ import main
-          sys.argv = ["markitdown-mcp", "--http", "--host", "0.0.0.0", "--port", "{{ .Values.markitdown.port }}"]
+          # Bind to loopback only: the nginx sidecar shares this pod's network
+          # namespace and proxies to 127.0.0.1, so markitdown never needs to be
+          # exposed on the pod interface (avoids the unauthenticated-exposure warning).
+          sys.argv = ["markitdown-mcp", "--http", "--host", "127.0.0.1", "--port", "{{ .Values.markitdown.port }}"]
           main()
         securityContext:
           allowPrivilegeEscalation: false
