@@ -15,8 +15,12 @@
 	async function del(id: number, e: Event): Promise<void> {
 		e.preventDefault();
 		e.stopPropagation();
+		const wasActive = String(id) === $page.params.id;
 		await removeConversation(id);
-		if (String(id) === $page.params.id) goto('/chat');
+		if (wasActive) {
+			goto('/');
+			closeSidebar();
+		}
 	}
 
 	async function handleLogout(): Promise<void> {

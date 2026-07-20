@@ -17,6 +17,10 @@
 		return path === '/login';
 	}
 
+	function closeSidebarOnEscape(e: KeyboardEvent): void {
+		if (e.key === 'Escape' && $sidebarOpen) closeSidebar();
+	}
+
 	onMount(async () => {
 		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
 
@@ -35,21 +39,15 @@
 	});
 </script>
 
+<svelte:window onkeydown={closeSidebarOnEscape} />
+
 {#if checking}
 	<div class="loading">Loading…</div>
 {:else if isPublic($page.url.pathname)}
 	{@render children()}
 {:else}
 	<div class="shell">
-		<div
-			class="scrim"
-			class:show={$sidebarOpen}
-			onclick={closeSidebar}
-			onkeydown={(e) => e.key === 'Enter' && closeSidebar()}
-			role="button"
-			tabindex="-1"
-			aria-label="Close menu"
-		></div>
+		<div class="scrim" class:show={$sidebarOpen} onclick={closeSidebar} aria-hidden="true"></div>
 		<aside class="sidebar" class:open={$sidebarOpen}><Sidebar /></aside>
 		<div class="main">
 			<div class="mobilebar">
