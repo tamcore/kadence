@@ -19,6 +19,10 @@ const waitForDBTimeout = 120 * time.Second
 // returning an error in the latter case. Intended to run as a Kubernetes
 // initContainer ahead of the main server container.
 func WaitForDB() error {
+	// The initContainer receives only the DB env (kadence.dbEnv), not the full
+	// app config/secret envFrom, so KADENCE_ENV defaults to "dev" here — that is
+	// intentional: this gate needs only DatabaseURL, and running the same
+	// config.Load()/Validate() keeps DSN parsing in one place.
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
