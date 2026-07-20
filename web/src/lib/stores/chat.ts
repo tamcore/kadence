@@ -1,5 +1,5 @@
 import { get, writable } from 'svelte/store';
-import type { ChatMessage, Conversation, MessagePart } from '$lib/types';
+import type { ChatMessage, Conversation, CredentialRequest, MessagePart } from '$lib/types';
 import * as chatApi from '$lib/api/chat';
 
 export const messages = writable<ChatMessage[]>([]);
@@ -7,6 +7,7 @@ export const conversations = writable<Conversation[]>([]);
 export const activeId = writable<string | null>(null);
 export const sending = writable(false);
 export const chatError = writable<string | null>(null);
+export const credentialRequest = writable<CredentialRequest | null>(null);
 
 let abort: AbortController | null = null;
 
@@ -17,6 +18,7 @@ export function newChat(): void {
 	activeId.set(null);
 	chatError.set(null);
 	sending.set(false);
+	credentialRequest.set(null);
 }
 
 export async function refreshConversations(): Promise<void> {
@@ -79,6 +81,7 @@ function updateToolPart(
 // sendMessage streams a reply; returns the conversation id (new or existing), or null on error.
 export async function sendMessage(text: string): Promise<string | null> {
 	chatError.set(null);
+	credentialRequest.set(null);
 	sending.set(true);
 	messages.update((m) => [...m, { role: 'user', content: text }]);
 	messages.update((m) => [...m, { role: 'assistant', content: '', parts: [] }]);
@@ -120,10 +123,18 @@ export async function sendMessage(text: string): Promise<string | null> {
 				} else {
 					updateAssistantParts((parts) => updateToolPart(parts, tool, status));
 				}
+			} else if (ev.type === 'credentials_request') {
+				credentialRequest.set({
+					requestId: ev.requestId,
+					reason: ev.reason,
+					fields: ev.fields
+				});
 			} else if (ev.type === 'error') {
 				chatError.set(ev.message);
+				credentialRequest.set(null);
 				break;
 			} else if (ev.type === 'done') {
+				credentialRequest.set(null);
 				break;
 			}
 		}

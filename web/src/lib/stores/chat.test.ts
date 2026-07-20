@@ -9,7 +9,7 @@ vi.mock('$lib/api/chat', () => ({
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
-import { activeId, chatError, messages, newChat, sendMessage, sending } from './chat';
+import { activeId, chatError, credentialRequest, messages, newChat, sendMessage, sending } from './chat';
 
 async function* events(evs: unknown[]) {
 	for (const e of evs) yield e;
@@ -114,5 +114,49 @@ describe('chat store', () => {
 			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
 			{ kind: 'text', content: 'You ran 10km.' }
 		]);
+	});
+
+	it('sets credentialRequest on a credentials_request event without touching messages', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: '44444444-4444-4444-4444-444444444444' },
+			{
+				type: 'credentials_request',
+				requestId: 'req-1',
+				reason: 'Garmin login required',
+				fields: [{ name: 'username', label: 'Username' }, { name: 'password', secret: true }]
+			},
+			{ type: 'token', delta: 'waiting...' }
+			// Intentionally no 'done' — the store must not clear it mid-stream.
+		]));
+
+		await sendMessage('connect garmin');
+
+		expect(get(credentialRequest)).toEqual({
+			requestId: 'req-1',
+			reason: 'Garmin login required',
+			fields: [{ name: 'username', label: 'Username' }, { name: 'password', secret: true }]
+		});
+		// Only the user + assistant messages should exist — no credential entry.
+		const msgs = get(messages);
+		expect(msgs).toHaveLength(2);
+		expect(msgs[0]).toEqual({ role: 'user', content: 'connect garmin' });
+		expect(msgs[1].content).toBe('waiting...');
+	});
+
+	it('clears credentialRequest when the stream completes', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: '55555555-5555-5555-5555-555555555555' },
+			{
+				type: 'credentials_request',
+				requestId: 'req-2',
+				reason: 'API key required',
+				fields: [{ name: 'api_key' }]
+			},
+			{ type: 'done' }
+		]));
+
+		await sendMessage('go');
+
+		expect(get(credentialRequest)).toBeNull();
 	});
 });

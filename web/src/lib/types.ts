@@ -21,10 +21,23 @@ export interface ChatMessage {
 	parts?: MessagePart[];
 }
 
+export interface CredentialField {
+	name: string;
+	label?: string;
+	secret?: boolean;
+}
+
+export interface CredentialRequest {
+	requestId: string;
+	reason: string;
+	fields: CredentialField[];
+}
+
 export type ChatEvent =
 	| { type: 'meta'; conversationId: string }
 	| { type: 'token'; delta: string }
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
+	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }
 	| { type: 'done' }
 	| { type: 'error'; message: string };
 
