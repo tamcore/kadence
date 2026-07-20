@@ -52,7 +52,7 @@ type ServiceConfig struct {
 	Now func() time.Time
 }
 
-const defaultMaxToolIterations = 8
+const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
 const loadSkillToolName = "kadence__load_skill"
 
@@ -324,7 +324,23 @@ func (s *Service) runToolLoop(
 		}
 	}
 
-	return "", nil
+	// Iteration budget exhausted with tools still pending. Make one final
+	// tool-free call so the user always receives a closing answer instead of
+	// an empty response.
+	slog.Warn("tool loop hit iteration cap; forcing a final answer",
+		"conversation", conversationID, "maxIter", maxIter)
+	req.Tools = nil
+	final, streamErr := s.provider.StreamChatWithTools(streamCtx, req, func(delta string) error {
+		if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
+			return e
+		}
+		return sink.Flush()
+	})
+	if streamErr != nil {
+		slog.Error("final answer stream failed", "err", streamErr, "conversation", conversationID)
+		return "", s.fail(sink, "the assistant could not complete the response")
+	}
+	return final.Content, nil
 }
 
 // skillTool builds the built-in load_skill tool definition, listing available

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,6 +15,10 @@ import (
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/model"
 )
+
+// sseKeepaliveInterval is how often an SSE comment line is written to keep
+// proxies from closing an idle connection during long tool-loop turns.
+const sseKeepaliveInterval = 15 * time.Second
 
 // ChatStreamer runs a streaming chat turn.
 type ChatStreamer interface {
@@ -43,8 +49,10 @@ func NewChat(svc ChatStreamer, convs ConvLister, msgs MsgLister) *Chat {
 	return &Chat{svc: svc, convs: convs, msgs: msgs}
 }
 
-// sseSink writes chat.ChatEvent as SSE frames.
+// sseSink writes chat.ChatEvent as SSE frames. mu guards w against concurrent
+// writes from the Stream goroutine and the keepalive ticker goroutine.
 type sseSink struct {
+	mu sync.Mutex
 	w  http.ResponseWriter
 	rc *http.ResponseController
 }
@@ -54,10 +62,28 @@ func (s *sseSink) Send(e chat.ChatEvent) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, err = fmt.Fprintf(s.w, "data: %s\n\n", b)
 	return err
 }
-func (s *sseSink) Flush() error { return s.rc.Flush() }
+
+func (s *sseSink) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rc.Flush()
+}
+
+// keepalive writes an SSE comment line to keep proxies from closing an idle
+// connection during long tool-loop turns.
+func (s *sseSink) keepalive() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := fmt.Fprint(s.w, ": keepalive\n\n"); err != nil {
+		return err
+	}
+	return s.rc.Flush()
+}
 
 // Send handles POST /api/chat (SSE stream).
 func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +107,21 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	sink := &sseSink{w: w, rc: http.NewResponseController(w)}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(sseKeepaliveInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				_ = sink.keepalive()
+			}
+		}
+	}()
 	_ = h.svc.Stream(r.Context(), u.ID, u.Username, body.ConversationID, body.Message, sink)
+	close(done)
 }
 
 type conversationDTO struct {
