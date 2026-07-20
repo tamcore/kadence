@@ -22,6 +22,7 @@ vi.mock('$lib/stores/chat', async () => {
 	return {
 		conversations: writable([]),
 		newChat: (...a: unknown[]) => newChatMock(...a),
+		refreshConversations: vi.fn().mockResolvedValue(undefined),
 		removeConversation: (...a: unknown[]) => removeConversationMock(...a)
 	};
 });

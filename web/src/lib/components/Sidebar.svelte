@@ -2,9 +2,14 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
-	import { conversations, newChat, removeConversation } from '$lib/stores/chat';
+	import { conversations, newChat, refreshConversations, removeConversation } from '$lib/stores/chat';
 	import { clearAuth, currentUser, isAdmin } from '$lib/stores/auth';
 	import { closeSidebar } from '$lib/stores/ui';
+	import { onMount } from 'svelte';
+
+	// The sidebar is global, so load history on every shell route (incl. home)
+	// — the start page greets with the conversation history.
+	onMount(refreshConversations);
 
 	function startNew(): void {
 		newChat();
