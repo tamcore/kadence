@@ -18,6 +18,7 @@ type ChatEvent struct {
 	Message        string `json:"message,omitempty"`
 	Tool           string `json:"tool,omitempty"`
 	Status         string `json:"status,omitempty"`
+	Arguments      string `json:"arguments,omitempty"`
 }
 
 // EventSink receives chat events (implemented by the SSE handler).
