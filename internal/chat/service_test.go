@@ -733,8 +733,11 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "loop forever", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
-	if prov.calls != maxIter {
-		t.Fatalf("expected provider called exactly %d times, got %d", maxIter, prov.calls)
+	// maxIter rounds of tool calls, plus one forced tool-free final call once
+	// the iteration budget is exhausted.
+	const wantCalls = maxIter + 1
+	if prov.calls != wantCalls {
+		t.Fatalf("expected provider called exactly %d times, got %d", wantCalls, prov.calls)
 	}
 	if sink.events[len(sink.events)-1].Type != chat.EventDone {
 		t.Fatalf("expected stream to finish with done event even after exhausting iterations, got: %+v", sink.events[len(sink.events)-1])
@@ -824,5 +827,58 @@ func TestLoadSkillToolReturnsBody(t *testing.T) {
 	}
 	if !strings.Contains(toolMsgContent, "authoritative history") {
 		t.Fatalf("load_skill should return the memory skill body; got: %s", toolMsgContent)
+	}
+}
+
+// alwaysToolUntilNoTools returns a tool call whenever tools are offered, and
+// streams finalReply once req.Tools is empty (the forced final call).
+type alwaysToolUntilNoTools struct {
+	toolName   string
+	finalReply string
+	calls      int
+}
+
+func (p *alwaysToolUntilNoTools) StreamChat(context.Context, provider.ChatRequest, provider.TokenFunc) (string, error) {
+	return "", errors.New("unused")
+}
+func (p *alwaysToolUntilNoTools) StreamChatWithTools(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	p.calls++
+	if len(req.Tools) == 0 {
+		_ = onToken(p.finalReply)
+		return provider.StreamResult{Content: p.finalReply}, nil
+	}
+	return provider.StreamResult{ToolCalls: []provider.ToolCall{{ID: "c", Name: p.toolName, Arguments: "{}"}}}, nil
+}
+
+func TestToolLoopForcesFinalAnswerOnCapExhaustion(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: "foo"}}}
+	prov := &alwaysToolUntilNoTools{toolName: "foo", finalReply: "here is your summary"}
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32, MCPMaxIterations: 2},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "do it", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var lastAsst string
+	for _, m := range msgs.added {
+		if m.Role == model.MsgRoleAssistant {
+			lastAsst = m.Content
+		}
+	}
+	if lastAsst != "here is your summary" {
+		t.Fatalf("expected forced final answer persisted, got %q", lastAsst)
+	}
+	var streamed strings.Builder
+	for _, e := range sink.events {
+		if e.Type == chat.EventToken {
+			streamed.WriteString(e.Delta)
+		}
+	}
+	if !strings.Contains(streamed.String(), "summary") {
+		t.Fatalf("final answer not streamed; got %q", streamed.String())
 	}
 }

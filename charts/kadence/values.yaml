@@ -26,6 +26,11 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     kubernetes.io/tls-acme: "true"
+    # SSE tuning: agentic chat turns can run long, and default proxy idle/read
+    # timeouts (and response buffering) can drop or stall the stream mid-turn.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
   tls: true
   # Max request body size for the nginx ingress; must exceed
   # KADENCE_UPLOAD_MAX_BYTES (10Mi default) so document uploads are not

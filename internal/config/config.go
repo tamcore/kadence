@@ -104,7 +104,7 @@ func Load() Config {
 	cfg.LLMModel = envOr("KADENCE_LLM_MODEL", "gpt-4o-mini")
 	cfg.LLMMaxTokens = envIntOr("KADENCE_LLM_MAX_TOKENS", 2048)
 	cfg.LLMTemperature = envFloatOr("KADENCE_LLM_TEMPERATURE", 0.3)
-	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 90*time.Second)
+	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 300*time.Second)
 	cfg.SystemPrompt = os.Getenv("KADENCE_SYSTEM_PROMPT")
 
 	cfg.GuardrailEnabled = envBoolOr("KADENCE_GUARDRAIL_ENABLED", false)
@@ -129,7 +129,7 @@ func Load() Config {
 	cfg.MarkitdownAuthPass = os.Getenv("KADENCE_MARKITDOWN_AUTH_PASS")
 	cfg.MarkitdownTransport = envOr("KADENCE_MARKITDOWN_TRANSPORT", "streamable-http")
 
-	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 8)
+	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 16)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 
 	return cfg
