@@ -2,11 +2,13 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -52,6 +54,17 @@ type ServiceConfig struct {
 
 const defaultMaxToolIterations = 5
 const defaultMaxTools = 100
+const loadSkillToolName = "kadence__load_skill"
+
+// toolMsgRole is the provider.Message.Role used for tool-result messages.
+const toolMsgRole = "tool"
+
+// Tool event statuses.
+const (
+	toolStatusRunning = "running"
+	toolStatusDone    = "done"
+	toolStatusError   = "error"
+)
 
 const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging endurance-sports coach. " +
 	"Give practical, safe, evidence-based training guidance. Be concise and supportive. " +
@@ -88,16 +101,20 @@ type Service struct {
 	maxIterations int
 	maxTools      int
 	now           func() time.Time
+	skills        *skill.Registry
 }
 
-// Deps carries the chat Service's dependencies. Guardrail, RAG, and MCP may
-// be nil (disabled).
+// Deps carries the chat Service's dependencies. Guardrail, RAG, MCP, and
+// Skills may be nil (disabled).
 type Deps struct {
 	Convs     ConversationStore
 	Msgs      MessageStore
 	Guardrail *Guardrail
 	RAG       *RAG
 	MCP       MCPTools
+	// Skills, when non-nil, enables the skill subsystem (load_skill tool +
+	// pre-gate injection).
+	Skills *skill.Registry
 }
 
 // NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
@@ -119,6 +136,7 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
 		maxIterations: maxIterations, maxTools: maxTools, now: now,
+		skills: deps.Skills,
 	}
 }
 
@@ -224,6 +242,10 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 		}
 	}
 
+	if s.skills != nil {
+		req.Tools = append(req.Tools, s.skillTool())
+	}
+
 	full, err := s.runToolLoop(ctx, streamCtx, conversationID, username, req, sink)
 	if err != nil {
 		return err
@@ -296,6 +318,7 @@ func (s *Service) runToolLoop(
 		maxIter = defaultMaxToolIterations
 	}
 
+	gated := make(map[string]bool)
 	for i := 0; i < maxIter; i++ {
 		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, func(delta string) error {
 			if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
@@ -318,32 +341,111 @@ func (s *Service) runToolLoop(
 			Role: model.MsgRoleAssistant, Content: result.Content, ToolCalls: result.ToolCalls,
 		})
 		for _, tc := range result.ToolCalls {
-			req.Messages = append(req.Messages, s.runToolCall(ctx, username, tc, sink))
+			req.Messages = append(req.Messages, s.dispatchTool(ctx, username, tc, gated, sink))
 		}
 	}
 
 	return "", nil
 }
 
+// skillTool builds the built-in load_skill tool definition, listing available
+// skills (names + one-line descriptions only) in its description.
+func (s *Service) skillTool() provider.ToolDefinition {
+	var b strings.Builder
+	b.WriteString("Load the full guidance for a domain skill by name. ")
+	b.WriteString("Call it when a listed skill is relevant to the user's request. Available skills:\n")
+	for _, sk := range s.skills.List() {
+		b.WriteString("- ")
+		b.WriteString(sk.Name)
+		b.WriteString(" — ")
+		b.WriteString(sk.Description)
+		b.WriteString("\n")
+	}
+	return provider.ToolDefinition{
+		Name:        loadSkillToolName,
+		Description: b.String(),
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"the skill name to load"}},"required":["name"]}`),
+	}
+}
+
+// dispatchTool routes one tool call: the built-in load_skill and pre-gated
+// triggering tools are handled locally; everything else goes to MCP. gated
+// tracks which skills have already pre-gated a call this turn (so the retried
+// call executes for real).
+func (s *Service) dispatchTool(ctx context.Context, username string, tc provider.ToolCall, gated map[string]bool, sink EventSink) provider.Message {
+	if s.skills != nil {
+		if tc.Name == loadSkillToolName {
+			return s.handleLoadSkill(tc, sink)
+		}
+		if sk, ok := s.skills.ForTool(tc.Name); ok && !gated[sk.Name] {
+			gated[sk.Name] = true
+			return s.gateWithSkill(tc, sk, sink)
+		}
+	}
+	return s.runToolCall(ctx, username, tc, sink)
+}
+
+// handleLoadSkill answers a load_skill call with the requested skill body.
+func (s *Service) handleLoadSkill(tc provider.ToolCall, sink EventSink) provider.Message {
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Flush()
+
+	var args struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal([]byte(tc.Arguments), &args)
+
+	skillList := s.skills.List()
+	content, status := "", toolStatusDone
+	if sk, ok := s.skills.Get(args.Name); ok {
+		content = sk.Body
+	} else {
+		status = toolStatusError
+		names := make([]string, 0, len(skillList))
+		for _, x := range skillList {
+			names = append(names, x.Name)
+		}
+		content = "error: unknown skill " + args.Name + "; available: " + strings.Join(names, ", ")
+	}
+
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
+	_ = sink.Flush()
+	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: content}
+}
+
+// gateWithSkill returns the skill body in place of executing the tool, prompting
+// the model to review and re-issue the call.
+func (s *Service) gateWithSkill(tc provider.ToolCall, sk skill.Skill, sink EventSink) provider.Message {
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Flush()
+
+	content := sk.Body +
+		"\n\nBefore this call runs: review the guidance above, then re-issue the tool call so it complies (or confirm it already does)."
+
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusDone})
+	_ = sink.Flush()
+	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: content}
+}
+
 // runToolCall dispatches a single tool call through s.mcp, emitting
 // running/done/error tool events on sink, and returns the resulting
 // role:"tool" message to append to the provider request.
 func (s *Service) runToolCall(ctx context.Context, username string, tc provider.ToolCall, sink EventSink) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: "running", Arguments: tc.Arguments})
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
 	_ = sink.Flush()
 
 	out, cErr := s.mcp.Call(ctx, username, tc.Name, tc.Arguments)
-	status := "done"
+	status := toolStatusDone
 	if cErr != nil {
 		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", cErr)
 		out = "error: " + cErr.Error()
-		status = "error"
+		status = toolStatusError
 	}
 
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
 	_ = sink.Flush()
 
-	return provider.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Name, Content: out}
+	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: out}
 }
 
 // insertAfterSystem inserts m right after a leading system message, or

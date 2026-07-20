@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/chat"
+	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -465,6 +466,7 @@ const (
 	testToolName  = "weather__get_forecast"
 	testToolArgs  = `{"city":"Berlin"}`
 	testToolReply = "sunny, 22C"
+	toolMsgRole   = "tool"
 )
 
 func TestStreamRunsToolCallThenFinishes(t *testing.T) {
@@ -529,7 +531,7 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 	secondCallMsgs := prov.gotMessages[1]
 	var hasToolResult bool
 	for _, m := range secondCallMsgs {
-		if m.Role == "tool" && m.ToolCallID == "call_1" && m.Content == testToolReply {
+		if m.Role == toolMsgRole && m.ToolCallID == "call_1" && m.Content == testToolReply {
 			hasToolResult = true
 		}
 	}
@@ -567,7 +569,7 @@ func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
 	secondCallMsgs := prov.gotMessages[1]
 	var hasErrResult bool
 	for _, m := range secondCallMsgs {
-		if m.Role == "tool" && strings.HasPrefix(m.Content, "error: ") {
+		if m.Role == toolMsgRole && strings.HasPrefix(m.Content, "error: ") {
 			hasErrResult = true
 		}
 	}
@@ -704,5 +706,91 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 	}
 	if sink.events[len(sink.events)-1].Type != chat.EventDone {
 		t.Fatalf("expected stream to finish with done event even after exhausting iterations, got: %+v", sink.events[len(sink.events)-1])
+	}
+}
+
+// countingMCP records how many times Call is invoked and returns canned output.
+type countingMCP struct {
+	tools    []provider.ToolDefinition
+	calls    int
+	lastTool string
+}
+
+func (m *countingMCP) Enabled() bool { return true }
+func (m *countingMCP) ToolsFor(context.Context, string) ([]provider.ToolDefinition, error) {
+	return m.tools, nil
+}
+func (m *countingMCP) Call(_ context.Context, _, toolName, _ string) (string, error) {
+	m.calls++
+	m.lastTool = toolName
+	return "ok-result", nil
+}
+
+func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {
+	reg, err := skill.Load()
+	if err != nil {
+		t.Fatalf("skill.Load: %v", err)
+	}
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: "garmin__create_strength_workout"}}}
+	prov := &toolThenContentProvider{
+		toolName:   "garmin__create_strength_workout",
+		toolArgs:   `{"name":"x","exercises":[]}`,
+		finalReply: "done",
+	}
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Skills: reg})
+
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "make a workout", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if mcp.calls != 0 {
+		t.Fatalf("pre-gate should not call MCP on first triggering call; calls=%d", mcp.calls)
+	}
+	var toolMsgContent string
+	for _, ms := range prov.gotMessages {
+		for _, m := range ms {
+			if m.Role == toolMsgRole {
+				toolMsgContent = m.Content
+			}
+		}
+	}
+	if !strings.Contains(toolMsgContent, "catalog") {
+		t.Fatalf("gated tool message should carry the workout skill body; got: %s", toolMsgContent)
+	}
+}
+
+func TestLoadSkillToolReturnsBody(t *testing.T) {
+	reg, _ := skill.Load()
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mcp := &countingMCP{}
+	prov := &toolThenContentProvider{
+		toolName:   "kadence__load_skill",
+		toolArgs:   `{"name":"memory"}`,
+		finalReply: "ok",
+	}
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Skills: reg})
+
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if mcp.calls != 0 {
+		t.Fatalf("load_skill must be handled locally, not via MCP; calls=%d", mcp.calls)
+	}
+	var toolMsgContent string
+	for _, ms := range prov.gotMessages {
+		for _, m := range ms {
+			if m.Role == toolMsgRole {
+				toolMsgContent = m.Content
+			}
+		}
+	}
+	if !strings.Contains(toolMsgContent, "authoritative history") {
+		t.Fatalf("load_skill should return the memory skill body; got: %s", toolMsgContent)
 	}
 }
