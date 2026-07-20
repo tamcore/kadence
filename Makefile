@@ -67,7 +67,9 @@ dev-deploy-k8s: ## Build dev image, push to $(IMAGE_REGISTRY), deploy to K8s (ne
 	@test -f charts/kadence/values-dev.yaml || { echo "charts/kadence/values-dev.yaml missing (gitignored; copy from values-dev.yaml.example)"; exit 1; }
 	docker build -t $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG) -f Dockerfile.dev .
 	docker push $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
-	kubectl $(_KUBECTL_CTX) delete deployment,job -n kadence -l app.kubernetes.io/instance=kadence --ignore-not-found --wait
+	# No pre-delete: helm upgrade reconciles in place. The app rolls because
+	# IMAGE_TAG is fresh each run; unchanged sidecars (markitdown, MCP servers)
+	# are left untouched instead of being cold-restarted every deploy.
 	helm upgrade --install kadence ./charts/kadence $(_HELM_CTX) -n kadence --create-namespace \
 		-f ./charts/kadence/values-dev.yaml \
 		--set image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
