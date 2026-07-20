@@ -223,22 +223,7 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 		}
 	}
 
-	if s.mcp != nil && s.mcp.Enabled() {
-		tools, toolsErr := s.mcp.ToolsFor(ctx, username)
-		if toolsErr != nil {
-			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
-		} else {
-			if len(tools) > s.maxTools {
-				slog.Warn("mcp tools capped", "have", len(tools), "cap", s.maxTools)
-				tools = tools[:s.maxTools]
-			}
-			req.Tools = tools
-		}
-	}
-
-	if s.skills != nil {
-		req.Tools = append(req.Tools, s.skillTool())
-	}
+	req.Tools = s.assembleTools(ctx, username)
 
 	full, err := s.runToolLoop(ctx, streamCtx, conversationID, username, req, sink)
 	if err != nil {
@@ -344,6 +329,35 @@ func (s *Service) runToolLoop(
 
 // skillTool builds the built-in load_skill tool definition, listing available
 // skills (names + one-line descriptions only) in its description.
+// assembleTools returns the tool definitions offered to the model: the MCP
+// tools (capped, reserving one slot for load_skill when skills are enabled)
+// plus the built-in load_skill tool.
+func (s *Service) assembleTools(ctx context.Context, username string) []provider.ToolDefinition {
+	var tools []provider.ToolDefinition
+	if s.mcp != nil && s.mcp.Enabled() {
+		mcpTools, toolsErr := s.mcp.ToolsFor(ctx, username)
+		if toolsErr != nil {
+			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
+		} else {
+			// Reserve one slot for the built-in load_skill tool so the total
+			// never exceeds the configured cap.
+			mcpCap := s.maxTools
+			if s.skills != nil && mcpCap > 0 {
+				mcpCap--
+			}
+			if len(mcpTools) > mcpCap {
+				slog.Warn("mcp tools capped", "have", len(mcpTools), "cap", mcpCap)
+				mcpTools = mcpTools[:mcpCap]
+			}
+			tools = mcpTools
+		}
+	}
+	if s.skills != nil {
+		tools = append(tools, s.skillTool())
+	}
+	return tools
+}
+
 func (s *Service) skillTool() provider.ToolDefinition {
 	var b strings.Builder
 	b.WriteString("Load the full guidance for a domain skill by name. ")
