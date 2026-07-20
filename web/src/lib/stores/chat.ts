@@ -28,7 +28,9 @@ export async function refreshConversations(): Promise<void> {
 }
 
 export async function loadConversation(id: number): Promise<void> {
-	if (get(activeId) === id && get(messages).length > 0) return;
+	// Already live/loaded — this covers the just-created conversation from the
+	// home composer, whose in-flight stream must not be clobbered by a refetch.
+	if (get(activeId) === id) return;
 	activeId.set(id);
 	chatError.set(null);
 	try {
