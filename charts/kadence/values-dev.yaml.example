@@ -55,6 +55,10 @@ externalDatabase:
 #         enabled: true
 #         size: 1Gi
 #         mountPath: /root/.garminconnect
+#       # tools: ["get_activity*", "*_workout", "*_workouts", "get_exercise_types", "get_workout*"]
+#       #   app-side allowlist of glob patterns (matched against the unprefixed tool
+#       #   name); unset = all tools. Lets you shorten the LLM tool list without the
+#       #   MCP server's own filtering.
 
 # Example markitdown-mcp ingestion sidecar (commented out). Uncomment to
 # convert uploaded documents (PDF, images, office docs) via markitdown-mcp

@@ -77,6 +77,10 @@ spec:
           valueFrom: { secretKeyRef: { name: {{ $secret }}, key: username } }
         - name: {{ $prefix }}_AUTH_PASS
           valueFrom: { secretKeyRef: { name: {{ $secret }}, key: password } }
+        {{- with $server.tools }}
+        - name: {{ $prefix }}_TOOLS
+          value: {{ join "," . | quote }}
+        {{- end }}
         {{- end }}
         {{- if .Values.markitdown.enabled }}
         {{- $mdSvc := include "kadence.markitdown.fullname" . }}

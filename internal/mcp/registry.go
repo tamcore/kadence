@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"strings"
 	"sync"
 
@@ -63,6 +64,9 @@ func (r *Registry) ToolsFor(ctx context.Context, username string) ([]provider.To
 
 		prefix := strings.ToLower(s.Name) + "__"
 		for _, t := range tools {
+			if !s.allowsTool(t.Name) {
+				continue
+			}
 			defs = append(defs, provider.ToolDefinition{
 				Name:        prefix + t.Name,
 				Description: t.Description,
@@ -88,12 +92,31 @@ func (r *Registry) Call(ctx context.Context, username, toolName, argsJSON string
 		return "", fmt.Errorf("mcp: no server %q available for user %q", serverName, username)
 	}
 
+	if !s.allowsTool(realTool) {
+		return "", fmt.Errorf("mcp: tool %q is not enabled for server %q", realTool, serverName)
+	}
+
 	client, err := r.clientFor(ctx, s)
 	if err != nil {
 		return "", fmt.Errorf("mcp: connect to server %s: %w", s.Name, err)
 	}
 
 	return client.CallTool(ctx, realTool, argsJSON)
+}
+
+// allowsTool reports whether toolName (unprefixed) passes this server's TOOLS
+// filter. No patterns configured → all tools allowed. A malformed pattern is
+// skipped (never panics).
+func (s Server) allowsTool(toolName string) bool {
+	if len(s.Tools) == 0 {
+		return true
+	}
+	for _, pat := range s.Tools {
+		if ok, err := path.Match(pat, toolName); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // findApplicableServer finds the server matching serverName (case-insensitive

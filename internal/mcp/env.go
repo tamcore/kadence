@@ -29,6 +29,7 @@ const (
 	fieldTransport
 	fieldAuthUser
 	fieldAuthPass
+	fieldTools
 )
 
 // knownFieldSuffixes lists the env-var suffixes recognized after
@@ -43,6 +44,7 @@ var knownFieldSuffixes = []struct {
 	{"_AUTH_PASS", fieldAuthPass},
 	{"_TRANSPORT", fieldTransport},
 	{"_URL", fieldURL},
+	{"_TOOLS", fieldTools},
 }
 
 // Server describes one remote MCP server derived from the env contract.
@@ -53,6 +55,10 @@ type Server struct {
 	AuthUser  string
 	AuthPass  string
 	Transport string // "streamable-http" | "sse"
+	// Tools is an app-side allowlist of glob patterns (path.Match syntax)
+	// matched against the unprefixed tool name. Empty/nil means no
+	// filtering — all tools the server exposes are allowed.
+	Tools []string
 }
 
 // AppliesTo reports whether this server's tools should be offered to the
@@ -69,6 +75,7 @@ type serverBuilder struct {
 	url, transport string
 	authUser       string
 	authPass       string
+	tools          string
 	hasURL         bool
 }
 
@@ -111,6 +118,7 @@ func ServersFromEnv(environ []string) ([]Server, error) {
 			AuthUser:  b.authUser,
 			AuthPass:  b.authPass,
 			Transport: b.transport,
+			Tools:     splitTools(b.tools),
 		})
 	}
 	return servers, nil
@@ -148,7 +156,24 @@ func applyField(b *serverBuilder, matchedField field, value string) {
 		b.authUser = value
 	case fieldAuthPass:
 		b.authPass = value
+	case fieldTools:
+		b.tools = value
 	}
+}
+
+// splitTools parses a comma-separated MCP_<NAME>_<SCOPE>_TOOLS value into a
+// trimmed, non-empty list of glob patterns. Empty input → nil (no filtering).
+func splitTools(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	for p := range strings.SplitSeq(raw, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // matchFieldSuffix finds the known field suffix at the end of rest (the env
