@@ -32,6 +32,8 @@ a { color: var(--accent); }
 .main > main { flex: 1; min-height: 0; overflow-y: auto; }
 .mobilebar { display: none; }
 .brand-sm { font-weight: 600; }
+/* Padded, centered content wrapper for non-chat pages (documents, admin). */
+.page { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
 .scrim { display: none; }
 
 @media (max-width: 899px) {

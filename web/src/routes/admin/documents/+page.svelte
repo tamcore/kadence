@@ -42,17 +42,19 @@
 	});
 </script>
 
-<h1>Shared knowledge base</h1>
-<p class="muted">Documents you publish here are available to every user's chats.</p>
-{#if error}<div class="error" role="alert">{error}</div>{/if}
+<div class="page">
+	<h1>Shared knowledge base</h1>
+	<p class="muted">Documents you publish here are available to every user's chats.</p>
+	{#if error}<div class="error" role="alert">{error}</div>{/if}
 
-<DocumentUpload admin onUploaded={load} />
+	<DocumentUpload admin onUploaded={load} />
 
-{#if loading}
-	<p class="muted">Loading…</p>
-{:else}
-	<DocumentList {documents} ondelete={handleDelete} />
-{/if}
+	{#if loading}
+		<p class="muted">Loading…</p>
+	{:else}
+		<DocumentList {documents} ondelete={handleDelete} />
+	{/if}
+</div>
 
 <style>
 	.muted { color: var(--text-muted); margin-bottom: 16px; }

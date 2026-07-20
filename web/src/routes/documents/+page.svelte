@@ -33,17 +33,19 @@
 	onMount(load);
 </script>
 
-<h1>My documents</h1>
-<p class="muted">Upload PDFs to add them to your personal knowledge base. They enrich your chats.</p>
-{#if error}<div class="error" role="alert">{error}</div>{/if}
+<div class="page">
+	<h1>My documents</h1>
+	<p class="muted">Upload PDFs to add them to your personal knowledge base. They enrich your chats.</p>
+	{#if error}<div class="error" role="alert">{error}</div>{/if}
 
-<DocumentUpload onUploaded={load} />
+	<DocumentUpload onUploaded={load} />
 
-{#if loading}
-	<p class="muted">Loading…</p>
-{:else}
-	<DocumentList {documents} ondelete={handleDelete} />
-{/if}
+	{#if loading}
+		<p class="muted">Loading…</p>
+	{:else}
+		<DocumentList {documents} ondelete={handleDelete} />
+	{/if}
+</div>
 
 <style>
 	.muted { color: var(--text-muted); margin-bottom: 16px; }

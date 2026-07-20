@@ -60,6 +60,7 @@
 	});
 </script>
 
+<div class="page">
 <h1>Users</h1>
 {#if error}<div class="error" role="alert">{error}</div>{/if}
 
@@ -94,6 +95,7 @@
 		</tbody>
 	</table>
 {/if}
+</div>
 
 <style>
 	.error { color: var(--danger); margin-bottom: 12px; }
