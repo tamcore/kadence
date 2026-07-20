@@ -6,6 +6,9 @@ metadata:
   labels:
     {{- include "kadence.labels" . | nindent 4 }}
   annotations:
+    {{- if .Values.ingress.maxBodySize }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.maxBodySize | quote }}
+    {{- end }}
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
