@@ -2,7 +2,7 @@ import { api, getCsrfToken, setCsrfToken } from '$lib/api/client';
 import type { ChatEvent, Conversation, ChatMessage } from '$lib/types';
 
 export interface ChatRequestBody {
-	conversationId?: number;
+	conversationId?: string;
 	message: string;
 }
 
@@ -57,5 +57,5 @@ export async function* streamChat(
 }
 
 export const listConversations = () => api.get<Conversation[]>('/conversations');
-export const getMessages = (id: number) => api.get<ChatMessage[]>(`/conversations/${id}/messages`);
-export const deleteConversation = (id: number) => api.del<{ ok: boolean }>(`/conversations/${id}`);
+export const getMessages = (id: string) => api.get<ChatMessage[]>(`/conversations/${id}/messages`);
+export const deleteConversation = (id: string) => api.del<{ ok: boolean }>(`/conversations/${id}`);

@@ -10,7 +10,7 @@ vi.mock('$lib/stores/chat', async () => {
 	return {
 		sendMessage: (...a: unknown[]) => sendMessageMock(...a),
 		sending: writable(false),
-		activeId: writable<number | null>(null),
+		activeId: writable<string | null>(null),
 		newChat: () => newChatMock()
 	};
 });
@@ -37,7 +37,7 @@ describe('home page', () => {
 	});
 
 	it('sends the message without waiting for the stream to finish', async () => {
-		let resolveSend: (id: number | null) => void = () => {};
+		let resolveSend: (id: string | null) => void = () => {};
 		sendMessageMock.mockReturnValueOnce(
 			new Promise((resolve) => {
 				resolveSend = resolve;
@@ -51,7 +51,7 @@ describe('home page', () => {
 		// The send promise is still pending (stream in-flight) — no navigation yet.
 		expect(gotoMock).not.toHaveBeenCalled();
 
-		resolveSend(42);
+		resolveSend('66666666-6666-6666-6666-666666666666');
 	});
 
 	it('navigates to the conversation as soon as activeId is set, mid-stream', async () => {
@@ -63,10 +63,10 @@ describe('home page', () => {
 		expect(gotoMock).not.toHaveBeenCalled();
 
 		// Simulate the `meta` stream event setting activeId while streaming continues.
-		activeIdStore.set(42);
+		activeIdStore.set('66666666-6666-6666-6666-666666666666');
 		await Promise.resolve();
 
-		expect(gotoMock).toHaveBeenCalledWith('/chat/42');
+		expect(gotoMock).toHaveBeenCalledWith('/chat/66666666-6666-6666-6666-666666666666');
 	});
 
 	it('does not navigate while activeId stays null', async () => {

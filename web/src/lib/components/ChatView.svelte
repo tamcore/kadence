@@ -4,7 +4,7 @@
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 
-	let { onNewConversation }: { onNewConversation?: (id: number) => void } = $props();
+	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
 	async function submit(text: string) {
 		if ($sending) return;
