@@ -4,12 +4,17 @@ package store
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgxvector "github.com/pgvector/pgvector-go/pgx"
 )
+
+// waitForDBRetryInterval is how long WaitForDB sleeps between failed
+// connect+ping attempts while waiting for Postgres to become reachable.
+const waitForDBRetryInterval = 2 * time.Second
 
 // Open creates a pgx connection pool from a DSN and verifies connectivity.
 func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -36,6 +41,28 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 	return pool, nil
+}
+
+// WaitForDB blocks until a connection to dsn can be opened and pinged, or
+// until ctx is done. It reuses Open for the actual connect+ping logic (DRY)
+// so the pool built here is closed immediately on success — WaitForDB only
+// reports readiness, it does not hand back a usable pool.
+func WaitForDB(ctx context.Context, dsn string) error {
+	for {
+		pool, err := Open(ctx, dsn)
+		if err == nil {
+			pool.Close()
+			return nil
+		}
+
+		slog.Warn("database not ready, retrying", "err", err, "retry_in", waitForDBRetryInterval)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitForDBRetryInterval):
+		}
+	}
 }
 
 // Close closes the pool if non-nil.
