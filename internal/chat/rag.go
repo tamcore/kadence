@@ -60,7 +60,7 @@ func (r *RAG) Retrieve(ctx context.Context, userID int64, query string) ([]strin
 }
 
 // Store inserts a private message chunk with a precomputed embedding.
-func (r *RAG) Store(ctx context.Context, userID, conversationID, sourceID int64, content string, embedding []float32) error {
+func (r *RAG) Store(ctx context.Context, userID int64, conversationID string, sourceID int64, content string, embedding []float32) error {
 	return r.chunks.Insert(ctx, model.Chunk{
 		UserID:         &userID,
 		ConversationID: &conversationID,

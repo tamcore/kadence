@@ -12,7 +12,7 @@ const (
 // Message is a single chat message within a conversation.
 type Message struct {
 	ID             int64
-	ConversationID int64
+	ConversationID string
 	Role           string
 	Content        string
 	CreatedAt      time.Time

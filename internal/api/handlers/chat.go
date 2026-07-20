@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -23,19 +22,19 @@ var sseKeepaliveInterval = 15 * time.Second
 
 // ChatStreamer runs a streaming chat turn.
 type ChatStreamer interface {
-	Stream(ctx context.Context, userID int64, username string, conversationID int64, text string, sink chat.EventSink) error
+	Stream(ctx context.Context, userID int64, username string, conversationID string, text string, sink chat.EventSink) error
 }
 
 // ConvLister lists/gets/deletes conversations for a user.
 type ConvLister interface {
 	ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error)
-	GetByID(ctx context.Context, id, userID int64) (model.Conversation, error)
-	Delete(ctx context.Context, id, userID int64) error
+	GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error)
+	Delete(ctx context.Context, id string, userID int64) error
 }
 
 // MsgLister lists messages for a conversation.
 type MsgLister interface {
-	ListByConversation(ctx context.Context, conversationID int64) ([]model.Message, error)
+	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 }
 
 // Chat handles the chat + conversation HTTP endpoints.
@@ -94,7 +93,7 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ConversationID int64  `json:"conversationId"`
+		ConversationID string `json:"conversationId"`
 		Message        string `json:"message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
@@ -131,7 +130,7 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 }
 
 type conversationDTO struct {
-	ID        int64  `json:"id"`
+	ID        string `json:"id"`
 	Title     string `json:"title"`
 	CreatedAt string `json:"createdAt"`
 }
@@ -167,9 +166,9 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		RespondError(w, http.StatusBadRequest, "invalid conversation id")
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		RespondError(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	if _, err := h.convs.GetByID(r.Context(), id, u.ID); err != nil {
@@ -198,9 +197,9 @@ func (h *Chat) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		RespondError(w, http.StatusBadRequest, "invalid conversation id")
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		RespondError(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	if err := h.convs.Delete(r.Context(), id, u.ID); err != nil {

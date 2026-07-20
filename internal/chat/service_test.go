@@ -38,15 +38,15 @@ func (f fakeProvider) StreamChatWithTools(ctx context.Context, req provider.Chat
 
 type fakeConvs struct {
 	created *model.Conversation
-	byID    map[int64]model.Conversation
+	byID    map[string]model.Conversation
 }
 
 func (f *fakeConvs) Create(_ context.Context, userID int64, title string) (model.Conversation, error) {
-	c := model.Conversation{ID: 42, UserID: userID, Title: title}
+	c := model.Conversation{ID: testNewConvID, UserID: userID, Title: title}
 	f.created = &c
 	return c, nil
 }
-func (f *fakeConvs) GetByID(_ context.Context, id, userID int64) (model.Conversation, error) {
+func (f *fakeConvs) GetByID(_ context.Context, id string, userID int64) (model.Conversation, error) {
 	if c, ok := f.byID[id]; ok && c.UserID == userID {
 		return c, nil
 	}
@@ -61,12 +61,12 @@ func (*fakeErr) Error() string { return "not found" }
 
 type fakeMsgs struct{ added []model.Message }
 
-func (f *fakeMsgs) Add(_ context.Context, convID int64, role, content string) (model.Message, error) {
+func (f *fakeMsgs) Add(_ context.Context, convID string, role, content string) (model.Message, error) {
 	m := model.Message{ID: int64(len(f.added) + 1), ConversationID: convID, Role: role, Content: content}
 	f.added = append(f.added, m)
 	return m, nil
 }
-func (f *fakeMsgs) ListByConversation(_ context.Context, _ int64) ([]model.Message, error) {
+func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Message, error) {
 	return f.added, nil
 }
 
@@ -83,23 +83,24 @@ const (
 	testTemp      = 0.2
 	testUserID    = 7
 	testUsername  = "alice"
-	testConvID    = 5
+	testConvID    = "conv-uuid-1"
+	testNewConvID = "conv-uuid-new"
 	testConvTitle = "test"
 )
 
 func TestStreamNewConversation(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi coach", sink); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	if sink.events[0].Type != chat.EventMeta || sink.events[0].ConversationID != 42 {
+	if sink.events[0].Type != chat.EventMeta || sink.events[0].ConversationID != testNewConvID {
 		t.Fatalf("first event = %+v, want meta with conv id", sink.events[0])
 	}
 	if sink.events[len(sink.events)-1].Type != chat.EventDone {
@@ -123,7 +124,7 @@ func TestStreamNewConversation(t *testing.T) {
 }
 
 func TestStreamExistingConversation(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
@@ -135,7 +136,7 @@ func TestStreamExistingConversation(t *testing.T) {
 	}
 
 	if sink.events[0].Type != chat.EventMeta || sink.events[0].ConversationID != testConvID {
-		t.Fatalf("first event = %+v, want meta with conv id %d", sink.events[0], testConvID)
+		t.Fatalf("first event = %+v, want meta with conv id %s", sink.events[0], testConvID)
 	}
 	if convs.created != nil {
 		t.Fatal("should not create new conversation when id provided")
@@ -143,14 +144,14 @@ func TestStreamExistingConversation(t *testing.T) {
 }
 
 func TestStreamConversationNotFound(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	err := svc.Stream(context.Background(), testUserID, testUsername, 99, "hi coach", sink)
+	err := svc.Stream(context.Background(), testUserID, testUsername, "missing-uuid", "hi coach", sink)
 	if err == nil || err.Error() != "conversation not found" {
 		t.Fatalf("expected 'conversation not found' error, got: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestStreamConversationNotFound(t *testing.T) {
 }
 
 func TestStreamProviderError(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{err: &providerErr{}},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
@@ -204,7 +205,7 @@ func (p deadlineAssertingProvider) StreamChatWithTools(ctx context.Context, req 
 }
 
 func TestStreamAppliesTimeout(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(deadlineAssertingProvider{t: t, reply: testReply},
 		chat.ServiceConfig{
@@ -241,7 +242,7 @@ func (p *recordingProvider) StreamChatWithTools(ctx context.Context, req provide
 }
 
 func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mainP := &recordingProvider{}
 	guard := chat.NewGuardrail(&verdictProvider{verdict: "OFF_TOPIC"}, chat.GuardrailConfig{
@@ -251,7 +252,7 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 1, testUsername, 0, "what's the stock market doing?", sink); err != nil {
+	if err := svc.Stream(context.Background(), 1, testUsername, "", "what's the stock market doing?", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if mainP.called {
@@ -273,7 +274,7 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 }
 
 func TestStreamGuardrailFailsOpen(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mainP := &recordingProvider{}
 	guard := chat.NewGuardrail(&verdictProvider{err: errors.New("classifier down")}, chat.GuardrailConfig{
@@ -282,7 +283,7 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 	})
 	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard})
 
-	if err := svc.Stream(context.Background(), 1, testUsername, 0, "how many rest days?", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 1, testUsername, "", "how many rest days?", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if !mainP.called {
@@ -308,7 +309,7 @@ func (p *capturingProvider) StreamChatWithTools(ctx context.Context, req provide
 }
 
 func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	captP := &capturingProvider{reply: "ok"}
 	fixed := time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC)
@@ -316,7 +317,7 @@ func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, Now: func() time.Time { return fixed }},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "what's my next workout", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "what's my next workout", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -334,12 +335,12 @@ func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
 }
 
 func TestDefaultSystemPromptIsSlimAndPointsToSkills(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	captP := &capturingProvider{reply: "ok"}
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs})
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var sys string
@@ -358,14 +359,14 @@ func TestDefaultSystemPromptIsSlimAndPointsToSkills(t *testing.T) {
 
 func TestMemorySkillInjectedWithRAGNotes(t *testing.T) {
 	reg, _ := skill.Load()
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	captP := &capturingProvider{reply: "ok"}
 	fc := &fakeChunks{search: []model.Chunk{{Content: "you prefer morning runs"}}}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs, RAG: rag, Skills: reg})
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "plan my week", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "plan my week", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var joined strings.Builder
@@ -381,14 +382,14 @@ func TestMemorySkillInjectedWithRAGNotes(t *testing.T) {
 
 func TestMemorySkillNotInjectedWithoutNotes(t *testing.T) {
 	reg, _ := skill.Load()
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	captP := &capturingProvider{reply: "ok"}
 	fc := &fakeChunks{search: nil} // no notes
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs, RAG: rag, Skills: reg})
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	for _, m := range captP.gotMessages {
@@ -399,14 +400,14 @@ func TestMemorySkillNotInjectedWithoutNotes(t *testing.T) {
 }
 
 func TestStreamInjectsRAGContextAndStores(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	captP := &capturingProvider{reply: "ok"}
 	fc := &fakeChunks{search: []model.Chunk{{Content: "you prefer morning runs"}}}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, RAG: rag})
 
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "plan my week", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "plan my week", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var hasNote bool
@@ -502,7 +503,7 @@ const (
 )
 
 func TestStreamRunsToolCallThenFinishes(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	prov := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
 	mcp := &fakeMCPTools{
@@ -513,7 +514,7 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's the weather", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "what's the weather", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -573,7 +574,7 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 }
 
 func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	prov := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
 	mcp := &fakeMCPTools{
@@ -584,7 +585,7 @@ func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's the weather", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "what's the weather", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -615,13 +616,13 @@ func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
 }
 
 func TestStreamMCPNilBehavesUnchanged(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "hi coach", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	for _, e := range sink.events {
@@ -632,14 +633,14 @@ func TestStreamMCPNilBehavesUnchanged(t *testing.T) {
 }
 
 func TestStreamMCPDisabledBehavesUnchanged(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mcp := &fakeMCPTools{enabled: false}
 	svc := chat.NewService(fakeProvider{reply: testReply},
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "hi coach", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	for _, e := range sink.events {
@@ -681,7 +682,7 @@ func manyToolDefs(n int) []provider.ToolDefinition {
 }
 
 func TestStreamCapsInjectedMCPTools(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	prov := &capturingToolsProvider{reply: testReply}
 	mcp := &fakeMCPTools{enabled: true, tools: manyToolDefs(130)}
@@ -689,7 +690,7 @@ func TestStreamCapsInjectedMCPTools(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's my schedule", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "what's my schedule", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -699,7 +700,7 @@ func TestStreamCapsInjectedMCPTools(t *testing.T) {
 }
 
 func TestStreamSmallToolSetPassesThroughUncapped(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	prov := &capturingToolsProvider{reply: testReply}
 	mcp := &fakeMCPTools{enabled: true, tools: manyToolDefs(3)}
@@ -707,7 +708,7 @@ func TestStreamSmallToolSetPassesThroughUncapped(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "what's my schedule", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "what's my schedule", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -717,7 +718,7 @@ func TestStreamSmallToolSetPassesThroughUncapped(t *testing.T) {
 }
 
 func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	prov := &alwaysToolProvider{toolName: testToolName}
 	mcp := &fakeMCPTools{
@@ -730,7 +731,7 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, testUsername, 0, "loop forever", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "loop forever", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	// maxIter rounds of tool calls, plus one forced tool-free final call once
@@ -766,7 +767,7 @@ func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skill.Load: %v", err)
 	}
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: "garmin__create_strength_workout"}}}
 	prov := &toolThenContentProvider{
@@ -778,7 +779,7 @@ func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {
 		chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Skills: reg})
 
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "make a workout", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "make a workout", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if mcp.calls != 0 {
@@ -799,7 +800,7 @@ func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {
 
 func TestLoadSkillToolReturnsBody(t *testing.T) {
 	reg, _ := skill.Load()
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mcp := &countingMCP{}
 	prov := &toolThenContentProvider{
@@ -811,7 +812,7 @@ func TestLoadSkillToolReturnsBody(t *testing.T) {
 		chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Skills: reg})
 
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "hi", &capturingSink{}); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if mcp.calls != 0 {
@@ -851,7 +852,7 @@ func (p *alwaysToolUntilNoTools) StreamChatWithTools(_ context.Context, req prov
 }
 
 func TestToolLoopForcesFinalAnswerOnCapExhaustion(t *testing.T) {
-	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: "foo"}}}
 	prov := &alwaysToolUntilNoTools{toolName: "foo", finalReply: "here is your summary"}
@@ -860,7 +861,7 @@ func TestToolLoopForcesFinalAnswerOnCapExhaustion(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 7, testUsername, 0, "do it", sink); err != nil {
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "do it", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var lastAsst string

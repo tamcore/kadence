@@ -34,7 +34,7 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	}
 
 	c, err := convs.Create(ctx, u.ID, "First chat")
-	if err != nil || c.ID == 0 {
+	if err != nil || c.ID == "" {
 		t.Fatalf("create conversation: %v %+v", err, c)
 	}
 

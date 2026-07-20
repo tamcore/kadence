@@ -44,11 +44,12 @@ func TestRAGRetrieveReturnsContentsAndEmbedding(t *testing.T) {
 func TestRAGStorePrivateMessageChunk(t *testing.T) {
 	fc := &fakeChunks{}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
-	if err := rag.Store(context.Background(), 7, 3, 9, "hello", []float32{1, 0, 0}); err != nil {
+	const convID = "11111111-1111-1111-1111-111111111111"
+	if err := rag.Store(context.Background(), 7, convID, 9, "hello", []float32{1, 0, 0}); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	c := fc.inserted[0]
-	if c.UserID == nil || *c.UserID != 7 || *c.ConversationID != 3 || *c.SourceID != 9 || c.Scope != model.ScopePrivate || c.Content != "hello" {
+	if c.UserID == nil || *c.UserID != 7 || c.ConversationID == nil || *c.ConversationID != convID || *c.SourceID != 9 || c.Scope != model.ScopePrivate || c.Content != "hello" {
 		t.Fatalf("bad chunk: %+v", c)
 	}
 }

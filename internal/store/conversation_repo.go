@@ -24,7 +24,7 @@ func (r *ConversationRepository) Create(ctx context.Context, userID int64, title
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO conversations (user_id, title) VALUES ($1, $2)
-		 RETURNING id, user_id, title, created_at`, userID, title).
+		 RETURNING id::text, user_id, title, created_at`, userID, title).
 		Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt)
 	if err != nil {
 		return model.Conversation{}, fmt.Errorf("insert conversation: %w", err)
@@ -33,10 +33,10 @@ func (r *ConversationRepository) Create(ctx context.Context, userID int64, title
 }
 
 // GetByID returns a conversation owned by userID, or ErrNotFound.
-func (r *ConversationRepository) GetByID(ctx context.Context, id, userID int64) (model.Conversation, error) {
+func (r *ConversationRepository) GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error) {
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, title, created_at FROM conversations WHERE id = $1 AND user_id = $2`, id, userID).
+		`SELECT id::text, user_id, title, created_at FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID).
 		Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Conversation{}, ErrNotFound
@@ -50,7 +50,7 @@ func (r *ConversationRepository) GetByID(ctx context.Context, id, userID int64) 
 // ListByUser returns a user's conversations, newest first.
 func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, user_id, title, created_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+		`SELECT id::text, user_id, title, created_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -67,8 +67,8 @@ func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) (
 }
 
 // Delete removes a conversation owned by userID (cascades to messages).
-func (r *ConversationRepository) Delete(ctx context.Context, id, userID int64) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1 AND user_id = $2`, id, userID)
+func (r *ConversationRepository) Delete(ctx context.Context, id string, userID int64) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID)
 	if err != nil {
 		return fmt.Errorf("delete conversation: %w", err)
 	}
