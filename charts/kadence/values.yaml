@@ -96,7 +96,10 @@ markitdown:
   enabled: false
   image: mcp/markitdown:latest # public image; pin a digest/tag in prod
   port: 3001
-  path: /mcp
+  # Trailing slash is required: markitdown-mcp (starlette) 307-redirects
+  # /mcp -> /mcp/, and the sidecar's fixed Host header turns that redirect
+  # into an unreachable localhost URL. Hitting /mcp/ directly avoids it.
+  path: /mcp/
   resources:
     requests:
       cpu: 50m
