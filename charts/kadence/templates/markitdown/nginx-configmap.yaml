@@ -11,6 +11,11 @@ data:
     server {
       listen 8080;
 
+      # Uploads are base64-encoded into a data: URI before conversion (~1.34x
+      # the raw bytes), so this must comfortably exceed KADENCE_UPLOAD_MAX_BYTES
+      # (10Mi default) or conversions fail with 413 at the sidecar.
+      client_max_body_size {{ .Values.markitdown.maxBodySize | default "16m" }};
+
       auth_basic "Kadence Markitdown";
       auth_basic_user_file /etc/nginx/.htpasswd;
 

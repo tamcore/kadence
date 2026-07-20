@@ -100,6 +100,9 @@ markitdown:
   # /mcp -> /mcp/, and the sidecar's fixed Host header turns that redirect
   # into an unreachable localhost URL. Hitting /mcp/ directly avoids it.
   path: /mcp/
+  # Sidecar nginx body limit; must exceed the base64-inflated upload size
+  # (~1.34x KADENCE_UPLOAD_MAX_BYTES) or conversions fail with 413.
+  maxBodySize: "16m"
   resources:
     requests:
       cpu: 50m
