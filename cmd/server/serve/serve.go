@@ -22,6 +22,7 @@ import (
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/provider"
+	"github.com/tamcore/kadence/internal/secret"
 	"github.com/tamcore/kadence/internal/store"
 )
 
@@ -104,6 +105,10 @@ func Run() error {
 		if err != nil {
 			return fmt.Errorf("load skills: %w", err)
 		}
+		// Single broker instance for the process: shared by the chat service
+		// (request_credentials tool + substitution/redaction) and, in a later
+		// phase, the credentials submit endpoint. Do not construct a second one.
+		broker := secret.NewBroker()
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
 			Model:            cfg.LLMModel,
 			MaxTokens:        cfg.LLMMaxTokens,
@@ -112,7 +117,10 @@ func Run() error {
 			Timeout:          cfg.LLMTimeout,
 			MCPMaxIterations: cfg.MCPMaxIterations,
 			MCPMaxTools:      cfg.MCPMaxTools,
-		}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills})
+		}, chat.Deps{
+			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
+			Secrets: broker,
+		})
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {

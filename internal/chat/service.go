@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
+	"github.com/tamcore/kadence/internal/secret"
 )
 
 // ConversationStore is the conversation persistence the service needs.
@@ -55,6 +58,22 @@ type ServiceConfig struct {
 const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
 const loadSkillToolName = "kadence__load_skill"
+const credsToolName = "kadence__request_credentials"
+
+// maxCredentialFields bounds how many fields a request_credentials tool call
+// may ask for in a single call (mirrors internal/secret's own cap; enforced
+// again here so a malformed/oversized request never reaches the broker).
+const maxCredentialFields = 8
+
+// credentialsNotCompletedResult is the tool result returned to the model when
+// a credential request times out or is cancelled (e.g. the client
+// disconnected). It carries no secret, no token — only a benign status.
+const credentialsNotCompletedResult = "the credential request was not completed; do not retry automatically."
+
+// credentialsInstructionSuffix is appended to the token map returned to the
+// model on a successful credential submission.
+const credentialsInstructionSuffix = "These are secure, single-use placeholders. Pass them verbatim as the " +
+	"argument values to the credential/login tool. Do not ask the user for the raw values; they were provided securely."
 
 // toolMsgRole is the provider.Message.Role used for tool-result messages.
 const toolMsgRole = "tool"
@@ -77,6 +96,39 @@ const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging en
 
 const titleMaxLen = 60
 
+// turnRedactor accumulates every secret value that has been active at any
+// point during a single Stream turn, so redaction stays effective even after
+// broker.Substitute consumes (deletes) a value the instant it is used. Without
+// this, a value substituted into an early tool call would vanish from
+// broker.ActiveValues before later redaction points in the same turn (a
+// streamed token, a subsequent tool result, the persisted assistant message)
+// ran, letting it leak. Values are appended, never removed, until the turn
+// ends (the broker itself still purges the user's state via PurgeUser).
+type turnRedactor struct {
+	values []string
+}
+
+// snapshot merges the broker's currently-active values for userID into the
+// accumulator and returns the full de-duplicated, longest-first set to redact
+// against right now.
+func (r *turnRedactor) snapshot(secrets *secret.Broker, userID int64) []string {
+	if secrets == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(r.values))
+	for _, v := range r.values {
+		seen[v] = true
+	}
+	for _, v := range secrets.ActiveValues(userID) {
+		if !seen[v] {
+			seen[v] = true
+			r.values = append(r.values, v)
+		}
+	}
+	sort.Slice(r.values, func(i, j int) bool { return len(r.values[i]) > len(r.values[j]) })
+	return r.values
+}
+
 // Service orchestrates a streaming chat turn.
 type Service struct {
 	provider      provider.Provider
@@ -90,10 +142,11 @@ type Service struct {
 	maxTools      int
 	now           func() time.Time
 	skills        *skill.Registry
+	secrets       *secret.Broker
 }
 
-// Deps carries the chat Service's dependencies. Guardrail, RAG, MCP, and
-// Skills may be nil (disabled).
+// Deps carries the chat Service's dependencies. Guardrail, RAG, MCP, Skills,
+// and Secrets may be nil (disabled).
 type Deps struct {
 	Convs     ConversationStore
 	Msgs      MessageStore
@@ -103,6 +156,11 @@ type Deps struct {
 	// Skills, when non-nil, enables the skill subsystem (load_skill tool +
 	// pre-gate injection).
 	Skills *skill.Registry
+	// Secrets, when non-nil, enables the request_credentials built-in tool,
+	// placeholder substitution at MCP dispatch, and secret redaction. Nil
+	// disables the feature entirely: the tool is not offered and no
+	// substitution/redaction runs.
+	Secrets *secret.Broker
 }
 
 // NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
@@ -124,7 +182,8 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
 		maxIterations: maxIterations, maxTools: maxTools, now: now,
-		skills: deps.Skills,
+		skills:  deps.Skills,
+		secrets: deps.Secrets,
 	}
 }
 
@@ -192,6 +251,13 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 		defer cancel()
 	}
 
+	if s.secrets != nil {
+		// Registered early so redaction (which reads still-live values) always
+		// runs before the purge that would erase them, regardless of which
+		// return path Stream takes below.
+		defer s.secrets.PurgeUser(userID)
+	}
+
 	if refused, err := s.applyGuardrail(ctx, streamCtx, conversationID, req.Messages, sink); refused {
 		return err
 	}
@@ -225,9 +291,14 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 
 	req.Tools = s.assembleTools(ctx, username)
 
-	full, err := s.runToolLoop(ctx, streamCtx, conversationID, username, req, sink)
+	redactor := &turnRedactor{}
+	full, err := s.runToolLoop(ctx, streamCtx, conversationID, userID, username, req, redactor, sink)
 	if err != nil {
 		return err
+	}
+
+	if s.secrets != nil {
+		full = secret.Redact(full, redactor.snapshot(s.secrets, userID))
 	}
 
 	assistantMsg, err := s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, full)
@@ -290,21 +361,27 @@ func (s *Service) applyGuardrail(
 // tool-free assistant content (persistence and RAG-embedding happen in the
 // caller).
 func (s *Service) runToolLoop(
-	ctx, streamCtx context.Context, conversationID string, username string, req provider.ChatRequest, sink EventSink,
+	ctx, streamCtx context.Context, conversationID string, userID int64, username string,
+	req provider.ChatRequest, redactor *turnRedactor, sink EventSink,
 ) (string, error) {
 	maxIter := s.maxIterations
 	if maxIter <= 0 {
 		maxIter = defaultMaxToolIterations
 	}
 
+	onToken := func(delta string) error {
+		if s.secrets != nil {
+			delta = secret.Redact(delta, redactor.snapshot(s.secrets, userID))
+		}
+		if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
+			return e
+		}
+		return sink.Flush()
+	}
+
 	gated := make(map[string]bool)
 	for i := 0; i < maxIter; i++ {
-		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, func(delta string) error {
-			if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
-				return e
-			}
-			return sink.Flush()
-		})
+		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
 		if streamErr != nil {
 			slog.Error("chat stream failed", "err", streamErr, "conversation", conversationID)
 			if result.Content != "" {
@@ -320,7 +397,7 @@ func (s *Service) runToolLoop(
 			Role: model.MsgRoleAssistant, Content: result.Content, ToolCalls: result.ToolCalls,
 		})
 		for _, tc := range result.ToolCalls {
-			req.Messages = append(req.Messages, s.dispatchTool(ctx, username, tc, gated, sink))
+			req.Messages = append(req.Messages, s.dispatchTool(ctx, streamCtx, userID, username, tc, gated, redactor, sink))
 		}
 	}
 
@@ -330,12 +407,7 @@ func (s *Service) runToolLoop(
 	slog.Warn("tool loop hit iteration cap; forcing a final answer",
 		"conversation", conversationID, "maxIter", maxIter)
 	req.Tools = nil
-	final, streamErr := s.provider.StreamChatWithTools(streamCtx, req, func(delta string) error {
-		if e := sink.Send(ChatEvent{Type: EventToken, Delta: delta}); e != nil {
-			return e
-		}
-		return sink.Flush()
-	})
+	final, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
 	if streamErr != nil {
 		slog.Error("final answer stream failed", "err", streamErr, "conversation", conversationID)
 		return "", s.fail(sink, "the assistant could not complete the response")
@@ -346,8 +418,8 @@ func (s *Service) runToolLoop(
 // skillTool builds the built-in load_skill tool definition, listing available
 // skills (names + one-line descriptions only) in its description.
 // assembleTools returns the tool definitions offered to the model: the MCP
-// tools (capped, reserving one slot for load_skill when skills are enabled)
-// plus the built-in load_skill tool.
+// tools (capped, reserving one slot per enabled built-in — load_skill and/or
+// request_credentials) plus the built-in tools themselves.
 func (s *Service) assembleTools(ctx context.Context, username string) []provider.ToolDefinition {
 	var tools []provider.ToolDefinition
 	if s.mcp != nil && s.mcp.Enabled() {
@@ -355,11 +427,18 @@ func (s *Service) assembleTools(ctx context.Context, username string) []provider
 		if toolsErr != nil {
 			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
 		} else {
-			// Reserve one slot for the built-in load_skill tool so the total
-			// never exceeds the configured cap.
+			// Reserve one slot per enabled built-in tool (load_skill,
+			// request_credentials) so the total never exceeds the configured cap.
 			mcpCap := s.maxTools
-			if s.skills != nil && mcpCap > 0 {
-				mcpCap--
+			builtins := 0
+			if s.skills != nil {
+				builtins++
+			}
+			if s.secrets != nil {
+				builtins++
+			}
+			if mcpCap > builtins {
+				mcpCap -= builtins
 			}
 			if len(mcpTools) > mcpCap {
 				slog.Warn("mcp tools capped", "have", len(mcpTools), "cap", mcpCap)
@@ -371,7 +450,39 @@ func (s *Service) assembleTools(ctx context.Context, username string) []provider
 	if s.skills != nil {
 		tools = append(tools, s.skillTool())
 	}
+	if s.secrets != nil {
+		tools = append(tools, s.credsTool())
+	}
 	return tools
+}
+
+// credsTool builds the built-in request_credentials tool definition.
+func (s *Service) credsTool() provider.ToolDefinition {
+	return provider.ToolDefinition{
+		Name: credsToolName,
+		Description: "Ask the user to securely provide credentials (e.g. a login password or API key) that a " +
+			"tool needs. The user is prompted through a secure form; you never see the raw values, only opaque " +
+			"placeholder tokens to pass to the tool that needs them.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"reason": {"type": "string", "description": "why the credentials are needed"},
+				"fields": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"name": {"type": "string"},
+							"label": {"type": "string"},
+							"secret": {"type": "boolean"}
+						},
+						"required": ["name"]
+					}
+				}
+			},
+			"required": ["reason", "fields"]
+		}`),
+	}
 }
 
 func (s *Service) skillTool() provider.ToolDefinition {
@@ -392,11 +503,17 @@ func (s *Service) skillTool() provider.ToolDefinition {
 	}
 }
 
-// dispatchTool routes one tool call: the built-in load_skill and pre-gated
-// triggering tools are handled locally; everything else goes to MCP. gated
-// tracks which skills have already pre-gated a call this turn (so the retried
-// call executes for real).
-func (s *Service) dispatchTool(ctx context.Context, username string, tc provider.ToolCall, gated map[string]bool, sink EventSink) provider.Message {
+// dispatchTool routes one tool call: the built-in load_skill,
+// request_credentials, and pre-gated triggering tools are handled locally;
+// everything else goes to MCP. gated tracks which skills have already
+// pre-gated a call this turn (so the retried call executes for real).
+func (s *Service) dispatchTool(
+	ctx, streamCtx context.Context, userID int64, username string, tc provider.ToolCall,
+	gated map[string]bool, redactor *turnRedactor, sink EventSink,
+) provider.Message {
+	if s.secrets != nil && tc.Name == credsToolName {
+		return s.handleRequestCredentials(streamCtx, userID, tc, sink)
+	}
 	if s.skills != nil {
 		if tc.Name == loadSkillToolName {
 			return s.handleLoadSkill(tc, sink)
@@ -406,7 +523,80 @@ func (s *Service) dispatchTool(ctx context.Context, username string, tc provider
 			return s.gateWithSkill(tc, sk, sink)
 		}
 	}
-	return s.runToolCall(ctx, username, tc, sink)
+	return s.runToolCall(ctx, userID, username, tc, redactor, sink)
+}
+
+// credentialRequestArgs is the parsed request_credentials tool-call payload.
+type credentialRequestArgs struct {
+	Reason string            `json:"reason"`
+	Fields []CredentialField `json:"fields"`
+}
+
+// handleRequestCredentials intercepts the built-in request_credentials tool:
+// it parses the requested fields, registers a broker request, emits a
+// credentials_request SSE event (field specs + requestId + reason only —
+// never a value or token), then blocks on broker.Await until the user
+// submits (via the secure submit endpoint), the request times out, or
+// streamCtx is cancelled (e.g. client disconnect). On success the tool
+// result carries the field-name -> TOKEN map (never raw values) plus an
+// instruction for the model; on timeout/cancel it carries a benign
+// "not completed" status only.
+func (s *Service) handleRequestCredentials(streamCtx context.Context, userID int64, tc provider.ToolCall, sink EventSink) provider.Message {
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Flush()
+
+	var args credentialRequestArgs
+	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil || len(args.Fields) == 0 || len(args.Fields) > maxCredentialFields {
+		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
+		_ = sink.Flush()
+		return provider.Message{
+			Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name,
+			Content: "invalid credential request: fields must be a non-empty array of at most " +
+				strconv.Itoa(maxCredentialFields) + " entries",
+		}
+	}
+
+	fields := make([]secret.Field, len(args.Fields))
+	for i, f := range args.Fields {
+		fields[i] = secret.Field{Name: f.Name, Label: f.Label, Secret: f.Secret}
+	}
+
+	reqID, tokens, err := s.secrets.NewRequest(userID, fields)
+	if err != nil {
+		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
+		_ = sink.Flush()
+		return provider.Message{
+			Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name,
+			Content: "invalid credential request: " + err.Error(),
+		}
+	}
+
+	_ = sink.Send(ChatEvent{
+		Type: EventCredentials, RequestID: reqID, Reason: args.Reason, Fields: args.Fields,
+	})
+	_ = sink.Flush()
+
+	awaitErr := s.secrets.Await(streamCtx, reqID)
+
+	status := toolStatusDone
+	var content string
+	if awaitErr != nil {
+		status = toolStatusError
+		content = credentialsNotCompletedResult
+	} else {
+		tokensJSON, mErr := json.Marshal(tokens)
+		if mErr != nil {
+			status = toolStatusError
+			content = credentialsNotCompletedResult
+		} else {
+			content = string(tokensJSON) + "\n\n" + credentialsInstructionSuffix
+		}
+	}
+
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
+	_ = sink.Flush()
+
+	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: content}
 }
 
 // handleLoadSkill answers a load_skill call with the requested skill body.
@@ -454,20 +644,49 @@ func (s *Service) gateWithSkill(tc provider.ToolCall, sk skill.Skill, sink Event
 // runToolCall dispatches a single tool call through s.mcp, emitting
 // running/done/error tool events on sink, and returns the resulting
 // role:"tool" message to append to the provider request.
-func (s *Service) runToolCall(ctx context.Context, username string, tc provider.ToolCall, sink EventSink) provider.Message {
+//
+// Order is security-critical (see docs/superpowers/specs — "Substitution at
+// dispatch"): the running SSE event and debug log below carry the
+// PLACEHOLDER args exactly as the model produced them (tc.Arguments) —
+// UNCHANGED. Only the JSON payload sent to s.mcp.Call ever holds the real
+// secret value, via broker.Substitute. The MCP result is redacted before it
+// is logged, streamed, or appended to the provider request.
+func (s *Service) runToolCall(
+	ctx context.Context, userID int64, username string, tc provider.ToolCall, redactor *turnRedactor, sink EventSink,
+) provider.Message {
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
 	_ = sink.Flush()
 
-	out, cErr := s.mcp.Call(ctx, username, tc.Name, tc.Arguments)
+	callArgs := tc.Arguments
+	// Redaction values are snapshotted into redactor BEFORE Substitute runs:
+	// Substitute consumes (deletes) each token's stored value as it
+	// substitutes it (single-use), so a live value used in THIS call would
+	// otherwise be gone from ActiveValues by the time we redact the result
+	// below (and for the rest of the turn), even though it's still exactly
+	// the value that could leak back in the tool's output or later text.
+	var redactValues []string
+	if s.secrets != nil {
+		redactValues = redactor.snapshot(s.secrets, userID)
+		callArgs, _ = s.secrets.Substitute(userID, tc.Arguments)
+	}
+
+	out, cErr := s.mcp.Call(ctx, username, tc.Name, callArgs)
 	status := toolStatusDone
 	if cErr != nil {
 		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", cErr)
 		out = "error: " + cErr.Error()
 		status = toolStatusError
-	} else {
+	}
+
+	if s.secrets != nil {
+		out = secret.Redact(out, redactValues)
+	}
+
+	if cErr == nil {
 		// Debug-only: surfaces exactly what a tool returned (enable via
 		// KADENCE_LOG_LEVEL=debug) to diagnose "tool returned X but the model
-		// said Y" cases. Result is truncated to keep logs bounded.
+		// said Y" cases. Result is truncated to keep logs bounded. Logs the
+		// PLACEHOLDER args (tc.Arguments) and the already-redacted result.
 		slog.Debug("mcp tool call", "tool", tc.Name, "args", tc.Arguments,
 			"result_bytes", len(out), "result_preview", preview(out, 500))
 	}
