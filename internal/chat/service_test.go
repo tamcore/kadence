@@ -2,9 +2,11 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
+	"github.com/tamcore/kadence/internal/secret"
 )
 
 type fakeProvider struct {
@@ -74,6 +77,32 @@ type capturingSink struct{ events []chat.ChatEvent }
 
 func (s *capturingSink) Send(e chat.ChatEvent) error { s.events = append(s.events, e); return nil }
 func (s *capturingSink) Flush() error                { return nil }
+
+// syncCapturingSink is a mutex-guarded capturingSink for tests where a
+// goroutine polls sink.events concurrently with Stream still running (e.g.
+// waiting for a credentials_request event to submit values for). Plain
+// capturingSink is not safe for that concurrent read/write pattern.
+type syncCapturingSink struct {
+	mu     sync.Mutex
+	events []chat.ChatEvent
+}
+
+func (s *syncCapturingSink) Send(e chat.ChatEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, e)
+	return nil
+}
+func (s *syncCapturingSink) Flush() error { return nil }
+
+// snapshot returns a copy of the events recorded so far.
+func (s *syncCapturingSink) snapshot() []chat.ChatEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]chat.ChatEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
 
 const (
 	testReply     = "Hello!"
@@ -881,5 +910,297 @@ func TestToolLoopForcesFinalAnswerOnCapExhaustion(t *testing.T) {
 	}
 	if !strings.Contains(streamed.String(), "summary") {
 		t.Fatalf("final answer not streamed; got %q", streamed.String())
+	}
+}
+
+// requestCredentialsProvider issues a kadence__request_credentials tool call
+// first. If mcpToolName is set, on the second round it extracts the token
+// for mcpFieldName from the request_credentials tool result (found in the
+// prior round's messages) and issues an MCP tool call whose arguments embed
+// that token verbatim. Otherwise (or on the round after the MCP call) it
+// streams finalReply.
+type requestCredentialsProvider struct {
+	reqReason    string
+	reqFields    string // raw JSON array of {name,label,secret}
+	mcpToolName  string
+	mcpFieldName string
+	finalReply   string
+	calls        int
+	gotMessages  [][]provider.Message
+}
+
+const credsToolName = "kadence__request_credentials"
+const testCredsCallID = "call_creds"
+
+func (p *requestCredentialsProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", errors.New("StreamChat should not be called when tools are in play")
+}
+
+func (p *requestCredentialsProvider) StreamChatWithTools(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	p.gotMessages = append(p.gotMessages, req.Messages)
+	p.calls++
+	switch p.calls {
+	case 1:
+		args := `{"reason":"` + p.reqReason + `","fields":` + p.reqFields + `}`
+		return provider.StreamResult{
+			ToolCalls: []provider.ToolCall{{ID: testCredsCallID, Name: credsToolName, Arguments: args}},
+		}, nil
+	case 2:
+		if p.mcpToolName != "" {
+			token := p.tokenFromToolResult(req.Messages)
+			args := `{"password":"` + token + `"}`
+			return provider.StreamResult{
+				ToolCalls: []provider.ToolCall{{ID: "call_mcp", Name: p.mcpToolName, Arguments: args}},
+			}, nil
+		}
+	}
+	if err := onToken(p.finalReply); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: p.finalReply}, nil
+}
+
+// tokenFromToolResult extracts the token for p.mcpFieldName out of the
+// request_credentials tool result message present in msgs.
+func (p *requestCredentialsProvider) tokenFromToolResult(msgs []provider.Message) string {
+	for _, m := range msgs {
+		if m.Role != toolMsgRole || m.ToolCallID != testCredsCallID {
+			continue
+		}
+		idx := strings.Index(m.Content, "}")
+		if idx == -1 {
+			continue
+		}
+		var tokens map[string]string
+		if err := json.Unmarshal([]byte(m.Content[:idx+1]), &tokens); err != nil {
+			continue
+		}
+		return tokens[p.mcpFieldName]
+	}
+	return ""
+}
+
+const (
+	testCredsReason    = "need garmin login"
+	testCredsFieldName = "password"
+)
+
+// TestRequestCredentialsToolEmitsEventAndReturnsTokens verifies the
+// request_credentials intercept: it emits a credentials_request SSE event
+// (no values/tokens in it), and once a goroutine Submits values via the
+// broker, the tool result delivered back to the provider carries TOKENS,
+// never raw values.
+func TestRequestCredentialsToolEmitsEventAndReturnsTokens(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	broker := secret.NewBroker()
+	fields := `[{"name":"` + testCredsFieldName + `","label":"Password","secret":true}]`
+	prov := &requestCredentialsProvider{reqReason: testCredsReason, reqFields: fields, finalReply: testReply}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs, Secrets: broker})
+
+	sink := &syncCapturingSink{}
+	submitted := make(chan struct{})
+	go func() {
+		// Wait for the credentials_request event to show up, then submit.
+		for {
+			for _, e := range sink.snapshot() {
+				if e.Type == chat.EventCredentials && e.RequestID != "" {
+					_ = broker.Submit(testUserID, e.RequestID, map[string]string{testCredsFieldName: "s3cr3t-value"})
+					close(submitted)
+					return
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "log me into garmin", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	<-submitted
+
+	events := sink.snapshot()
+	var credsEvent *chat.ChatEvent
+	for i := range events {
+		if events[i].Type == chat.EventCredentials {
+			credsEvent = &events[i]
+		}
+	}
+	if credsEvent == nil {
+		t.Fatal("expected a credentials_request event")
+	}
+	if credsEvent.Reason != testCredsReason {
+		t.Fatalf("credsEvent.Reason = %q, want %q", credsEvent.Reason, testCredsReason)
+	}
+	if len(credsEvent.Fields) != 1 || credsEvent.Fields[0].Name != testCredsFieldName {
+		t.Fatalf("credsEvent.Fields = %+v", credsEvent.Fields)
+	}
+
+	// The tool result forwarded to the provider must carry tokens, not values.
+	secondCallMsgs := prov.gotMessages[1]
+	var toolResultContent string
+	for _, m := range secondCallMsgs {
+		if m.Role == toolMsgRole && m.ToolCallID == testCredsCallID {
+			toolResultContent = m.Content
+		}
+	}
+	if toolResultContent == "" {
+		t.Fatal("expected a tool result message for the request_credentials call")
+	}
+	if strings.Contains(toolResultContent, "s3cr3t-value") {
+		t.Fatalf("tool result must never contain the raw secret value: %q", toolResultContent)
+	}
+	var tokens map[string]string
+	// The tool result is expected to be a JSON object (possibly with a trailing
+	// instruction) containing the token map; extract the JSON object prefix.
+	if idx := strings.Index(toolResultContent, "}"); idx != -1 {
+		_ = json.Unmarshal([]byte(toolResultContent[:idx+1]), &tokens)
+	}
+	tok, ok := tokens[testCredsFieldName]
+	if !ok || !strings.HasPrefix(tok, "kadence_secret_") {
+		t.Fatalf("expected a kadence_secret_ token for %q in tool result: %q", testCredsFieldName, toolResultContent)
+	}
+}
+
+// TestRequestCredentialsSubstitutesAndRedacts verifies the full flow: a
+// submitted secret's token, when included in a later MCP tool call's
+// arguments, is substituted with the REAL value only in the argument JSON
+// sent to the fake MCP server, while the SSE "tool" event Arguments and the
+// role:"tool" message forwarded to the provider retain the placeholder token.
+// A secret value echoed back in the tool result or in streamed text must be
+// redacted to "[redacted]".
+func TestRequestCredentialsSubstitutesAndRedacts(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	broker := secret.NewBroker()
+	const secretValue = "s3cr3t-value"
+	fields := `[{"name":"` + testCredsFieldName + `","label":"Password","secret":true}]`
+
+	var reqID string
+
+	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}}
+	// callResult echoes the secret back, to verify redaction of tool results.
+	mcp.callResult = "logged in as " + secretValue
+
+	prov := &requestCredentialsProvider{
+		reqReason: testCredsReason, reqFields: fields,
+		mcpToolName:  testToolName,
+		mcpFieldName: testCredsFieldName,
+		finalReply:   "done, " + secretValue,
+	}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Secrets: broker})
+
+	sink := &syncCapturingSink{}
+	go func() {
+		for {
+			for _, e := range sink.snapshot() {
+				if e.Type == chat.EventCredentials && e.RequestID != "" {
+					reqID = e.RequestID
+					_ = broker.Submit(testUserID, reqID, map[string]string{testCredsFieldName: secretValue})
+					return
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "log me into garmin", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if !mcp.callInvoked {
+		t.Fatal("expected MCP Call to be invoked")
+	}
+	if strings.Contains(mcp.gotArgsJSON, "kadence_secret_") {
+		t.Fatalf("MCP call args should contain the REAL value, not the token: %q", mcp.gotArgsJSON)
+	}
+	if !strings.Contains(mcp.gotArgsJSON, secretValue) {
+		t.Fatalf("MCP call args should contain the REAL secret value: %q", mcp.gotArgsJSON)
+	}
+
+	events := sink.snapshot()
+	// The SSE "tool" running event Arguments for the MCP call must show the
+	// placeholder token (or at least never the raw value).
+	for _, e := range events {
+		if e.Type == chat.EventTool && e.Tool == testToolName && e.Status == toolStatusRunningForTest {
+			if strings.Contains(e.Arguments, secretValue) {
+				t.Fatalf("SSE tool event Arguments leaked the raw secret: %q", e.Arguments)
+			}
+		}
+	}
+
+	// The role:"tool" message forwarded to the provider (for the MCP call)
+	// must not contain the raw secret in its recorded arguments either, and
+	// any secret echoed in the tool RESULT content must be redacted.
+	for _, callMsgs := range prov.gotMessages {
+		for _, m := range callMsgs {
+			if m.Role == toolMsgRole && m.ToolCallID == "call_mcp" {
+				if strings.Contains(m.Content, secretValue) {
+					t.Fatalf("tool result message leaked the raw secret: %q", m.Content)
+				}
+				if !strings.Contains(m.Content, "[redacted]") {
+					t.Fatalf("expected tool result to be redacted: %q", m.Content)
+				}
+			}
+		}
+	}
+
+	// Streamed final content that echoes the secret must be redacted too.
+	var streamed strings.Builder
+	for _, e := range events {
+		if e.Type == chat.EventToken {
+			streamed.WriteString(e.Delta)
+		}
+	}
+	if strings.Contains(streamed.String(), secretValue) {
+		t.Fatalf("streamed content leaked the raw secret: %q", streamed.String())
+	}
+	if !strings.Contains(streamed.String(), "[redacted]") {
+		t.Fatalf("expected streamed content to contain [redacted]: %q", streamed.String())
+	}
+
+	// Persisted assistant message must also be redacted.
+	last := msgs.added[len(msgs.added)-1]
+	if strings.Contains(last.Content, secretValue) {
+		t.Fatalf("persisted assistant message leaked the raw secret: %+v", last)
+	}
+}
+
+const toolStatusRunningForTest = "running"
+
+// TestRequestCredentialsToolNotOfferedWhenSecretsNil verifies the feature-off
+// path: with Secrets nil, the request_credentials tool must not be offered
+// and normal MCP dispatch is unaffected.
+func TestRequestCredentialsToolNotOfferedWhenSecretsNil(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &capturingToolsProvider{reply: testReply}
+	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "hi", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for _, td := range prov.gotTools {
+		if td.Name == credsToolName {
+			t.Fatalf("request_credentials tool must not be offered when Secrets is nil: %+v", prov.gotTools)
+		}
+	}
+
+	// Normal dispatch (via a regular tool call) is unaffected: run one to be
+	// sure runToolCall/dispatchTool still work with Secrets nil.
+	prov2 := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
+	svc2 := chat.NewService(prov2, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+	sink2 := &capturingSink{}
+	if err := svc2.Stream(context.Background(), testUserID, testUsername, "", "what's the weather", sink2); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if !mcp.callInvoked {
+		t.Fatal("expected normal MCP dispatch to still work when Secrets is nil")
 	}
 }
