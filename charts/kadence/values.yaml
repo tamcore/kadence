@@ -103,6 +103,9 @@ markitdown:
   # Sidecar nginx body limit; must exceed the base64-inflated upload size
   # (~1.34x KADENCE_UPLOAD_MAX_BYTES) or conversions fail with 413.
   maxBodySize: "16m"
+  # Overrides the MCP Python SDK's 4MB per-message cap (not otherwise
+  # configurable) so large base64 documents convert. Keep >= maxBodySize.
+  maxMessageSizeMB: 64
   resources:
     requests:
       cpu: 50m

@@ -24,12 +24,19 @@ spec:
       containers:
       - name: markitdown
         image: {{ .Values.markitdown.image }}
+        # The MCP Python SDK hardcodes a 4MB per-message cap
+        # (mcp.server.streamable_http.MAXIMUM_MESSAGE_SIZE), which rejects the
+        # base64 data: URIs we send for real documents. markitdown-mcp exposes
+        # no flag for it, so raise the module global at startup before serving.
+        command: ["python", "-c"]
         args:
-        - "--http"
-        - "--host"
-        - "0.0.0.0"
-        - "--port"
-        - {{ .Values.markitdown.port | quote }}
+        - |
+          import mcp.server.streamable_http as m
+          m.MAXIMUM_MESSAGE_SIZE = {{ mul .Values.markitdown.maxMessageSizeMB 1048576 }}
+          import sys
+          from markitdown_mcp.__main__ import main
+          sys.argv = ["markitdown-mcp", "--http", "--host", "0.0.0.0", "--port", "{{ .Values.markitdown.port }}"]
+          main()
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: false
