@@ -35,12 +35,23 @@ func TestGetReturnsBody(t *testing.T) {
 
 func TestForToolGlobMatch(t *testing.T) {
 	reg, _ := skill.Load()
-	// workout-programming triggers include "*_workout" and "*create*workout*".
-	if _, ok := reg.ForTool("garmin__create_strength_workout"); !ok {
-		t.Fatal("expected workout skill to match garmin__create_strength_workout")
+	// workout-programming gates only creation/edit tools.
+	for _, want := range []string{
+		"garmin__create_strength_workout", "garmin__create_run_workout",
+		"garmin__update_workout", "garmin__upload_workout",
+	} {
+		if _, ok := reg.ForTool(want); !ok {
+			t.Fatalf("expected workout skill to match %s", want)
+		}
 	}
-	if _, ok := reg.ForTool("garmin__get_activities"); ok {
-		t.Fatal("did not expect a workout skill match for get_activities")
+	// Reads and scheduling must NOT be gated (they carry no exercises to type).
+	for _, no := range []string{
+		"garmin__get_activities", "garmin__get_scheduled_workouts",
+		"garmin__get_workouts", "garmin__schedule_workout", "garmin__delete_workout",
+	} {
+		if _, ok := reg.ForTool(no); ok {
+			t.Fatalf("workout skill should NOT match %s", no)
+		}
 	}
 }
 
