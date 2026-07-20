@@ -74,7 +74,7 @@
 
 <style>
 	.chat { display: flex; flex-direction: column; height: 100%; }
-	.thread { flex: 1; overflow-y: auto; }
+	.thread { flex: 1; overflow-y: auto; padding: 24px 20px 0; }
 	.thread-inner {
 		max-width: 760px; margin: 0 auto;
 		display: flex; flex-direction: column; gap: 16px; padding-bottom: 16px;
@@ -104,5 +104,10 @@
 		border-radius: var(--radius); overflow-x: auto; white-space: pre-wrap; word-break: break-word;
 	}
 	.error { color: var(--danger); }
-	.composer-area { flex: none; }
+	.composer-area {
+		flex: none;
+		border-top: 1px solid var(--border);
+		padding: 12px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+	}
+	.composer-area :global(.composer) { max-width: 760px; margin: 0 auto; }
 </style>
