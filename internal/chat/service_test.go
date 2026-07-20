@@ -321,13 +321,46 @@ func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
 
 	var systemContent string
 	for _, m := range captP.gotMessages {
-		if m.Role == "system" {
+		if m.Role == model.MsgRoleSystem {
 			systemContent = m.Content
 		}
 	}
 	for _, want := range []string{"2026-07-19", fixed.Weekday().String()} {
 		if !strings.Contains(systemContent, want) {
 			t.Fatalf("system prompt missing %q; got: %s", want, systemContent)
+		}
+	}
+}
+
+func TestStreamDefaultSystemPromptIncludesWorkoutAndMemoryGuidance(t *testing.T) {
+	convs := &fakeConvs{byID: map[int64]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	// No SystemPrompt override → the default prompt is used.
+	svc := chat.NewService(captP,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	if err := svc.Stream(context.Background(), 7, testUsername, 0, "make me a strength workout", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var systemContent string
+	for _, m := range captP.gotMessages {
+		if m.Role == model.MsgRoleSystem {
+			systemContent = m.Content
+		}
+	}
+	// Workout-programming skill: catalog-first, no generic steps.
+	for _, want := range []string{"catalog", "generic", "sets, reps, and rest"} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("default system prompt missing workout guidance %q; got: %s", want, systemContent)
+		}
+	}
+	// Memory reliance.
+	for _, want := range []string{"authoritative history", "past"} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("default system prompt missing memory guidance %q; got: %s", want, systemContent)
 		}
 	}
 }
