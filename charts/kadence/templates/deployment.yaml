@@ -32,6 +32,25 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+      - name: wait-for-db
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ with .Values.image.digest }}@{{ . }}{{ end }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/kadence", "wait-for-db"]
+        env:
+        {{- include "kadence.dbEnv" . | nindent 8 }}
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
       containers:
       - name: kadence
         securityContext:
@@ -45,27 +64,7 @@ spec:
         - containerPort: 8080
           name: http
         env:
-        {{- if .Values.postgres.enabled }}
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "kadence.fullname" . }}-secret
-              key: POSTGRES_PASSWORD
-        - name: KADENCE_DATABASE_URL
-          value: "postgres://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ include "kadence.fullname" . }}-postgres:5432/{{ .Values.postgres.database }}?sslmode=disable"
-        {{- else if .Values.externalDatabase.existingSecret }}
-        - name: KADENCE_DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.externalDatabase.existingSecret }}
-              key: {{ .Values.externalDatabase.existingSecretKey | default "KADENCE_DATABASE_URL" }}
-        {{- else }}
-        - name: KADENCE_DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "kadence.fullname" . }}-secret
-              key: KADENCE_DATABASE_URL
-        {{- end }}
+        {{- include "kadence.dbEnv" . | nindent 8 }}
         {{- range $server := .Values.mcp.servers }}
         {{- $prefix := include "kadence.mcp.envPrefix" (dict "root" $ "server" $server) }}
         {{- $svc := include "kadence.mcp.fullname" (dict "root" $ "server" $server) }}

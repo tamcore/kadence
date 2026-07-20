@@ -113,3 +113,33 @@ Context: the root context (.).
 {{- define "kadence.markitdown.authSecretName" -}}
 {{- printf "%s-markitdown-auth" (include "kadence.fullname" .) -}}
 {{- end -}}
+
+{{/*
+Database env vars (KADENCE_DATABASE_URL and, when using the bundled
+Postgres, POSTGRES_PASSWORD). Shared by the app container and the
+wait-for-db initContainer so both use the same one source of truth.
+Context: the root context (.).
+*/}}
+{{- define "kadence.dbEnv" -}}
+{{- if .Values.postgres.enabled }}
+- name: POSTGRES_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "kadence.fullname" . }}-secret
+      key: POSTGRES_PASSWORD
+- name: KADENCE_DATABASE_URL
+  value: "postgres://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ include "kadence.fullname" . }}-postgres:5432/{{ .Values.postgres.database }}?sslmode=disable"
+{{- else if .Values.externalDatabase.existingSecret }}
+- name: KADENCE_DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.externalDatabase.existingSecret }}
+      key: {{ .Values.externalDatabase.existingSecretKey | default "KADENCE_DATABASE_URL" }}
+{{- else }}
+- name: KADENCE_DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "kadence.fullname" . }}-secret
+      key: KADENCE_DATABASE_URL
+{{- end }}
+{{- end -}}
