@@ -4,7 +4,11 @@
 	import { page } from '$app/stores';
 	import '$lib/styles/app.css';
 	import { api, APIError } from '$lib/api/client';
-	import { clearAuth, currentUser, isAdmin, isAuthenticated, setAuth } from '$lib/stores/auth';
+	import { clearAuth, setAuth } from '$lib/stores/auth';
+	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
+	import Sidebar from '$lib/components/Sidebar.svelte';
+
+	const MOBILE_BREAKPOINT_PX = 900;
 
 	let { children } = $props();
 	let checking = $state(true);
@@ -14,6 +18,8 @@
 	}
 
 	onMount(async () => {
+		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
+
 		const path = window.location.pathname;
 		try {
 			const user = await api.getCurrentUser();
@@ -27,48 +33,34 @@
 			checking = false;
 		}
 	});
-
-	async function handleLogout() {
-		try {
-			await api.logout();
-		} catch {
-			/* session may already be gone */
-		}
-		clearAuth();
-		await goto('/login');
-	}
 </script>
 
 {#if checking}
 	<div class="loading">Loading…</div>
+{:else if isPublic($page.url.pathname)}
+	{@render children()}
 {:else}
-	{#if !isPublic($page.url.pathname)}
-		<header class="topbar">
-			<a href="/" class="brand">Kadence</a>
-			<nav>
-				{#if $isAuthenticated}<a href="/chat">Chat</a>{/if}
-				{#if $isAuthenticated}<a href="/documents">Documents</a>{/if}
-				{#if $isAdmin}<a href="/admin/users">Users</a>{/if}
-				{#if $isAdmin}<a href="/admin/documents">Public Docs</a>{/if}
-				{#if $currentUser}<span class="who">{$currentUser.username}</span>{/if}
-				{#if $isAuthenticated}<button class="logout" onclick={handleLogout}>Log out</button>{/if}
-			</nav>
-		</header>
-	{/if}
-	<main class="content">
-		{@render children()}
-	</main>
+	<div class="shell">
+		<div
+			class="scrim"
+			class:show={$sidebarOpen}
+			onclick={closeSidebar}
+			onkeydown={(e) => e.key === 'Enter' && closeSidebar()}
+			role="button"
+			tabindex="-1"
+			aria-label="Close menu"
+		></div>
+		<aside class="sidebar" class:open={$sidebarOpen}><Sidebar /></aside>
+		<div class="main">
+			<div class="mobilebar">
+				<button class="hamburger" onclick={toggleSidebar} aria-label="Menu">☰</button>
+				<span class="brand-sm">Kadence</span>
+			</div>
+			<main>{@render children()}</main>
+		</div>
+	</div>
 {/if}
 
 <style>
 	.loading { min-height: 100vh; display: grid; place-items: center; color: var(--text-muted); }
-	.topbar {
-		display: flex; align-items: center; justify-content: space-between;
-		padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border);
-	}
-	.brand { font-weight: 700; text-decoration: none; color: var(--text); }
-	nav { display: flex; align-items: center; gap: 16px; }
-	.who { color: var(--text-muted); font-size: 0.9rem; }
-	.logout { background: none; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 12px; cursor: pointer; font: inherit; }
-	.content { max-width: 900px; margin: 0 auto; padding: 24px 20px; }
 </style>
