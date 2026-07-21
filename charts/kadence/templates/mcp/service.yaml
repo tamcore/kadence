@@ -1,6 +1,7 @@
 {{- range .Values.mcp.servers }}
 {{- $server := . }}
 {{- $root := $ }}
+---
 apiVersion: v1
 kind: Service
 metadata:
