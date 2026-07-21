@@ -3,6 +3,8 @@ export interface User {
 	username: string;
 	email: string;
 	role: 'admin' | 'user';
+	displayName: string;
+	unitSystem: 'metric' | 'imperial';
 }
 
 export interface Conversation {

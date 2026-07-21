@@ -9,14 +9,28 @@ beforeEach(() => {
 
 describe('auth store', () => {
 	it('setAuth stores the user and flips isAuthenticated', () => {
-		setAuth({ id: 1, username: 'alice', email: 'a@x.io', role: 'admin' });
+		setAuth({
+			id: 1,
+			username: 'alice',
+			email: 'a@x.io',
+			role: 'admin',
+			displayName: 'Alice',
+			unitSystem: 'metric'
+		});
 		expect(get(currentUser)?.username).toBe('alice');
 		expect(get(isAuthenticated)).toBe(true);
 		expect(localStorage.getItem('kadence_user')).toContain('alice');
 	});
 
 	it('clearAuth resets state', () => {
-		setAuth({ id: 1, username: 'alice', email: 'a@x.io', role: 'user' });
+		setAuth({
+			id: 1,
+			username: 'alice',
+			email: 'a@x.io',
+			role: 'user',
+			displayName: 'Alice',
+			unitSystem: 'metric'
+		});
 		clearAuth();
 		expect(get(currentUser)).toBeNull();
 		expect(get(isAuthenticated)).toBe(false);
