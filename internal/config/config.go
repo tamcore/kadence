@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"os"
@@ -79,6 +80,13 @@ type Config struct {
 	// client (plaintext http, or https verified against the system trust
 	// store).
 	MCPCAFile string
+
+	// User-defined MCP servers. EncryptionKey is a 32-byte key (KADENCE_ENCRYPTION_KEY,
+	// base64-encoded) used to encrypt stored per-user MCP server credentials.
+	// UserMCPAllowedHosts is the host allowlist (KADENCE_USER_MCP_ALLOWED_HOSTS,
+	// comma-split, trimmed) that user-defined MCP server URLs must match.
+	EncryptionKey       []byte
+	UserMCPAllowedHosts []string
 }
 
 const (
@@ -143,6 +151,9 @@ func Load() Config {
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 	cfg.MCPCAFile = os.Getenv("KADENCE_MCP_CA_FILE")
 
+	cfg.EncryptionKey = decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
+	cfg.UserMCPAllowedHosts = splitCSV(os.Getenv("KADENCE_USER_MCP_ALLOWED_HOSTS"))
+
 	return cfg
 }
 
@@ -174,6 +185,12 @@ func (c Config) RAGEnabled() bool { return c.EmbedAPIKey != "" }
 // MarkitdownEnabled reports whether the markitdown-mcp ingestion extractor is configured.
 func (c Config) MarkitdownEnabled() bool { return c.MarkitdownURL != "" }
 
+// UserMCPEnabled reports whether user-defined MCP servers can be registered:
+// a valid 32-byte encryption key AND at least one allowlisted host.
+func (c Config) UserMCPEnabled() bool {
+	return len(c.EncryptionKey) == 32 && len(c.UserMCPAllowedHosts) > 0
+}
+
 // Validate checks required runtime configuration. Call before starting the server.
 func (c Config) Validate() error {
 	if c.DatabaseURL == "" {
@@ -181,6 +198,9 @@ func (c Config) Validate() error {
 	}
 	if c.IsProd() && c.CSRFSecret == "" {
 		return errors.New("KADENCE_CSRF_SECRET is required in production")
+	}
+	if c.IsProd() && len(c.UserMCPAllowedHosts) > 0 && len(c.EncryptionKey) != 32 {
+		return errors.New("KADENCE_ENCRYPTION_KEY must be a base64-encoded 32-byte key when KADENCE_USER_MCP_ALLOWED_HOSTS is set")
 	}
 	return nil
 }
@@ -250,6 +270,30 @@ func envBoolOr(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+// decodeKey base64-decodes an encryption key; returns nil on empty/invalid input.
+func decodeKey(s string) []byte {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// splitCSV splits a comma-separated env value, trimming spaces and dropping empties.
+func splitCSV(s string) []string {
+	var out []string
+	for part := range strings.SplitSeq(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func loadTrustedOrigins(raw string) []string {
