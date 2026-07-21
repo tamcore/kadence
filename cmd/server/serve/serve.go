@@ -82,17 +82,17 @@ func Run() error {
 		var rag *chat.RAG
 		if cfg.RAGEnabled() {
 			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel)
-			rag = chat.NewRAG(embedder, store.NewChunkRepository(pool), cfg.RAGTopK)
+			rag = chat.NewRAG(embedder, store.NewChunkRepository(pool, cfg.EmbedModel), cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
 
 			docsRepo := store.NewDocumentRepository(pool)
 			extractors := buildIngestExtractors(cfg)
 			ingestSvc := ingest.NewService(
 				extractors,
-				embedder, docsRepo, store.NewChunkRepository(pool), cfg.IngestChunkChars,
+				embedder, docsRepo, store.NewChunkRepository(pool, cfg.EmbedModel), cfg.IngestChunkChars,
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
-			deps.Context = handlers.NewContext(store.NewChunkRepository(pool), docsRepo)
+			deps.Context = handlers.NewContext(store.NewChunkRepository(pool, cfg.EmbedModel), docsRepo)
 		}
 		mcpHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)
 		if err != nil {

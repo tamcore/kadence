@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pgvector/pgvector-go"
+
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
 	"github.com/tamcore/kadence/internal/store/testutil"
@@ -13,7 +15,7 @@ func TestChunkSearchTopKOrdersByCosine(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
-	chunks := store.NewChunkRepository(pool)
+	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 
@@ -34,7 +36,7 @@ func TestChunkScopedToUserPlusPublic(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
-	chunks := store.NewChunkRepository(pool)
+	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
 	owner, _ := users.Create(ctx, model.User{Username: "o", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -53,7 +55,7 @@ func TestChunkCascadeOnConversationDelete(t *testing.T) {
 	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
-	chunks := store.NewChunkRepository(pool)
+	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, u.ID, "chat")
@@ -73,7 +75,7 @@ func TestListContentForUserReturnsOwnAndPublicNotOthersPrivate(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
-	chunks := store.NewChunkRepository(pool)
+	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
 	userA, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	userB, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -101,7 +103,7 @@ func TestSearchContentForUserFiltersByContent(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
-	chunks := store.NewChunkRepository(pool)
+	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
 	userA, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	userB, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -116,5 +118,35 @@ func TestSearchContentForUserFiltersByContent(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Content != "contains the search term here" {
 		t.Fatalf("expected only user A's matching chunk, got %+v", got)
+	}
+}
+
+func TestChunkRepository_SearchTopK_FiltersByEmbeddingModel(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	ctx := context.Background()
+	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+
+	repo := store.NewChunkRepository(pool, "m1")
+	if err := repo.Insert(ctx, model.Chunk{
+		UserID: &u.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "hello current",
+	}, []float32{1, 0, 0}); err != nil {
+		t.Fatalf("insert current: %v", err)
+	}
+	// A row from a different model with a different dimension.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO chunks (user_id, scope, source_kind, content, embedding, embedding_model)
+		 VALUES ($1,'private','message','old', $2, 'm0')`,
+		u.ID, pgvector.NewVector([]float32{1, 0, 0, 0})); err != nil {
+		t.Fatalf("insert foreign: %v", err)
+	}
+
+	got, err := repo.SearchTopK(ctx, u.ID, []float32{1, 0, 0}, 10)
+	if err != nil {
+		t.Fatalf("SearchTopK: %v", err)
+	}
+	if len(got) != 1 || got[0].Content != "hello current" {
+		t.Fatalf("got %#v, want only the m1 chunk", got)
 	}
 }

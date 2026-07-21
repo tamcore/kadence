@@ -12,19 +12,26 @@ import (
 )
 
 // ChunkRepository accesses the chunks (embeddings) table.
-type ChunkRepository struct{ pool *pgxpool.Pool }
-
-// NewChunkRepository returns a ChunkRepository.
-func NewChunkRepository(pool *pgxpool.Pool) *ChunkRepository {
-	return &ChunkRepository{pool: pool}
+type ChunkRepository struct {
+	pool           *pgxpool.Pool
+	embeddingModel string
 }
 
-// Insert stores a chunk with its embedding.
+// NewChunkRepository returns a ChunkRepository that stamps and filters
+// chunks by embeddingModel, so a future embedding-model change can re-index
+// instead of wiping.
+func NewChunkRepository(pool *pgxpool.Pool, embeddingModel string) *ChunkRepository {
+	return &ChunkRepository{pool: pool, embeddingModel: embeddingModel}
+}
+
+// Insert stores a chunk with its embedding, tagged with the repository's
+// embedding model.
 func (r *ChunkRepository) Insert(ctx context.Context, c model.Chunk, embedding []float32) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO chunks (user_id, conversation_id, document_id, scope, source_kind, source_id, content, embedding)
-		 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8)`,
-		c.UserID, c.ConversationID, c.DocumentID, c.Scope, c.SourceKind, c.SourceID, c.Content, pgvector.NewVector(embedding))
+		`INSERT INTO chunks (user_id, conversation_id, document_id, scope, source_kind, source_id, content, embedding, embedding_model)
+		 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)`,
+		c.UserID, c.ConversationID, c.DocumentID, c.Scope, c.SourceKind, c.SourceID, c.Content,
+		pgvector.NewVector(embedding), r.embeddingModel)
 	if err != nil {
 		return fmt.Errorf("insert chunk: %w", err)
 	}
@@ -32,15 +39,16 @@ func (r *ChunkRepository) Insert(ctx context.Context, c model.Chunk, embedding [
 }
 
 // SearchTopK returns the k chunks nearest to the query embedding (cosine),
-// restricted to the user's own chunks plus any public chunks.
+// restricted to the user's own chunks plus any public chunks, and further
+// restricted to chunks tagged with the repository's embedding model.
 func (r *ChunkRepository) SearchTopK(ctx context.Context, userID int64, embedding []float32, k int) ([]model.Chunk, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, user_id, conversation_id::text, document_id, scope, source_kind, source_id, content, created_at
 		 FROM chunks
-		 WHERE user_id = $1 OR scope = 'public'
+		 WHERE (user_id = $1 OR scope = 'public') AND embedding_model = $4
 		 ORDER BY embedding <=> $2
 		 LIMIT $3`,
-		userID, pgvector.NewVector(embedding), k)
+		userID, pgvector.NewVector(embedding), k, r.embeddingModel)
 	if err != nil {
 		return nil, fmt.Errorf("search chunks: %w", err)
 	}
