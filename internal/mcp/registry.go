@@ -111,6 +111,34 @@ func (r *Registry) Call(ctx context.Context, username, toolName, argsJSON string
 	return client.CallTool(ctx, realTool, argsJSON)
 }
 
+// Servers returns a copy of the configured servers.
+func (r *Registry) Servers() []Server {
+	out := make([]Server, len(r.servers))
+	copy(out, r.servers)
+	return out
+}
+
+// Probe connects to s and lists its tools, returning only those allowed by
+// the server's TOOLS filter (matching what ToolsFor/Call actually expose).
+// Used by the health poller; reuses the cached client.
+func (r *Registry) Probe(ctx context.Context, s Server) ([]ToolInfo, error) {
+	client, err := r.clientFor(ctx, s)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: probe connect %s/%s: %w", s.Name, s.Scope, err)
+	}
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: probe list tools %s/%s: %w", s.Name, s.Scope, err)
+	}
+	allowed := make([]ToolInfo, 0, len(tools))
+	for _, t := range tools {
+		if s.allowsTool(t.Name) {
+			allowed = append(allowed, t)
+		}
+	}
+	return allowed, nil
+}
+
 // allowsTool reports whether toolName (unprefixed) passes this server's TOOLS
 // filter. No patterns configured → all tools allowed. A malformed pattern is
 // skipped (never panics).

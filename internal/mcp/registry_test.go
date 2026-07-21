@@ -13,6 +13,7 @@ import (
 const (
 	testGarminName       = "GARMIN"
 	testUserPhilippScope = userScopePrefix + "philipp"
+	testGetToolsPattern  = "get_*"
 )
 
 // anonymizedActivitiesFixture is modeled on a real garmin_mcp get_activities
@@ -174,7 +175,7 @@ func TestRegistry_ToolsForFiltersByTools(t *testing.T) {
 			Scope:     scopeGlobal,
 			URL:       ts.URL,
 			Transport: transportStreamableHTTP,
-			Tools:     []string{"get_*"},
+			Tools:     []string{testGetToolsPattern},
 		},
 	}, nil)
 
@@ -196,6 +197,44 @@ func TestRegistry_ToolsForFiltersByTools(t *testing.T) {
 	}
 }
 
+func TestRegistry_ServersAndProbe(t *testing.T) {
+	ts := newFakeGarminServer(t)
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{s}, nil)
+
+	if got := reg.Servers(); len(got) != 1 || got[0].Name != testGarminName {
+		t.Fatalf("Servers() = %#v, want one %s server", got, testGarminName)
+	}
+
+	tools, err := reg.Probe(t.Context(), s)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("Probe returned no tools, want the fake server's tools")
+	}
+}
+
+func TestRegistry_ProbeFiltersByTools(t *testing.T) {
+	ts := newFakeGarminServerWithWorkouts(t)
+	s := Server{
+		Name:      testGarminName,
+		Scope:     scopeGlobal,
+		URL:       ts.URL,
+		Transport: transportStreamableHTTP,
+		Tools:     []string{testGetToolsPattern},
+	}
+	reg := NewRegistry([]Server{s}, nil)
+
+	tools, err := reg.Probe(t.Context(), s)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "get_activities" {
+		t.Fatalf("Probe() = %+v, want only get_activities", tools)
+	}
+}
+
 func TestRegistry_CallRejectsFilteredOutTool(t *testing.T) {
 	ts := newFakeGarminServerWithWorkouts(t)
 
@@ -205,7 +244,7 @@ func TestRegistry_CallRejectsFilteredOutTool(t *testing.T) {
 			Scope:     scopeGlobal,
 			URL:       ts.URL,
 			Transport: transportStreamableHTTP,
-			Tools:     []string{"get_*"},
+			Tools:     []string{testGetToolsPattern},
 		},
 	}, nil)
 
