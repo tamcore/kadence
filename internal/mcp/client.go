@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -45,14 +46,17 @@ type Client interface {
 
 // NewClient builds and initializes an exported MCP client for a single
 // remote server, reusing the same streamable-http/sse transport and
-// basic-auth plumbing as the internal registry client.
-func NewClient(ctx context.Context, url, transport, authUser, authPass string) (Client, error) {
+// basic-auth plumbing as the internal registry client. httpClient, if
+// non-nil (e.g. from HTTPClientWithCA), is used for the transport instead of
+// mcp-go's default client — used to verify the server's TLS cert against a
+// custom CA. Pass nil to preserve today's behavior.
+func NewClient(ctx context.Context, url, transport, authUser, authPass string, httpClient *http.Client) (Client, error) {
 	return newClient(ctx, Server{
 		URL:       url,
 		Transport: transport,
 		AuthUser:  authUser,
 		AuthPass:  authPass,
-	})
+	}, httpClient)
 }
 
 // realMCPClient wraps a mark3labs/mcp-go client over a network transport
@@ -64,9 +68,11 @@ type realMCPClient struct {
 // newClient builds and initializes a real MCP client for the given server
 // definition. It picks the transport (streamable-http or sse), applies
 // HTTP Basic auth via a header option when credentials are configured, and
-// performs the MCP initialize handshake.
-func newClient(ctx context.Context, s Server) (mcpClient, error) {
-	c, err := newTransportClient(s)
+// performs the MCP initialize handshake. httpClient, if non-nil, is used for
+// the underlying transport instead of mcp-go's default client (see
+// newTransportClient).
+func newClient(ctx context.Context, s Server, httpClient *http.Client) (mcpClient, error) {
+	c, err := newTransportClient(s, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -87,8 +93,11 @@ func newClient(ctx context.Context, s Server) (mcpClient, error) {
 }
 
 // newTransportClient constructs the mcp-go client for the server's
-// configured transport, without starting or initializing it.
-func newTransportClient(s Server) (*mcpclient.Client, error) {
+// configured transport, without starting or initializing it. httpClient, if
+// non-nil, is applied as the transport's underlying HTTP client (used to
+// verify HTTPS MCP servers' certs against a custom CA); nil leaves mcp-go's
+// default client in place, preserving today's behavior.
+func newTransportClient(s Server, httpClient *http.Client) (*mcpclient.Client, error) {
 	headers := basicAuthHeaders(s)
 
 	switch s.Transport {
@@ -96,6 +105,9 @@ func newTransportClient(s Server) (*mcpclient.Client, error) {
 		opts := []transport.StreamableHTTPCOption{}
 		if len(headers) > 0 {
 			opts = append(opts, transport.WithHTTPHeaders(headers))
+		}
+		if httpClient != nil {
+			opts = append(opts, transport.WithHTTPBasicClient(httpClient))
 		}
 		c, err := mcpclient.NewStreamableHttpClient(s.URL, opts...)
 		if err != nil {
@@ -106,6 +118,9 @@ func newTransportClient(s Server) (*mcpclient.Client, error) {
 		opts := []transport.ClientOption{}
 		if len(headers) > 0 {
 			opts = append(opts, transport.WithHeaders(headers))
+		}
+		if httpClient != nil {
+			opts = append(opts, transport.WithHTTPClient(httpClient))
 		}
 		c, err := mcpclient.NewSSEMCPClient(s.URL, opts...)
 		if err != nil {

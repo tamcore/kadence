@@ -94,11 +94,16 @@ func Run() error {
 			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
 			deps.Context = handlers.NewContext(store.NewChunkRepository(pool), docsRepo)
 		}
+		mcpHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)
+		if err != nil {
+			return fmt.Errorf("mcp CA client: %w", err)
+		}
+
 		var mcpTools chat.MCPTools // nil interface = disabled
 		if servers, sErr := mcp.ServersFromEnv(os.Environ()); sErr != nil {
 			slog.Warn("failed to parse MCP env, continuing without tools", "err", sErr)
 		} else if len(servers) > 0 {
-			mcpTools = mcp.NewRegistry(servers)
+			mcpTools = mcp.NewRegistry(servers, mcpHTTPClient)
 			slog.Info("mcp enabled", "servers", len(servers))
 		}
 		skills, err := skill.Load()
@@ -168,8 +173,15 @@ func buildIngestExtractors(cfg config.Config) []ingest.Extractor {
 		return []ingest.Extractor{pdf}
 	}
 
+	mdHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)
+	if err != nil {
+		slog.Warn("markitdown extractor unavailable (CA client), falling back to PDF-only ingestion",
+			"url", cfg.MarkitdownURL, "err", err)
+		return []ingest.Extractor{pdf}
+	}
+
 	md, err := ingest.NewMarkitdownExtractor(
-		cfg.MarkitdownURL, cfg.MarkitdownAuthUser, cfg.MarkitdownAuthPass, cfg.MarkitdownTransport,
+		cfg.MarkitdownURL, cfg.MarkitdownAuthUser, cfg.MarkitdownAuthPass, cfg.MarkitdownTransport, mdHTTPClient,
 	)
 	if err != nil {
 		slog.Warn("markitdown extractor unavailable, falling back to PDF-only ingestion",

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/tamcore/kadence/internal/mcp"
@@ -36,10 +37,11 @@ var markitdownMimePrefixes = []string{
 // formats, ...) to markdown by delegating to a remote markitdown-mcp server
 // over MCP, via its single convert_to_markdown(uri) tool.
 type MarkitdownExtractor struct {
-	url       string
-	transport string
-	authUser  string
-	authPass  string
+	url        string
+	transport  string
+	authUser   string
+	authPass   string
+	httpClient *http.Client // optional CA-verifying client; nil = mcp-go default
 }
 
 // NewMarkitdownExtractor builds a MarkitdownExtractor targeting the
@@ -47,12 +49,17 @@ type MarkitdownExtractor struct {
 // or "sse"), with optional HTTP Basic auth credentials. It does not connect;
 // each Extract dials a fresh client, so app startup does not depend on the
 // markitdown server being ready and a server restart cannot leave the
-// extractor wedged to a dead connection.
-func NewMarkitdownExtractor(url, authUser, authPass, transport string) (*MarkitdownExtractor, error) {
+// extractor wedged to a dead connection. httpClient, if non-nil (e.g. from
+// mcp.HTTPClientWithCA), is used for the MCP transport instead of mcp-go's
+// default client — used to verify the markitdown server's TLS cert against
+// a custom CA. Pass nil to preserve today's behavior.
+func NewMarkitdownExtractor(url, authUser, authPass, transport string, httpClient *http.Client) (*MarkitdownExtractor, error) {
 	if url == "" {
 		return nil, fmt.Errorf("markitdown: url is required")
 	}
-	return &MarkitdownExtractor{url: url, transport: transport, authUser: authUser, authPass: authPass}, nil
+	return &MarkitdownExtractor{
+		url: url, transport: transport, authUser: authUser, authPass: authPass, httpClient: httpClient,
+	}, nil
 }
 
 // CanHandle reports whether mime is one markitdown-mcp is expected to
@@ -76,7 +83,7 @@ func (e *MarkitdownExtractor) Extract(ctx context.Context, data []byte, mime str
 		return Result{}, fmt.Errorf("markitdown: marshal arguments: %w", err)
 	}
 
-	client, err := mcp.NewClient(ctx, e.url, e.transport, e.authUser, e.authPass)
+	client, err := mcp.NewClient(ctx, e.url, e.transport, e.authUser, e.authPass, e.httpClient)
 	if err != nil {
 		return Result{}, fmt.Errorf("markitdown: connect to %s: %w", e.url, err)
 	}
