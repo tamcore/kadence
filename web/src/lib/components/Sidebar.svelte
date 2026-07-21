@@ -78,6 +78,7 @@
 
 	<div class="footer">
 		{#if $currentUser}<span class="who">{$currentUser.username}</span>{/if}
+		<a href="/profile" class="profile-link" onclick={closeSidebar}>Profile</a>
 		<button class="logout" onclick={handleLogout}>Log out</button>
 	</div>
 </div>
@@ -175,6 +176,11 @@
 	}
 	.who {
 		color: var(--text-muted);
+		font-size: 0.9rem;
+	}
+	.profile-link {
+		color: var(--text);
+		text-decoration: none;
 		font-size: 0.9rem;
 	}
 	.logout {
