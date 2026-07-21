@@ -42,7 +42,10 @@ func Run() error {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.SlogLevel()})))
 
-	startupCtx, cancel := context.WithTimeout(context.Background(), startupTimeout)
+	rootCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	startupCtx, cancel := context.WithTimeout(rootCtx, startupTimeout)
 	defer cancel()
 
 	pool, err := store.Open(startupCtx, cfg.DatabaseURL)
@@ -86,7 +89,7 @@ func Run() error {
 			chunkRepo := store.NewChunkRepository(pool, cfg.EmbedModel)
 			rag = chat.NewRAG(embedder, chunkRepo, cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
-			go reindex.Run(context.Background(), chunkRepo, embedder.Embed, slog.Default())
+			go reindex.Run(rootCtx, chunkRepo, embedder.Embed, slog.Default())
 
 			docsRepo := store.NewDocumentRepository(pool)
 			extractors := buildIngestExtractors(cfg)
@@ -150,14 +153,11 @@ func Run() error {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
 	case err := <-errCh:
 		return err
-	case sig := <-stop:
-		slog.Info("shutdown signal received", "signal", sig.String())
+	case <-rootCtx.Done():
+		slog.Info("shutdown signal received")
 	}
 
 	shutdownCtx, cancel2 := context.WithTimeout(context.Background(), shutdownTimeout)
