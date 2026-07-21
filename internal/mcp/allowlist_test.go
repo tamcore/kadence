@@ -20,6 +20,17 @@ func TestHostAllowed(t *testing.T) {
 		{"https://evil.com/mcp", false},
 		{"http://a.example.io/mcp", false}, // must be https
 		{"://bad", false},                  // unparseable / no scheme
+
+		// SSRF wildcard dot-boundary regressions: "*.foo.io" must only match
+		// "foo.io" plus a dot, never a mere string suffix.
+		{"https://evilfoo.io/mcp", false}, // "evilfoo.io" has suffix "foo.io" but no dot boundary
+		{"https://xfoo.io/mcp", false},    // same class of suffix-without-dot attack
+		{"https://notfoo.io/mcp", false},  // same class of suffix-without-dot attack
+		{"https://a.b.foo.io/mcp", true},  // multi-label under the wildcard is allowed
+
+		// Userinfo trick: the real host is evil.com; url.Hostname() must ignore
+		// the userinfo component entirely.
+		{"https://a.example.io@evil.com/mcp", false},
 	}
 	for _, c := range cases {
 		err := mcp.HostAllowed(c.url, patterns)
