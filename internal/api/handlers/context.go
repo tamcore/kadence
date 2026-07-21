@@ -28,6 +28,7 @@ const (
 type contextChunks interface {
 	ListContentForUser(ctx context.Context, userID int64) ([]store.ChunkRef, error)
 	SearchContentForUser(ctx context.Context, userID int64, term string, limit int) ([]store.ChunkRef, error)
+	ReindexStatus(ctx context.Context) (stale, total int64, err error)
 }
 
 // contextDocs lists a user's own and public documents. Satisfied by
@@ -62,6 +63,12 @@ type overviewResponse struct {
 	ConversationChunkCount int                  `json:"conversationChunkCount"`
 	Documents              []contextDocumentDTO `json:"documents"`
 	TopTerms               []knowledge.Term     `json:"topTerms"`
+	Reindex                reindexStatusDTO     `json:"reindex"`
+}
+
+type reindexStatusDTO struct {
+	Stale int64 `json:"stale"`
+	Total int64 `json:"total"`
 }
 
 // Overview handles GET /api/context/overview: a summary of the caller's
@@ -107,12 +114,18 @@ func (c *Context) Overview(w http.ResponseWriter, r *http.Request) {
 		contents = append(contents, ref.Content)
 	}
 
+	stale, total, err := c.chunks.ReindexStatus(r.Context())
+	if err != nil {
+		slog.Error("reindex status", "err", err, "user_id", u.ID)
+	}
+
 	RespondJSON(w, http.StatusOK, overviewResponse{
 		DocumentCount:          len(own) + len(pub),
 		DocumentChunkCount:     documentChunkCount,
 		ConversationChunkCount: conversationChunkCount,
 		Documents:              documents,
 		TopTerms:               knowledge.TopTerms(contents, topTermCount),
+		Reindex:                reindexStatusDTO{Stale: stale, Total: total},
 	})
 }
 

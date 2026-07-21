@@ -17,12 +17,22 @@ import (
 const contextTestUserID = int64(42)
 
 type fakeContextChunks struct {
-	refs      []store.ChunkRef
-	searchErr error
+	refs             []store.ChunkRef
+	searchErr        error
+	reindexStale     int64
+	reindexTotal     int64
+	reindexStatusErr error
 }
 
 func (f *fakeContextChunks) ListContentForUser(_ context.Context, _ int64) ([]store.ChunkRef, error) {
 	return f.refs, nil
+}
+
+func (f *fakeContextChunks) ReindexStatus(_ context.Context) (int64, int64, error) {
+	if f.reindexStatusErr != nil {
+		return 0, 0, f.reindexStatusErr
+	}
+	return f.reindexStale, f.reindexTotal, nil
 }
 
 func (f *fakeContextChunks) SearchContentForUser(_ context.Context, _ int64, term string, limit int) ([]store.ChunkRef, error) {
@@ -120,6 +130,39 @@ func TestOverviewReturnsCountsAndTopTerms(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected 'widget' among top terms: %+v", body.Data.TopTerms)
+	}
+}
+
+func TestContext_Overview_IncludesReindexStatus(t *testing.T) {
+	chunks := &fakeContextChunks{reindexStale: 7, reindexTotal: 20}
+	docs := &fakeContextDocs{}
+	h := handlers.NewContext(chunks, docs)
+
+	req := withContextUser(httptest.NewRequest(http.MethodGet, "/api/context/overview", nil))
+	rec := httptest.NewRecorder()
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Data struct {
+			Reindex struct {
+				Stale int64 `json:"stale"`
+				Total int64 `json:"total"`
+			} `json:"reindex"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v, body=%s", err, rec.Body.String())
+	}
+
+	if body.Data.Reindex.Stale != 7 {
+		t.Fatalf("expected reindex.stale=7, got %d", body.Data.Reindex.Stale)
+	}
+	if body.Data.Reindex.Total != 20 {
+		t.Fatalf("expected reindex.total=20, got %d", body.Data.Reindex.Total)
 	}
 }
 
