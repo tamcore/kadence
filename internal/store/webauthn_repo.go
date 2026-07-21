@@ -11,7 +11,8 @@ import (
 	"github.com/tamcore/kadence/internal/model"
 )
 
-const webauthnCredCols = "id, public_id, user_id, credential_id, public_key, aaguid, sign_count, transports, name, backup_eligible, backup_state, created_at, last_used_at"
+// webauthnCredCols is the SQL column list for webauthn_credentials (not a credential value).
+const webauthnCredCols = "id, public_id, user_id, credential_id, public_key, aaguid, sign_count, transports, name, backup_eligible, backup_state, created_at, last_used_at" // #nosec G101
 
 // WebAuthnCredentialRepository stores registered passkeys.
 type WebAuthnCredentialRepository struct{ pool *pgxpool.Pool }
@@ -27,7 +28,7 @@ func scanWebAuthnCred(row pgx.Row) (model.WebAuthnCredential, error) {
 	err := row.Scan(&c.ID, &c.PublicID, &c.UserID, &c.CredentialID, &c.PublicKey,
 		&c.AAGUID, &signCount, &c.Transports, &c.Name, &c.BackupEligible, &c.BackupState,
 		&c.CreatedAt, &c.LastUsedAt)
-	c.SignCount = uint32(signCount)
+	c.SignCount = uint32(signCount) // #nosec G115 -- WebAuthn sign counter is uint32 by spec
 	return c, err
 }
 
