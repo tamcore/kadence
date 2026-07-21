@@ -187,7 +187,17 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	}
 }
 
-func (s *Service) systemPrompt() string {
+// unitPromptLine returns the system-prompt sentence telling the model which
+// units to use. Any value other than "imperial" (including empty/unknown)
+// falls back to metric.
+func unitPromptLine(unitSystem string) string {
+	if unitSystem == "imperial" {
+		return "The user prefers imperial units — report all distances in miles and paces/splits in min/mile."
+	}
+	return "The user prefers metric units — report all distances in kilometers and paces/splits in min/km."
+}
+
+func (s *Service) systemPrompt(unitSystem string) string {
 	base := defaultSystemPrompt
 	if s.cfg.SystemPrompt != "" {
 		base = s.cfg.SystemPrompt
@@ -197,12 +207,13 @@ func (s *Service) systemPrompt() string {
 	// rather than its training cutoff.
 	today := s.now()
 	return base + "\n\nToday's date is " + today.Format("Monday, 2006-01-02") +
-		". Use it to resolve relative dates and to choose date ranges when calling tools."
+		". Use it to resolve relative dates and to choose date ranges when calling tools." +
+		"\n\n" + unitPromptLine(unitSystem)
 }
 
 // Stream runs one chat turn: resolve/create the conversation, persist the user
 // message, stream the assistant reply (persisting it), emitting SSE events.
-func (s *Service) Stream(ctx context.Context, userID int64, username string, conversationID string, userText string, sink EventSink) error {
+func (s *Service) Stream(ctx context.Context, userID int64, username string, unitSystem string, conversationID string, userText string, sink EventSink) error {
 	if conversationID == "" {
 		title := userText
 		if len(title) > titleMaxLen {
@@ -238,7 +249,7 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, con
 		MaxTokens:   s.cfg.MaxTokens,
 		Temperature: s.cfg.Temperature,
 	}
-	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: s.systemPrompt()})
+	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: s.systemPrompt(unitSystem)})
 	for _, m := range history {
 		req.Messages = append(req.Messages, provider.Message{Role: m.Role, Content: m.Content})
 	}

@@ -22,7 +22,7 @@ var sseKeepaliveInterval = 15 * time.Second
 
 // ChatStreamer runs a streaming chat turn.
 type ChatStreamer interface {
-	Stream(ctx context.Context, userID int64, username string, conversationID string, text string, sink chat.EventSink) error
+	Stream(ctx context.Context, userID int64, username string, unitSystem string, conversationID string, text string, sink chat.EventSink) error
 }
 
 // ConvLister lists/gets/deletes conversations for a user.
@@ -122,7 +122,7 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
-	_ = h.svc.Stream(r.Context(), u.ID, u.Username, body.ConversationID, body.Message, sink)
+	_ = h.svc.Stream(r.Context(), u.ID, u.Username, u.UnitSystem, body.ConversationID, body.Message, sink)
 	// Signal the keepalive goroutine to stop and wait for it to exit before
 	// returning, so it can never write to w after the handler has returned.
 	close(done)
