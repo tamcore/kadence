@@ -40,27 +40,15 @@ func (f *fakeProfileUsers) UpdatePassword(_ context.Context, _ int64, _ string) 
 }
 
 type fakeProfileSessions struct {
-	deletedAll bool
-	created    bool
-	cur        model.Session
-	getErr     error
+	deleteOthersCalled bool
+	exceptID           string
+	deleteErr          error
 }
 
-func (f *fakeProfileSessions) GetByID(_ context.Context, _ string) (model.Session, error) {
-	if f.getErr != nil {
-		return model.Session{}, f.getErr
-	}
-	return f.cur, nil
-}
-
-func (f *fakeProfileSessions) DeleteAllByUser(_ context.Context, _ int64) error {
-	f.deletedAll = true
-	return nil
-}
-
-func (f *fakeProfileSessions) Create(_ context.Context, _ model.Session) error {
-	f.created = true
-	return nil
+func (f *fakeProfileSessions) DeleteOthersByUser(_ context.Context, _ int64, exceptID string) error {
+	f.deleteOthersCalled = true
+	f.exceptID = exceptID
+	return f.deleteErr
 }
 
 // doAuthedPatch issues an authenticated PATCH request against fn and returns the status code.
@@ -144,8 +132,11 @@ func TestProfile_ChangePassword(t *testing.T) {
 	}
 
 	body := doAuthedPostBodyWithCookie(t, h.ChangePassword, `{"currentPassword":"current-pw","newPassword":"longenough123","logoutOthers":true}`)
-	if !users.passwordUpdated || !sessions.deletedAll || !sessions.created {
-		t.Fatalf("expected pw update + revoke-others + recreate; users=%+v sessions=%+v", users, sessions)
+	if !users.passwordUpdated || !sessions.deleteOthersCalled {
+		t.Fatalf("expected pw update + revoke-others; users=%+v sessions=%+v", users, sessions)
+	}
+	if sessions.exceptID != "current-session-id" {
+		t.Fatalf("expected DeleteOthersByUser to keep the caller's current session id, got %q", sessions.exceptID)
 	}
 	if strings.Contains(body, "longenough123") {
 		t.Fatalf("new password leaked in response: %s", body)
@@ -158,22 +149,22 @@ func TestProfile_ChangePassword(t *testing.T) {
 	}
 }
 
-func TestProfile_ChangePassword_SessionLookupError_StillSucceeds(t *testing.T) {
+func TestProfile_ChangePassword_SessionOpError_StillSucceeds(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("current-pw"), bcrypt.DefaultCost)
 	users := &fakeProfileUsers{user: model.User{ID: 1, PasswordHash: string(hash)}}
-	sessions := &fakeProfileSessions{getErr: errors.New("session store unavailable")}
+	sessions := &fakeProfileSessions{deleteErr: errors.New("session store unavailable")}
 	h := handlers.NewProfile(users, sessions, config.Config{})
 
 	rec := doAuthedPostRaw(t, h.ChangePassword, `{"currentPassword":"current-pw","newPassword":"longenough123","logoutOthers":true}`)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200 (password already changed; session-recreate failure should be swallowed)", rec.Code)
+		t.Fatalf("status=%d want 200 (password already changed; session revoke failure should be swallowed)", rec.Code)
 	}
 	body := rec.Body.String()
 	if !users.passwordUpdated {
-		t.Fatal("expected password to be updated despite session lookup error")
+		t.Fatal("expected password to be updated despite session op error")
 	}
-	if !sessions.deletedAll || !sessions.created {
-		t.Fatalf("expected revoke-others + recreate to proceed despite GetByID error; sessions=%+v", sessions)
+	if !sessions.deleteOthersCalled {
+		t.Fatalf("expected DeleteOthersByUser to be attempted despite error; sessions=%+v", sessions)
 	}
 	if strings.Contains(body, "current-pw") || strings.Contains(body, "WRONG") {
 		t.Fatalf("current password leaked in response: %s", body)
@@ -208,8 +199,31 @@ func TestProfile_ChangePassword_NoLogoutOthers_DoesNotRevoke(t *testing.T) {
 	if !users.passwordUpdated {
 		t.Fatal("expected password to be updated")
 	}
-	if sessions.deletedAll || sessions.created {
+	if sessions.deleteOthersCalled {
 		t.Fatalf("did not expect session revocation when logoutOthers=false; sessions=%+v", sessions)
+	}
+}
+
+func TestProfile_ChangePassword_LogoutOthers_NoCookie_SkipsRevoke(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("current-pw"), bcrypt.DefaultCost)
+	users := &fakeProfileUsers{user: model.User{ID: 1, PasswordHash: string(hash)}}
+	sessions := &fakeProfileSessions{}
+	h := handlers.NewProfile(users, sessions, config.Config{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/profile/password", strings.NewReader(
+		`{"currentPassword":"current-pw","newPassword":"longenough123","logoutOthers":true}`))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: testUsername}))
+	rec := httptest.NewRecorder()
+	h.ChangePassword(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200", rec.Code)
+	}
+	if !users.passwordUpdated {
+		t.Fatal("expected password to be updated")
+	}
+	if sessions.deleteOthersCalled {
+		t.Fatalf("did not expect DeleteOthersByUser without a session cookie; sessions=%+v", sessions)
 	}
 }
 

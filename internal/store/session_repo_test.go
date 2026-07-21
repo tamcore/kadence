@@ -77,3 +77,35 @@ func TestSessionDeleteAllByUser(t *testing.T) {
 		t.Fatalf("s1 err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestSessionDeleteOthersByUser(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+	ctx := context.Background()
+	u := newUser(t, users, "dave")
+	other := newUser(t, users, "erin")
+
+	_ = sessions.Create(ctx, model.Session{ID: "keep", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
+	_ = sessions.Create(ctx, model.Session{ID: "drop1", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
+	_ = sessions.Create(ctx, model.Session{ID: "drop2", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
+	_ = sessions.Create(ctx, model.Session{ID: "other-user-sess", UserID: other.ID, ExpiresAt: time.Now().Add(time.Hour)})
+
+	if err := sessions.DeleteOthersByUser(ctx, u.ID, "keep"); err != nil {
+		t.Fatalf("DeleteOthersByUser: %v", err)
+	}
+
+	if _, err := sessions.GetByID(ctx, "keep"); err != nil {
+		t.Fatalf("keep session should still exist: %v", err)
+	}
+	if _, err := sessions.GetByID(ctx, "drop1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("drop1 err = %v, want ErrNotFound", err)
+	}
+	if _, err := sessions.GetByID(ctx, "drop2"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("drop2 err = %v, want ErrNotFound", err)
+	}
+	if _, err := sessions.GetByID(ctx, "other-user-sess"); err != nil {
+		t.Fatalf("other user's session should be untouched: %v", err)
+	}
+}

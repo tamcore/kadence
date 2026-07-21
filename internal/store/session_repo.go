@@ -75,3 +75,13 @@ func (r *SessionRepository) DeleteAllByUser(ctx context.Context, userID int64) e
 	}
 	return nil
 }
+
+// DeleteOthersByUser removes every session for userID except exceptID,
+// leaving the caller's current session untouched.
+func (r *SessionRepository) DeleteOthersByUser(ctx context.Context, userID int64, exceptID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND id <> $2`, userID, exceptID)
+	if err != nil {
+		return fmt.Errorf("delete other sessions by user: %w", err)
+	}
+	return nil
+}
