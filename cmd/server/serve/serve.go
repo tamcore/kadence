@@ -18,6 +18,7 @@ import (
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/crypto"
 	"github.com/tamcore/kadence/internal/embed"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
@@ -106,16 +107,39 @@ func Run() error {
 		}
 
 		var mcpTools chat.MCPTools // nil interface = disabled
-		if servers, sErr := mcp.ServersFromEnv(os.Environ()); sErr != nil {
-			slog.Warn("failed to parse MCP env, continuing without tools", "err", sErr)
-		} else if len(servers) > 0 {
-			registry := mcp.NewRegistry(servers, mcpHTTPClient, nil)
+
+		var userSrc mcp.UserServerSource
+		var userRepo *store.UserServerRepo
+		if cfg.UserMCPEnabled() {
+			cipher, cErr := crypto.NewCipher(cfg.EncryptionKey)
+			if cErr != nil {
+				return fmt.Errorf("user mcp cipher: %w", cErr)
+			}
+			userRepo = store.NewUserServerRepo(pool, cipher)
+			userSrc = userRepo
+		}
+
+		servers, sErr := mcp.ServersFromEnv(os.Environ())
+		if sErr != nil {
+			slog.Warn("failed to parse MCP env, continuing without env tools", "err", sErr)
+		}
+		if len(servers) > 0 || userSrc != nil {
+			registry := mcp.NewRegistry(servers, mcpHTTPClient, userSrc)
 			mcpTools = registry
-			slog.Info("mcp enabled", "servers", len(servers))
+			slog.Info("mcp enabled", "env_servers", len(servers), "user_mcp", userSrc != nil)
 
 			poller := mcp.NewHealthPoller(registry, mcp.DefaultHealthInterval)
 			go poller.Run(rootCtx)
-			deps.MCP = handlers.NewMCP(poller)
+
+			// userRepo is a *store.UserServerRepo; passed as nil explicitly
+			// when unset to avoid handing NewMCP a non-nil interface wrapping
+			// a nil pointer (which would make h.store != nil checks pass
+			// incorrectly).
+			if userRepo != nil {
+				deps.MCP = handlers.NewMCP(poller, userRepo, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled())
+			} else {
+				deps.MCP = handlers.NewMCP(poller, nil, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled())
+			}
 		}
 		skills, err := skill.Load()
 		if err != nil {
