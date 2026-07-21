@@ -26,6 +26,7 @@ import (
 	"github.com/tamcore/kadence/internal/reindex"
 	"github.com/tamcore/kadence/internal/secret"
 	"github.com/tamcore/kadence/internal/store"
+	"github.com/tamcore/kadence/internal/webauthn"
 )
 
 const (
@@ -69,6 +70,23 @@ func Run() error {
 	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
 	deps.Profile = handlers.NewProfile(users, sessions, cfg)
 	deps.SessionsAPI = handlers.NewSessions(sessions)
+
+	webauthnCreds := store.NewWebAuthnCredentialRepository(pool)
+	var waSvc *webauthn.Service
+	var waCipher *crypto.Cipher
+	if cfg.WebAuthnEnabled() {
+		s, wErr := webauthn.NewService(cfg)
+		if wErr != nil {
+			return fmt.Errorf("webauthn service: %w", wErr)
+		}
+		waSvc = s
+		c, cErr := crypto.NewCipher(cfg.EncryptionKey)
+		if cErr != nil {
+			return fmt.Errorf("webauthn cipher: %w", cErr)
+		}
+		waCipher = c
+	}
+	deps.WebAuthn = handlers.NewWebAuthn(waSvc, webauthnCreds, users, sessions, waCipher, cfg)
 
 	if cfg.ChatEnabled() {
 		convs := store.NewConversationRepository(pool)
