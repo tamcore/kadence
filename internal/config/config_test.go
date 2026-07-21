@@ -365,6 +365,23 @@ func TestUserMCPDisabledWithWrongKeyLength(t *testing.T) {
 	}
 }
 
+func TestLoad_WebAuthnRPID(t *testing.T) {
+	t.Setenv("KADENCE_WEBAUTHN_RP_ID", "  kadence.example.com  ")
+	cfg := Load()
+	if cfg.WebAuthnRPID != "kadence.example.com" {
+		t.Fatalf("WebAuthnRPID = %q, want trimmed kadence.example.com", cfg.WebAuthnRPID)
+	}
+	if !cfg.WebAuthnEnabled() {
+		t.Fatal("WebAuthnEnabled() = false, want true when RP ID set")
+	}
+}
+
+func TestWebAuthnEnabled_EmptyIsDisabled(t *testing.T) {
+	if (Config{}).WebAuthnEnabled() {
+		t.Fatal("empty RP ID must be disabled")
+	}
+}
+
 func TestSlogLevelMapping(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug": slog.LevelDebug,
