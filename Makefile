@@ -67,13 +67,16 @@ dev-deploy-k8s: ## Build dev image, push to $(IMAGE_REGISTRY), deploy to K8s (ne
 	@test -f charts/kadence/values-dev.yaml || { echo "charts/kadence/values-dev.yaml missing (gitignored; copy from values-dev.yaml.example)"; exit 1; }
 	docker build -t $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG) -f Dockerfile.dev .
 	docker push $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
-	# No pre-delete: helm upgrade reconciles in place. The app rolls because
-	# IMAGE_TAG is fresh each run; unchanged sidecars (markitdown, MCP servers)
-	# are left untouched instead of being cold-restarted every deploy.
-	helm upgrade --install kadence ./charts/kadence $(_HELM_CTX) -n kadence --create-namespace \
+	# Render + kubectl apply (not helm install/upgrade): avoids helm's release
+	# state and server-side-apply field-ownership conflicts (e.g. an out-of-band
+	# `kubectl` edit of a Deployment field would make `helm upgrade` fail the
+	# whole release). kubectl apply reconciles each manifest in place.
+	kubectl $(_KUBECTL_CTX) create namespace kadence --dry-run=client -o yaml | kubectl $(_KUBECTL_CTX) apply -f -
+	helm template kadence ./charts/kadence $(_HELM_CTX) -n kadence \
 		-f ./charts/kadence/values-dev.yaml \
 		--set image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
-		--set image.tag="$(IMAGE_TAG)"
+		--set image.tag="$(IMAGE_TAG)" \
+		| kubectl $(_KUBECTL_CTX) apply -f -
 
 clean: ## Remove build artifacts
 	rm -rf bin/ coverage.out dist/ web/build/
