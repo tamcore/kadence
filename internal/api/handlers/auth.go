@@ -74,26 +74,40 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := auth.NewSessionID()
+	pub, err := startSession(w, r, h.cfg, h.sessions, u, body.Remember)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
+	RespondJSON(w, http.StatusOK, pub)
+}
+
+// sessionCreator is the minimal session persistence needed to start a session.
+type sessionCreator interface {
+	Create(ctx context.Context, s model.Session) error
+}
+
+// startSession mints a session id, persists the session (capturing UA + IP),
+// sets the session cookie, and returns the public user view. Shared by
+// password login and passkey login.
+func startSession(w http.ResponseWriter, r *http.Request, cfg config.Config, sessions sessionCreator, u model.User, remember bool) (publicUser, error) {
+	id, err := auth.NewSessionID()
+	if err != nil {
+		return publicUser{}, err
+	}
 	ttl := defaultTTL
-	if body.Remember {
+	if remember {
 		ttl = rememberTTL
 	}
 	expiresAt := time.Now().Add(ttl)
-	if err := h.sessions.Create(r.Context(), model.Session{
-		ID: id, UserID: u.ID, RememberMe: body.Remember, ExpiresAt: expiresAt,
+	if err := sessions.Create(r.Context(), model.Session{
+		ID: id, UserID: u.ID, RememberMe: remember, ExpiresAt: expiresAt,
 		UserAgent: r.UserAgent(), IP: auth.ClientIP(r),
 	}); err != nil {
-		RespondError(w, http.StatusInternalServerError, "could not create session")
-		return
+		return publicUser{}, err
 	}
-
-	setSessionCookie(w, h.cfg, id, expiresAt)
-	RespondJSON(w, http.StatusOK, toPublic(u))
+	setSessionCookie(w, cfg, id, expiresAt)
+	return toPublic(u), nil
 }
 
 // setSessionCookie writes the session cookie with the exact name and
