@@ -38,6 +38,7 @@ type fakeUserStore struct {
 	created   bool
 	createErr error
 	deleteErr error
+	updated   bool
 	updateErr error
 	listRecs  []store.UserMCPRecord
 	listErr   error
@@ -52,6 +53,7 @@ func (f *fakeUserStore) Create(_ context.Context, _ int64, _ store.UserMCPInput)
 }
 
 func (f *fakeUserStore) Update(_ context.Context, _, _ int64, _ store.UserMCPInput) error {
+	f.updated = true
 	return f.updateErr
 }
 
@@ -98,6 +100,22 @@ func doAuthedDeleteParam(t *testing.T, fn http.HandlerFunc, role, paramName, par
 	rec := httptest.NewRecorder()
 	fn(rec, req)
 	return rec.Code
+}
+
+// doAuthedPutParam builds an authed (RoleUser) PUT request with a JSON body
+// and a chi "id" URL param attached, invokes fn, and returns the status code
+// and body.
+func doAuthedPutParam(t *testing.T, fn http.HandlerFunc, paramValue, body string) authedGetResult {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/api/mcp/"+paramValue, strings.NewReader(body))
+	ctx := auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: "u", Role: model.RoleUser})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", paramValue)
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, rctx)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	fn(rec, req)
+	return authedGetResult{Code: rec.Code, Body: rec.Body.String()}
 }
 
 // doAuthedGet builds an authed GET request for path, invokes fn, and returns
@@ -219,6 +237,66 @@ func TestMCP_Create_AllowlistAndDisabled(t *testing.T) {
 	if strings.Contains(body, `authPass`) || strings.Contains(body, `"p"`) {
 		t.Fatalf("create response leaked password: %s", body)
 	}
+}
+
+func TestMCP_Update_DisabledForbidden(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, false)
+	body := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse"}`
+	res := doAuthedPutParam(t, h.Update, "1", body)
+	if res.Code != 403 {
+		t.Fatalf("disabled update code=%d want 403", res.Code)
+	}
+	if us.updated {
+		t.Fatal("store.Update should not be called when feature disabled")
+	}
+}
+
+func TestMCP_Update_BadHostRejected(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true)
+	body := `{"name":"x","url":"https://evil.com/mcp","transport":"sse"}`
+	res := doAuthedPutParam(t, h.Update, "1", body)
+	if res.Code != 400 {
+		t.Fatalf("bad-host update code=%d want 400", res.Code)
+	}
+	if us.updated {
+		t.Fatal("store.Update should not be called when host is not allowlisted")
+	}
+}
+
+func TestMCP_Update_NotFound(t *testing.T) {
+	us := &fakeUserStore{updateErr: store.ErrNotFound}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true)
+	body := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse"}`
+	res := doAuthedPutParam(t, h.Update, "9", body)
+	if res.Code != 404 {
+		t.Fatalf("not-found update code=%d want 404", res.Code)
+	}
+}
+
+func TestMCP_Update_DuplicateName(t *testing.T) {
+	us := &fakeUserStore{updateErr: store.ErrDuplicateName}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true)
+	body := `{"name":"dup","url":"https://` + allowedTestHost + `/mcp","transport":"sse"}`
+	res := doAuthedPutParam(t, h.Update, "1", body)
+	if res.Code != 409 {
+		t.Fatalf("duplicate-name update code=%d want 409", res.Code)
+	}
+}
+
+func TestMCP_Update_Success_NoPasswordLeak(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true)
+	body := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse","authUser":"u","authPass":"secretpw"}`
+	res := doAuthedPutParam(t, h.Update, "1", body)
+	if res.Code != 200 {
+		t.Fatalf("success update code=%d want 200", res.Code)
+	}
+	if !us.updated {
+		t.Fatal("store.Update not called")
+	}
+	assertNotContains(t, res.Body, "secretpw", "authPass")
 }
 
 func TestMCP_DeleteOwnerScoped(t *testing.T) {
