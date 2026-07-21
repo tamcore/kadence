@@ -109,3 +109,52 @@ func TestSessionDeleteOthersByUser(t *testing.T) {
 		t.Fatalf("other user's session should be untouched: %v", err)
 	}
 }
+
+func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	repo := store.NewSessionRepository(pool)
+	ctx := context.Background()
+	uid := newUser(t, users, "frank").ID
+	other := newUser(t, users, "grace").ID
+
+	mk := func(id string) model.Session {
+		return model.Session{ID: id, UserID: uid, RememberMe: false, ExpiresAt: time.Now().Add(time.Hour), UserAgent: "UA-" + id, IP: "1.2.3.4"}
+	}
+	if err := repo.Create(ctx, mk("s1")); err != nil {
+		t.Fatalf("create s1: %v", err)
+	}
+	if err := repo.Create(ctx, mk("s2")); err != nil {
+		t.Fatalf("create s2: %v", err)
+	}
+	// touch s2 into the future so it sorts first + updates ip
+	if err := repo.Touch(ctx, "s2", "9.9.9.9", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	list, err := repo.ListByUser(ctx, uid)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("ListByUser len=%d err=%v", len(list), err)
+	}
+	if list[0].ID != "s2" {
+		t.Fatalf("order: want s2 first, got %s", list[0].ID)
+	}
+	if list[0].IP != "9.9.9.9" {
+		t.Fatalf("touch ip not applied: %q", list[0].IP)
+	}
+	if list[1].UserAgent != "UA-s1" || list[1].PublicID == "" {
+		t.Fatalf("fields: %#v", list[1])
+	}
+
+	// revoke by public_id, owner-scoped
+	if err := repo.DeleteByPublicIDForUser(ctx, list[1].PublicID, other); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-owner revoke err=%v want ErrNotFound", err)
+	}
+	if err := repo.DeleteByPublicIDForUser(ctx, list[1].PublicID, uid); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if l2, _ := repo.ListByUser(ctx, uid); len(l2) != 1 {
+		t.Fatalf("after revoke len=%d want 1", len(l2))
+	}
+}
