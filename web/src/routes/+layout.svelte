@@ -14,12 +14,14 @@
 
 	const MOBILE_BREAKPOINT_PX = 900;
 	const REINDEX_POLL_INTERVAL_MS = 10000;
+	const MCP_POLL_INTERVAL_MS = 10000;
 
 	let { children } = $props();
 	let checking = $state(true);
 	let reindex = $state({ stale: 0, total: 0 });
 	let mcp = $state({ unhealthy: 0, total: 0 });
 	let reindexTimer: ReturnType<typeof setInterval> | undefined;
+	let mcpTimer: ReturnType<typeof setInterval> | undefined;
 
 	function isPublic(path: string): boolean {
 		return path === '/login';
@@ -33,6 +35,13 @@
 		if (reindexTimer) {
 			clearInterval(reindexTimer);
 			reindexTimer = undefined;
+		}
+	}
+
+	function stopMcpPoll(): void {
+		if (mcpTimer) {
+			clearInterval(mcpTimer);
+			mcpTimer = undefined;
 		}
 	}
 
@@ -67,10 +76,8 @@
 			setAuth(user);
 			await refreshReindexStatus();
 			await refreshMcp();
-			reindexTimer = setInterval(() => {
-				refreshReindexStatus();
-				refreshMcp();
-			}, REINDEX_POLL_INTERVAL_MS);
+			reindexTimer = setInterval(refreshReindexStatus, REINDEX_POLL_INTERVAL_MS);
+			mcpTimer = setInterval(refreshMcp, MCP_POLL_INTERVAL_MS);
 		} catch (err) {
 			clearAuth();
 			if (err instanceof APIError && err.status === 401 && !isPublic(path)) {
@@ -81,7 +88,10 @@
 		}
 	});
 
-	onDestroy(() => stopReindexPoll());
+	onDestroy(() => {
+		stopReindexPoll();
+		stopMcpPoll();
+	});
 </script>
 
 <svelte:window onkeydown={closeSidebarOnEscape} />
