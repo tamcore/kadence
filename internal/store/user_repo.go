@@ -14,6 +14,10 @@ import (
 // ErrNotFound is returned when a repository lookup matches no row.
 var ErrNotFound = errors.New("not found")
 
+// ErrEmailTaken is returned when a profile update's email collides with
+// another user's email (unique constraint violation).
+var ErrEmailTaken = errors.New("store: email already in use")
+
 // UserRepository provides access to the users table.
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -26,7 +30,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 
 func scanUser(row pgx.Row) (model.User, error) {
 	var u model.User
-	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.User{}, ErrNotFound
 	}
@@ -36,7 +40,7 @@ func scanUser(row pgx.Row) (model.User, error) {
 	return u, nil
 }
 
-const userCols = "id, username, email, password_hash, role, created_at"
+const userCols = "id, username, email, password_hash, role, display_name, unit_system, created_at"
 
 // Create inserts a new user and returns it with ID and CreatedAt populated.
 func (r *UserRepository) Create(ctx context.Context, u model.User) (model.User, error) {
@@ -92,4 +96,27 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("count users: %w", err)
 	}
 	return n, nil
+}
+
+// UpdateProfile updates a user's display name, email, and unit system
+// preference. Returns ErrEmailTaken if email collides with another user.
+func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET display_name = $1, email = $2, unit_system = $3 WHERE id = $4`,
+		displayName, email, unitSystem, id)
+	if isUniqueViolation(err) {
+		return ErrEmailTaken
+	}
+	if err != nil {
+		return fmt.Errorf("update profile: %w", err)
+	}
+	return nil
+}
+
+// UpdatePassword updates a user's password hash.
+func (r *UserRepository) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	if _, err := r.pool.Exec(ctx, `UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, id); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
 }

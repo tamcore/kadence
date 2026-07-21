@@ -17,7 +17,7 @@ func TestUserRepositoryCreateAndGet(t *testing.T) {
 	ctx := context.Background()
 
 	created, err := repo.Create(ctx, model.User{
-		Username: "alice", Email: "alice@example.com",
+		Username: testAliceUsername, Email: "alice@example.com",
 		PasswordHash: "hash", Role: model.RoleAdmin,
 	})
 	if err != nil {
@@ -49,6 +49,40 @@ func TestUserRepositoryGetByUsernameNotFound(t *testing.T) {
 	_, err := repo.GetByUsername(context.Background(), "ghost")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	repo := store.NewUserRepository(pool)
+	ctx := context.Background()
+
+	a, err := repo.Create(ctx, model.User{Username: testAliceUsername, Email: "alice@x.io", PasswordHash: "h", Role: model.RoleUser})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	b, _ := repo.Create(ctx, model.User{Username: testBobUsername, Email: testEmailBob, PasswordHash: "h", Role: model.RoleUser})
+
+	if a.UnitSystem != model.UnitMetric || a.DisplayName != "" {
+		t.Fatalf("defaults: display=%q unit=%q", a.DisplayName, a.UnitSystem)
+	}
+	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", "newalice@x.io", model.UnitImperial); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	got, _ := repo.GetByID(ctx, a.ID)
+	if got.DisplayName != "Alice A" || got.Email != "newalice@x.io" || got.UnitSystem != model.UnitImperial {
+		t.Fatalf("after update: %#v", got)
+	}
+	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", b.Email, model.UnitImperial); !errors.Is(err, store.ErrEmailTaken) {
+		t.Fatalf("email collision err=%v want ErrEmailTaken", err)
+	}
+	if err := repo.UpdatePassword(ctx, a.ID, "newhash"); err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+	got, _ = repo.GetByID(ctx, a.ID)
+	if got.PasswordHash != "newhash" {
+		t.Fatalf("password not updated: %q", got.PasswordHash)
 	}
 }
 
