@@ -1,17 +1,22 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import '$lib/styles/app.css';
 	import { api, APIError } from '$lib/api/client';
+	import { getOverview } from '$lib/api/context';
 	import { clearAuth, setAuth } from '$lib/stores/auth';
 	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import ReindexStrip from '$lib/components/ReindexStrip.svelte';
 
 	const MOBILE_BREAKPOINT_PX = 900;
+	const REINDEX_POLL_INTERVAL_MS = 10000;
 
 	let { children } = $props();
 	let checking = $state(true);
+	let reindex = $state({ stale: 0, total: 0 });
+	let reindexTimer: ReturnType<typeof setInterval> | undefined;
 
 	function isPublic(path: string): boolean {
 		return path === '/login';
@@ -21,6 +26,23 @@
 		if (e.key === 'Escape' && $sidebarOpen) closeSidebar();
 	}
 
+	function stopReindexPoll(): void {
+		if (reindexTimer) {
+			clearInterval(reindexTimer);
+			reindexTimer = undefined;
+		}
+	}
+
+	async function refreshReindexStatus(): Promise<void> {
+		try {
+			const overview = await getOverview();
+			reindex = overview.reindex;
+			if (reindex.stale === 0) stopReindexPoll();
+		} catch {
+			// leave the strip hidden on failure
+		}
+	}
+
 	onMount(async () => {
 		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
 
@@ -28,6 +50,8 @@
 		try {
 			const user = await api.getCurrentUser();
 			setAuth(user);
+			await refreshReindexStatus();
+			reindexTimer = setInterval(refreshReindexStatus, REINDEX_POLL_INTERVAL_MS);
 		} catch (err) {
 			clearAuth();
 			if (err instanceof APIError && err.status === 401 && !isPublic(path)) {
@@ -37,6 +61,8 @@
 			checking = false;
 		}
 	});
+
+	onDestroy(() => stopReindexPoll());
 </script>
 
 <svelte:window onkeydown={closeSidebarOnEscape} />
@@ -46,6 +72,7 @@
 {:else if isPublic($page.url.pathname)}
 	{@render children()}
 {:else}
+	<ReindexStrip stale={reindex.stale} total={reindex.total} />
 	<div class="shell">
 		<div class="scrim" class:show={$sidebarOpen} onclick={closeSidebar} aria-hidden="true"></div>
 		<aside class="sidebar" class:open={$sidebarOpen}><Sidebar /></aside>

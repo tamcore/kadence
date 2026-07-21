@@ -25,6 +25,7 @@ export function setCsrfToken(v: string | null): void {
 }
 
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const REQUEST_TIMEOUT_MS = 15000;
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
 	const method = (options.method ?? 'GET').toUpperCase();
@@ -36,29 +37,36 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 		headers['X-CSRF-Token'] = csrfToken;
 	}
 
-	const resp = await fetch(`${API_BASE}${endpoint}`, {
-		...options,
-		method,
-		credentials: 'include',
-		headers
-	});
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	try {
+		const resp = await fetch(`${API_BASE}${endpoint}`, {
+			...options,
+			method,
+			credentials: 'include',
+			headers,
+			signal: controller.signal
+		});
 
-	const tok = resp.headers.get('X-CSRF-Token');
-	if (tok) setCsrfToken(tok);
+		const tok = resp.headers.get('X-CSRF-Token');
+		if (tok) setCsrfToken(tok);
 
-	let envelope: Envelope<T> | null = null;
-	if (resp.headers.get('content-length') !== '0' && resp.status !== 204) {
-		try {
-			envelope = (await resp.json()) as Envelope<T>;
-		} catch {
-			envelope = null;
+		let envelope: Envelope<T> | null = null;
+		if (resp.headers.get('content-length') !== '0' && resp.status !== 204) {
+			try {
+				envelope = (await resp.json()) as Envelope<T>;
+			} catch {
+				envelope = null;
+			}
 		}
-	}
 
-	if (!resp.ok) {
-		throw new APIError(resp.status, envelope?.error ?? `request failed (${resp.status})`);
+		if (!resp.ok) {
+			throw new APIError(resp.status, envelope?.error ?? `request failed (${resp.status})`);
+		}
+		return (envelope?.data as T) ?? (undefined as T);
+	} finally {
+		clearTimeout(timer);
 	}
-	return (envelope?.data as T) ?? (undefined as T);
 }
 
 export const api = {
