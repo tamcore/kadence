@@ -3,7 +3,9 @@ LDFLAGS := -s -w
 
 IMAGE_REGISTRY ?= ghcr.io/tamcore
 IMAGE_NAME     ?= kadence
-IMAGE_TAG      := $(if $(IMAGE_TAG),$(IMAGE_TAG),$(shell openssl rand -hex 8))   # single expansion (a recursive ?= re-runs openssl per reference → build/push/deploy tag mismatch); honors an env/CLI override
+# single expansion (a recursive ?= re-runs openssl per reference → build/push/deploy tag mismatch); honors an env/CLI override.
+# NB: keep the comment on its own line — a trailing `#` comment on a `:=` line leaks the whitespace before it into the value (invalid image tag).
+IMAGE_TAG      := $(if $(IMAGE_TAG),$(IMAGE_TAG),$(shell openssl rand -hex 8))
 KUBE_CONTEXT   ?=
 
 _HELM_CTX   = $(if $(KUBE_CONTEXT),--kube-context $(KUBE_CONTEXT),)
@@ -78,8 +80,8 @@ dev-deploy-k8s: ## Build dev image, push to $(IMAGE_REGISTRY), deploy to K8s (ne
 		--set image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
 		--set image.tag="$(IMAGE_TAG)" > $$T/all.yaml; \
 	python3 -c "import sys; d=open('$$T/all.yaml').read().split(chr(10)+'---'+chr(10)); i=[x for x in d if 'kind: Ingress' in x]; r=[x for x in d if 'kind: Ingress' not in x]; open('$$T/rest.yaml','w').write((chr(10)+'---'+chr(10)).join(r)); open('$$T/ingress.yaml','w').write((chr(10)+'---'+chr(10)).join(i))"; \
-	kubectl $(_KUBECTL_CTX) apply --server-side --force-conflicts -f $$T/rest.yaml; \
-	kubectl $(_KUBECTL_CTX) apply --server-side --force-conflicts -f $$T/ingress.yaml \
+	kubectl $(_KUBECTL_CTX) -n kadence apply --server-side --force-conflicts -f $$T/rest.yaml; \
+	kubectl $(_KUBECTL_CTX) -n kadence apply --server-side --force-conflicts -f $$T/ingress.yaml \
 		|| echo "note: ingress apply failed (usually the nginx-ingress admission webhook self-conflict on an unchanged ingress) — routing is unaffected; verify manually if the ingress spec changed"; \
 	rm -rf $$T
 
