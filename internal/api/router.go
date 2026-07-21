@@ -29,6 +29,7 @@ type Deps struct {
 	MCP         *handlers.MCP
 	Profile     *handlers.Profile
 	SessionsAPI *handlers.Sessions
+	WebAuthn    *handlers.WebAuthn
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -65,6 +66,14 @@ func mountAuth(r chi.Router, deps Deps) {
 
 	// Login: reachable without a prior CSRF token (no session yet), but behind LoadUser.
 	r.With(loadUser).Post("/api/session", authH.Login)
+
+	if deps.WebAuthn != nil {
+		// Passkey login: no prior session/CSRF token; the origin-bound WebAuthn
+		// assertion is the CSRF defense, mirroring password Login.
+		r.With(loadUser).Post("/api/webauthn/login/begin", deps.WebAuthn.LoginBegin)
+		r.With(loadUser).Post("/api/webauthn/login/finish", deps.WebAuthn.LoginFinish)
+		r.Get("/api/webauthn/enabled", deps.WebAuthn.Enabled)
+	}
 
 	// All other auth/admin routes: LoadUser + CSRF protection.
 	r.Group(func(r chi.Router) {
@@ -125,6 +134,14 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Get("/api/sessions", deps.SessionsAPI.List)
 			r.Delete("/api/sessions/{publicId}", deps.SessionsAPI.Revoke)
 			r.Post("/api/sessions/revoke-others", deps.SessionsAPI.RevokeOthers)
+		}
+
+		if deps.WebAuthn != nil {
+			r.Post("/api/webauthn/register/begin", deps.WebAuthn.RegisterBegin)
+			r.Post("/api/webauthn/register/finish", deps.WebAuthn.RegisterFinish)
+			r.Get("/api/webauthn/credentials", deps.WebAuthn.ListCredentials)
+			r.Patch("/api/webauthn/credentials/{publicId}", deps.WebAuthn.RenameCredential)
+			r.Delete("/api/webauthn/credentials/{publicId}", deps.WebAuthn.DeleteCredential)
 		}
 
 		r.Group(func(r chi.Router) {

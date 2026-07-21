@@ -185,3 +185,38 @@ func (f chatFakeProvider) StreamChatWithTools(ctx context.Context, req provider.
 	content, err := f.StreamChat(ctx, req, onToken)
 	return provider.StreamResult{Content: content}, err
 }
+
+func TestRouter_WebAuthnEnabledEndpoint(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+
+	waH := handlers.NewWebAuthn(nil, nil, nil, nil, nil, config.Config{})
+	srv := httptest.NewServer(api.NewRouter(api.Deps{
+		Users: users, Sessions: sessions, Config: config.Config{}, WebAuthn: waH,
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/webauthn/enabled")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"enabled":false`) {
+		t.Fatalf("body = %s", body)
+	}
+
+	resp2, err := http.Post(srv.URL+"/api/webauthn/register/begin", "application/json", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("register/begin code = %d, want 403 (CSRF-gated route reached without a token)", resp2.StatusCode)
+	}
+}
