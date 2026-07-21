@@ -86,6 +86,47 @@ func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 	}
 }
 
+func TestUserRepository_UpdateUserAndCountAdmins(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	repo := store.NewUserRepository(pool)
+	ctx := context.Background()
+
+	a, err := repo.Create(ctx, model.User{Username: testAliceUsername, Email: "alice@x.io", PasswordHash: "h", Role: model.RoleUser})
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	b, err := repo.Create(ctx, model.User{Username: testBobUsername, Email: testEmailBob, PasswordHash: "h", Role: model.RoleAdmin})
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+
+	if n, _ := repo.CountAdmins(ctx); n != 1 {
+		t.Fatalf("CountAdmins = %d, want 1", n)
+	}
+
+	updated, err := repo.UpdateUser(ctx, a.ID, "alice2", "alice2@x.io", model.RoleAdmin)
+	if err != nil {
+		t.Fatalf("UpdateUser: %v", err)
+	}
+	if updated.Username != "alice2" || updated.Email != "alice2@x.io" || !updated.IsAdmin() {
+		t.Fatalf("after update: %#v", updated)
+	}
+	if n, _ := repo.CountAdmins(ctx); n != 2 {
+		t.Fatalf("CountAdmins after promote = %d, want 2", n)
+	}
+
+	if _, err := repo.UpdateUser(ctx, a.ID, b.Username, "alice2@x.io", model.RoleUser); !errors.Is(err, store.ErrUsernameTaken) {
+		t.Fatalf("username collision err=%v want ErrUsernameTaken", err)
+	}
+	if _, err := repo.UpdateUser(ctx, a.ID, "alice2", b.Email, model.RoleUser); !errors.Is(err, store.ErrEmailTaken) {
+		t.Fatalf("email collision err=%v want ErrEmailTaken", err)
+	}
+	if _, err := repo.UpdateUser(ctx, 999999, "ghost", "ghost@x.io", model.RoleUser); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing id err=%v want ErrNotFound", err)
+	}
+}
+
 func TestUserRepositoryListDeleteCount(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

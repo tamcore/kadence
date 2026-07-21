@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 )
 
 // UsersRepo is the user persistence the admin handler needs.
@@ -18,6 +20,10 @@ type UsersRepo interface {
 	ListAll(ctx context.Context) ([]model.User, error)
 	Delete(ctx context.Context, id int64) error
 	Count(ctx context.Context) (int, error)
+	GetByID(ctx context.Context, id int64) (model.User, error)
+	UpdateUser(ctx context.Context, id int64, username, email, role string) (model.User, error)
+	UpdatePassword(ctx context.Context, id int64, passwordHash string) error
+	CountAdmins(ctx context.Context) (int, error)
 }
 
 // Users handles admin user management.
@@ -82,9 +88,126 @@ func (h *Users) Delete(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
+
+	// Guard against deleting the last remaining admin, which would leave nobody
+	// able to administer the instance. Mirrors the demotion guard in Update.
+	target, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		RespondError(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
+	if target.IsAdmin() {
+		admins, err := h.repo.CountAdmins(r.Context())
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "could not verify admin count")
+			return
+		}
+		if admins <= 1 {
+			RespondError(w, http.StatusBadRequest, "cannot delete the last remaining admin")
+			return
+		}
+	}
+
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not delete user")
 		return
 	}
 	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// Update edits an existing user's username, email, role, and optionally their
+// password (admin only). A blank password leaves the existing one unchanged.
+func (h *Users) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		RespondError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Role     string `json:"role"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.Username == "" || body.Email == "" {
+		RespondError(w, http.StatusBadRequest, "username and email are required")
+		return
+	}
+	if body.Role != model.RoleAdmin && body.Role != model.RoleUser {
+		RespondError(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
+		return
+	}
+
+	current, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		RespondError(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
+
+	// Guard against demoting the last remaining admin, which would leave nobody
+	// able to administer the instance.
+	if current.IsAdmin() && body.Role != model.RoleAdmin {
+		admins, err := h.repo.CountAdmins(r.Context())
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "could not verify admin count")
+			return
+		}
+		if admins <= 1 {
+			RespondError(w, http.StatusBadRequest, "cannot demote the last remaining admin")
+			return
+		}
+	}
+
+	// Hash the new password (if any) up front, but apply the core field update
+	// first: it carries the unique-constraint checks and is the likeliest to
+	// fail. Only touch the password once the rest of the edit has succeeded, so
+	// an error response never leaves a silently-changed password behind.
+	var newHash string
+	if body.Password != "" {
+		if len(body.Password) < minPasswordLen {
+			RespondError(w, http.StatusBadRequest, "password is too short")
+			return
+		}
+		h, err := auth.HashPassword(body.Password)
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "could not hash password")
+			return
+		}
+		newHash = h
+	}
+
+	updated, err := h.repo.UpdateUser(r.Context(), id, body.Username, body.Email, body.Role)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUsernameTaken):
+			RespondError(w, http.StatusBadRequest, "username already in use")
+		case errors.Is(err, store.ErrEmailTaken):
+			RespondError(w, http.StatusBadRequest, "email already in use")
+		case errors.Is(err, store.ErrNotFound):
+			RespondError(w, http.StatusNotFound, "user not found")
+		default:
+			RespondError(w, http.StatusInternalServerError, "could not update user")
+		}
+		return
+	}
+
+	if newHash != "" {
+		if err := h.repo.UpdatePassword(r.Context(), id, newHash); err != nil {
+			RespondError(w, http.StatusInternalServerError, "could not update password")
+			return
+		}
+	}
+	RespondJSON(w, http.StatusOK, toPublic(updated))
 }

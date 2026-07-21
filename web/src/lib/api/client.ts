@@ -77,6 +77,8 @@ export const api = {
 	listUsers: () => request<User[]>('/users'),
 	createUser: (u: { username: string; email: string; password: string; role: string }) =>
 		request<User>('/users', { method: 'POST', body: JSON.stringify(u) }),
+	updateUser: (id: number, u: { username: string; email: string; role: string; password?: string }) =>
+		request<User>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(u) }),
 	deleteUser: (id: number) => request<{ ok: boolean }>(`/users/${id}`, { method: 'DELETE' }),
 	get: <T,>(path: string) => request<T>(path),
 	post: <T,>(path: string, body: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body) }),

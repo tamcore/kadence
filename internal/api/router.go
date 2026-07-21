@@ -149,6 +149,7 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Use(middleware.RequireAdmin)
 			r.Get("/api/users", usersH.List)
 			r.Post("/api/users", usersH.Create)
+			r.Patch("/api/users/{id}", usersH.Update)
 			r.Delete("/api/users/{id}", usersH.Delete)
 
 			if deps.Documents != nil {
