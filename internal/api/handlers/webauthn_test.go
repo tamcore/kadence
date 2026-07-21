@@ -16,6 +16,8 @@ import (
 	"github.com/tamcore/kadence/internal/webauthn"
 )
 
+const waCeremonyCookie = "wa_ceremony"
+
 type fakeCreds struct {
 	list      []model.WebAuthnCredential
 	created   *model.WebAuthnCredential
@@ -111,7 +113,7 @@ func TestWebAuthn_RegisterBegin_SetsCeremonyCookie(t *testing.T) {
 	}
 	var found bool
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "wa_ceremony" && c.Value != "" {
+		if c.Name == waCeremonyCookie && c.Value != "" {
 			found = true
 		}
 	}
@@ -128,9 +130,50 @@ func TestWebAuthn_RegisterFinish_TamperedCeremony400(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/webauthn/register/finish?name=x", strings.NewReader("{}"))
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: testUsername, WebAuthnHandle: "h-1"}))
-	req.AddCookie(&http.Cookie{Name: "wa_ceremony", Value: "garbage"})
+	req.AddCookie(&http.Cookie{Name: waCeremonyCookie, Value: "garbage"})
 	h.RegisterFinish(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400 for tampered ceremony", rec.Code)
+	}
+}
+
+func TestWebAuthn_LoginBegin_SetsCeremonyAndOptions(t *testing.T) {
+	h := newWAHandler(t, enabledCfg(), &fakeCreds{}, &fakeWAUsers{}, &fakeSessCreator{})
+	rec := httptest.NewRecorder()
+	h.LoginBegin(rec, httptest.NewRequest(http.MethodPost, "/api/webauthn/login/begin", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var found bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == waCeremonyCookie && c.Value != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("wa_ceremony cookie not set on login begin")
+	}
+	if !strings.Contains(rec.Body.String(), "publicKey") {
+		t.Fatalf("expected assertion options, got %s", rec.Body.String())
+	}
+}
+
+func TestWebAuthn_LoginFinish_TamperedCeremony400(t *testing.T) {
+	h := newWAHandler(t, enabledCfg(), &fakeCreds{}, &fakeWAUsers{}, &fakeSessCreator{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/webauthn/login/finish", strings.NewReader("{}"))
+	req.AddCookie(&http.Cookie{Name: waCeremonyCookie, Value: "garbage"})
+	h.LoginFinish(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400", rec.Code)
+	}
+}
+
+func TestWebAuthn_LoginFinish_Disabled404(t *testing.T) {
+	h := newWAHandler(t, config.Config{}, &fakeCreds{}, &fakeWAUsers{}, &fakeSessCreator{})
+	rec := httptest.NewRecorder()
+	h.LoginFinish(rec, httptest.NewRequest(http.MethodPost, "/api/webauthn/login/finish", strings.NewReader("{}")))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404", rec.Code)
 	}
 }

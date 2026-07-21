@@ -136,3 +136,68 @@ func (h *WebAuthn) RegisterFinish(w http.ResponseWriter, r *http.Request) {
 	webauthn.ClearCeremony(w, h.cfg)
 	RespondJSON(w, http.StatusCreated, map[string]bool{"ok": true})
 }
+
+// LoginBegin starts a usernameless (discoverable) passkey assertion.
+func (h *WebAuthn) LoginBegin(w http.ResponseWriter, r *http.Request) {
+	if h.disabled(w) {
+		return
+	}
+	options, sess, err := h.svc.BeginDiscoverableLogin()
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not begin login")
+		return
+	}
+	if err := webauthn.WriteCeremony(w, h.cfg, h.cipher, sess); err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not start ceremony")
+		return
+	}
+	RespondJSON(w, http.StatusOK, options)
+}
+
+// LoginFinish verifies the assertion, resolves the user by handle, bumps the
+// sign counter, and starts a session (same path as password login).
+func (h *WebAuthn) LoginFinish(w http.ResponseWriter, r *http.Request) {
+	if h.disabled(w) {
+		return
+	}
+	sess, err := webauthn.ReadCeremony(r, h.cipher)
+	if err != nil {
+		RespondError(w, http.StatusBadRequest, "ceremony expired or invalid")
+		return
+	}
+
+	var matched model.User
+	handler := func(_, userHandle []byte) (gwa.User, error) {
+		u, err := h.users.GetByWebAuthnHandle(r.Context(), string(userHandle))
+		if err != nil {
+			return nil, err
+		}
+		waUser, err := h.userAdapter(r.Context(), u)
+		if err != nil {
+			return nil, err
+		}
+		matched = u
+		return waUser, nil
+	}
+
+	cred, err := h.svc.FinishDiscoverableLogin(handler, sess, r)
+	if err != nil {
+		webauthn.ClearCeremony(w, h.cfg)
+		RespondError(w, http.StatusUnauthorized, "could not verify passkey")
+		return
+	}
+	if cred.Authenticator.CloneWarning {
+		webauthn.ClearCeremony(w, h.cfg)
+		RespondError(w, http.StatusUnauthorized, "could not verify passkey")
+		return
+	}
+	_ = h.creds.UpdateSignCount(r.Context(), cred.ID, cred.Authenticator.SignCount, time.Now())
+	webauthn.ClearCeremony(w, h.cfg)
+
+	pub, err := startSession(w, r, h.cfg, h.sessions, matched, false)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	RespondJSON(w, http.StatusOK, pub)
+}
