@@ -54,3 +54,13 @@ func TestNewCipherRejectsBadKey(t *testing.T) {
 		t.Fatal("NewCipher accepted a 16-byte key")
 	}
 }
+
+func TestDecryptFailsOnTooShortBlob(t *testing.T) {
+	c, err := crypto.NewCipher(key32())
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	if _, err := c.Decrypt([]byte{1, 2, 3}); err == nil {
+		t.Fatal("decrypt of too-short blob (3 bytes < 12-byte nonce) succeeded")
+	}
+}
