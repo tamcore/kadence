@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"testing"
 )
@@ -265,6 +266,30 @@ func TestLoadTrustedOriginsWithWhitespace(t *testing.T) {
 		if v != want[i] {
 			t.Fatalf("TrustedOrigins[%d] = %q, want %q", i, v, want[i])
 		}
+	}
+}
+
+func TestUserMCPConfig(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	t.Setenv("KADENCE_ENCRYPTION_KEY", key)
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", " a.example.io , *.foo.io ,")
+	c := Load()
+	if len(c.EncryptionKey) != 32 {
+		t.Fatalf("EncryptionKey len=%d want 32", len(c.EncryptionKey))
+	}
+	if got := c.UserMCPAllowedHosts; len(got) != 2 || got[0] != "a.example.io" || got[1] != "*.foo.io" {
+		t.Fatalf("UserMCPAllowedHosts=%#v want [a.example.io *.foo.io]", got)
+	}
+	if !c.UserMCPEnabled() {
+		t.Fatal("UserMCPEnabled=false want true")
+	}
+}
+
+func TestUserMCPDisabledWhenNoKey(t *testing.T) {
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
+	c := Load()
+	if c.UserMCPEnabled() {
+		t.Fatal("UserMCPEnabled=true want false (no key)")
 	}
 }
 
