@@ -103,7 +103,7 @@
 			<p class="muted">No MCP servers available to you.</p>
 		{:else}
 			<ul class="list">
-				{#each servers as s (s.name)}
+				{#each servers as s (`${s.scope}/${s.name}`)}
 					<li>
 						{#if editingId === s.id}
 							<McpServerForm
