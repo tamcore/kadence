@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { currentUser, setAuth } from '$lib/stores/auth';
 	import { updateProfile, changePassword } from '$lib/api/profile';
+	import { listSessions, revokeSession, revokeOtherSessions, type Session } from '$lib/api/sessions';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 
@@ -39,6 +41,48 @@
 			err = e instanceof Error ? e.message : 'Change failed';
 		}
 	}
+
+	let sessions = $state<Session[]>([]);
+
+	async function loadSessions(): Promise<void> {
+		try {
+			sessions = await listSessions();
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Could not load sessions';
+		}
+	}
+
+	async function revoke(publicId: string): Promise<void> {
+		try {
+			await revokeSession(publicId);
+			await loadSessions();
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Revoke failed';
+		}
+	}
+
+	async function signOutOthers(): Promise<void> {
+		try {
+			await revokeOtherSessions();
+			await loadSessions();
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Sign-out failed';
+		}
+	}
+
+	const SECONDS_PER_MINUTE = 60;
+	const SECONDS_PER_HOUR = 3600;
+	const SECONDS_PER_DAY = 86400;
+
+	function ago(iso: string): string {
+		const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+		if (seconds < SECONDS_PER_MINUTE) return 'just now';
+		if (seconds < SECONDS_PER_HOUR) return `${Math.floor(seconds / SECONDS_PER_MINUTE)}m ago`;
+		if (seconds < SECONDS_PER_DAY) return `${Math.floor(seconds / SECONDS_PER_HOUR)}h ago`;
+		return `${Math.floor(seconds / SECONDS_PER_DAY)}d ago`;
+	}
+
+	onMount(loadSessions);
 </script>
 
 <div class="page">
@@ -98,6 +142,30 @@
 			<Button type="submit" variant="primary">Change password</Button>
 		</form>
 	</section>
+
+	<section class="sessions-section">
+		<h2>Active sessions</h2>
+		<Button variant="ghost" onclick={signOutOthers}>Sign out other devices</Button>
+		<ul class="sessions">
+			{#each sessions as s (s.publicId)}
+				<li>
+					<div class="session-info">
+						<span class="dev">{s.device}</span>
+						<span class="muted"
+							>{s.ip} · last active {ago(s.lastSeenAt)} · signed in {new Date(
+								s.createdAt
+							).toLocaleDateString()}</span
+						>
+					</div>
+					{#if s.current}
+						<span class="badge">This device</span>
+					{:else}
+						<Button variant="ghost" onclick={() => revoke(s.publicId)}>Revoke</Button>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	</section>
 </div>
 
 <style>
@@ -140,5 +208,46 @@
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 12px;
+	}
+	.sessions-section {
+		max-width: 560px;
+	}
+	.sessions {
+		list-style: none;
+		margin-top: 12px;
+		padding: 0;
+		display: grid;
+		gap: 8px;
+	}
+	.sessions li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 10px 12px;
+	}
+	.session-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.dev {
+		font-weight: 600;
+	}
+	.muted {
+		font-size: 0.85rem;
+		color: var(--text-muted);
+	}
+	.badge {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: var(--accent);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius);
+		padding: 4px 8px;
+		white-space: nowrap;
 	}
 </style>
