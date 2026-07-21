@@ -132,6 +132,6 @@
 		flex-direction: column;
 		gap: 12px;
 	}
-	.composer-area :global(.composer) { max-width: 760px; margin: 0 auto; }
+	.composer-area :global(.composer) { max-width: 760px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 	.composer-area :global(.credential-prompt) { max-width: 760px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 </style>

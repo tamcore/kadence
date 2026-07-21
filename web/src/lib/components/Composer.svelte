@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$lib/components/Button.svelte';
+	import { tick } from 'svelte';
 
 	const TEXTAREA_MAX_HEIGHT_PX = 200;
 
@@ -11,11 +12,19 @@
 
 	let { placeholder = 'Ask your coach…', disabled = false, onSubmit }: Props = $props();
 	let text = $state('');
+	let textareaEl: HTMLTextAreaElement | undefined;
+
+	function autosize(): void {
+		if (!textareaEl) return;
+		textareaEl.style.height = 'auto';
+		textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, TEXTAREA_MAX_HEIGHT_PX)}px`;
+	}
 
 	function submit(): void {
 		const trimmed = text.trim();
 		if (!trimmed || disabled) return;
 		text = '';
+		void tick().then(autosize);
 		onSubmit(trimmed);
 	}
 
@@ -33,12 +42,14 @@
 
 <form class="composer" onsubmit={handleFormSubmit}>
 	<textarea
+		bind:this={textareaEl}
 		bind:value={text}
 		{placeholder}
 		{disabled}
 		rows="1"
 		aria-label="Message"
 		style:max-height="{TEXTAREA_MAX_HEIGHT_PX}px"
+		oninput={autosize}
 		onkeydown={handleKeydown}
 	></textarea>
 	<Button type="submit" variant="primary" {disabled}>Send</Button>
@@ -49,8 +60,6 @@
 		display: flex;
 		gap: 8px;
 		align-items: flex-end;
-		border-top: 1px solid var(--border);
-		padding-top: 12px;
 	}
 	textarea {
 		flex: 1;
@@ -60,5 +69,6 @@
 		font: inherit;
 		resize: none;
 		overflow-y: auto;
+		box-sizing: border-box;
 	}
 </style>
