@@ -6,16 +6,15 @@
 	import { isAdmin } from '$lib/stores/auth';
 	import type { User } from '$lib/types';
 	import Button from '$lib/components/Button.svelte';
-	import Input from '$lib/components/Input.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+	import UserForm from '$lib/components/UserForm.svelte';
 
 	let users = $state<User[]>([]);
 	let error = $state('');
 	let loading = $state(true);
 
-	let username = $state('');
-	let email = $state('');
-	let password = $state('');
-	let role = $state<'user' | 'admin'>('user');
+	let modalMode = $state<'create' | 'edit' | null>(null);
+	let editing = $state<User | undefined>(undefined);
 
 	async function load() {
 		loading = true;
@@ -29,17 +28,24 @@
 		}
 	}
 
-	async function handleCreate(e: SubmitEvent) {
-		e.preventDefault();
-		error = '';
-		try {
-			await api.createUser({ username, email, password, role });
-			username = email = password = '';
-			role = 'user';
-			await load();
-		} catch {
-			error = 'Could not create user (username or email may already exist)';
-		}
+	function openCreate() {
+		editing = undefined;
+		modalMode = 'create';
+	}
+
+	function openEdit(u: User) {
+		editing = u;
+		modalMode = 'edit';
+	}
+
+	function closeModal() {
+		modalMode = null;
+		editing = undefined;
+	}
+
+	async function onSaved() {
+		closeModal();
+		await load();
 	}
 
 	async function handleDelete(id: number) {
@@ -61,49 +67,77 @@
 </script>
 
 <div class="page">
-<h1>Users</h1>
-{#if error}<div class="error" role="alert">{error}</div>{/if}
+	<div class="header">
+		<h1>Users</h1>
+		<Button variant="primary" onclick={openCreate}>New user</Button>
+	</div>
 
-<form class="create" onsubmit={handleCreate}>
-	<Input label="Username" name="new-username" required bind:value={username} />
-	<Input label="Email" name="new-email" type="email" required bind:value={email} />
-	<Input label="Password" name="new-password" type="password" required bind:value={password} />
-	<label class="role">
-		<span>Role</span>
-		<select bind:value={role}>
-			<option value="user">user</option>
-			<option value="admin">admin</option>
-		</select>
-	</label>
-	<Button type="submit" variant="primary">Create user</Button>
-</form>
+	{#if error}<div class="error" role="alert">{error}</div>{/if}
 
-{#if loading}
-	<p class="muted">Loading…</p>
-{:else}
-	<table>
-		<thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
-		<tbody>
-			{#each users as u (u.id)}
-				<tr>
-					<td>{u.username}</td>
-					<td>{u.email}</td>
-					<td>{u.role}</td>
-					<td><Button variant="danger" onclick={() => handleDelete(u.id)}>Delete</Button></td>
-				</tr>
-			{/each}
-		</tbody>
-	</table>
-{/if}
+	{#if loading}
+		<p class="muted">Loading…</p>
+	{:else}
+		<table>
+			<thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
+			<tbody>
+				{#each users as u (u.id)}
+					<tr>
+						<td>{u.username}</td>
+						<td>{u.email}</td>
+						<td>{u.role}</td>
+						<td class="row-actions">
+							<Button variant="ghost" onclick={() => openEdit(u)}>Edit</Button>
+							<Button variant="danger" onclick={() => handleDelete(u.id)}>Delete</Button>
+						</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	{/if}
 </div>
 
+<Modal
+	open={modalMode !== null}
+	title={modalMode === 'edit' ? 'Edit user' : 'New user'}
+	onClose={closeModal}
+>
+	{#if modalMode}
+		{#key editing?.id ?? 'create'}
+			<UserForm mode={modalMode} user={editing} onSuccess={onSaved} onCancel={closeModal} />
+		{/key}
+	{/if}
+</Modal>
+
 <style>
-	.error { color: var(--danger); margin-bottom: 12px; }
-	.muted { color: var(--text-muted); }
-	.create { display: grid; gap: 8px; max-width: 360px; margin-bottom: 32px; }
-	.role { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-	.role span { font-size: 0.85rem; color: var(--text-muted); }
-	select { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); font: inherit; background: var(--surface); }
-	table { width: 100%; border-collapse: collapse; }
-	th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); }
+	.header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 16px;
+	}
+	.header h1 {
+		margin: 0;
+	}
+	.error {
+		color: var(--danger);
+		margin-bottom: 12px;
+	}
+	.muted {
+		color: var(--text-muted);
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+	}
+	th,
+	td {
+		text-align: left;
+		padding: 10px;
+		border-bottom: 1px solid var(--border);
+	}
+	.row-actions {
+		display: flex;
+		gap: 8px;
+		justify-content: flex-end;
+	}
 </style>

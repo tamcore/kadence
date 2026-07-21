@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -17,6 +18,10 @@ var ErrNotFound = errors.New("not found")
 // ErrEmailTaken is returned when a profile update's email collides with
 // another user's email (unique constraint violation).
 var ErrEmailTaken = errors.New("store: email already in use")
+
+// ErrUsernameTaken is returned when an update's username collides with
+// another user's username (unique constraint violation).
+var ErrUsernameTaken = errors.New("store: username already in use")
 
 // UserRepository provides access to the users table.
 type UserRepository struct {
@@ -96,6 +101,37 @@ func (r *UserRepository) Count(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("count users: %w", err)
 	}
 	return n, nil
+}
+
+// CountAdmins returns the number of users with the admin role.
+func (r *UserRepository) CountAdmins(ctx context.Context) (int, error) {
+	var n int
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE role = $1`, model.RoleAdmin).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count admins: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateUser updates a user's username, email, and role, returning the updated
+// row. Returns ErrUsernameTaken or ErrEmailTaken on a unique-constraint
+// collision, and ErrNotFound if no user has the given id.
+func (r *UserRepository) UpdateUser(ctx context.Context, id int64, username, email, role string) (model.User, error) {
+	row := r.pool.QueryRow(ctx,
+		`UPDATE users SET username = $1, email = $2, role = $3 WHERE id = $4
+		 RETURNING `+userCols,
+		username, email, role, id)
+	u, err := scanUser(row)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			if pgErr.ConstraintName == "users_username_key" {
+				return model.User{}, ErrUsernameTaken
+			}
+			return model.User{}, ErrEmailTaken
+		}
+		return model.User{}, err
+	}
+	return u, nil
 }
 
 // UpdateProfile updates a user's display name, email, and unit system
