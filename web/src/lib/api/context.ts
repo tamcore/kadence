@@ -13,12 +13,18 @@ export interface KnowledgeDoc {
 	createdAt: string;
 }
 
+export interface ReindexStatus {
+	stale: number;
+	total: number;
+}
+
 export interface KnowledgeOverview {
 	documentCount: number;
 	documentChunkCount: number;
 	conversationChunkCount: number;
 	documents: KnowledgeDoc[];
 	topTerms: KnowledgeTerm[];
+	reindex: ReindexStatus;
 }
 
 export interface Snippet {

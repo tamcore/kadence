@@ -12,7 +12,8 @@ const baseOverview: KnowledgeOverview = {
 	topTerms: [
 		{ term: 'training', weight: 3.2, count: 8 },
 		{ term: 'nutrition', weight: 1.1, count: 2 }
-	]
+	],
+	reindex: { stale: 0, total: 10 }
 };
 
 describe('/context', () => {

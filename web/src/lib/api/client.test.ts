@@ -49,3 +49,23 @@ describe('api client', () => {
 		await expect(api.login('a', 'bad', false)).rejects.toThrow(APIError);
 	});
 });
+
+describe('request timeout', () => {
+	it('rejects when the response never arrives', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.stubGlobal(
+				'fetch',
+				(_url: string, init?: RequestInit) =>
+					new Promise((_resolve, reject) => {
+						init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+					})
+			);
+			const pending = expect(api.get('/context/overview')).rejects.toBeTruthy();
+			await vi.advanceTimersByTimeAsync(15000);
+			await pending;
+		} finally {
+			vi.useRealTimers();
+		}
+	}, 5000);
+});
