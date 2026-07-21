@@ -28,6 +28,7 @@ type Deps struct {
 	Credentials *handlers.Credentials
 	MCP         *handlers.MCP
 	Profile     *handlers.Profile
+	SessionsAPI *handlers.Sessions
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -118,6 +119,12 @@ func mountAuth(r chi.Router, deps Deps) {
 		if deps.Profile != nil {
 			r.Patch("/api/profile", deps.Profile.Update)
 			r.Post("/api/profile/password", deps.Profile.ChangePassword)
+		}
+
+		if deps.SessionsAPI != nil {
+			r.Get("/api/sessions", deps.SessionsAPI.List)
+			r.Delete("/api/sessions/{publicId}", deps.SessionsAPI.Revoke)
+			r.Post("/api/sessions/revoke-others", deps.SessionsAPI.RevokeOthers)
 		}
 
 		r.Group(func(r chi.Router) {
