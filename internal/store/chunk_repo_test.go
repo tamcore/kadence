@@ -150,3 +150,68 @@ func TestChunkRepository_SearchTopK_FiltersByEmbeddingModel(t *testing.T) {
 		t.Fatalf("got %#v, want only the m1 chunk", got)
 	}
 }
+
+func TestChunkRepository_AdoptAndStatusAndReembed(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	ctx := context.Background()
+	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+	uid := u.ID
+
+	// Two untagged (NULL) rows with a 4-dim "old" vector, one already-current 3-dim row.
+	for range 2 {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO chunks (user_id, scope, source_kind, content, embedding)
+			 VALUES ($1,'private','message',$2,$3)`,
+			uid, "old text", pgvector.NewVector([]float32{1, 0, 0, 0})); err != nil {
+			t.Fatalf("seed null: %v", err)
+		}
+	}
+	cur := store.NewChunkRepository(pool, "m1")
+	if err := cur.Insert(ctx, model.Chunk{
+		UserID: &uid, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "current",
+	}, []float32{1, 0, 0}); err != nil {
+		t.Fatalf("insert current: %v", err)
+	}
+
+	// Adopt: the 2 NULL rows become "m1"; the already-"m1" row is untouched.
+	n, err := cur.AdoptUntagged(ctx)
+	if err != nil || n != 2 {
+		t.Fatalf("AdoptUntagged n=%d err=%v, want 2,nil", n, err)
+	}
+
+	// Simulate a model change to "m2": under "m2" all 3 rows are stale.
+	repo := store.NewChunkRepository(pool, "m2")
+	stale, total, err := repo.ReindexStatus(ctx)
+	if err != nil || stale != 3 || total != 3 {
+		t.Fatalf("ReindexStatus stale=%d total=%d err=%v, want 3,3,nil", stale, total, err)
+	}
+
+	// Re-embed everything to "m2" using a stub that returns 5-dim vectors.
+	embed := func(_ context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{0, 0, 0, 0, 1}
+		}
+		return out, nil
+	}
+	processed := 0
+	for {
+		done, err := repo.ReembedBatch(ctx, embed, 2)
+		if err != nil {
+			t.Fatalf("ReembedBatch: %v", err)
+		}
+		if done == 0 {
+			break
+		}
+		processed += done
+	}
+	if processed != 3 {
+		t.Fatalf("re-embedded %d, want 3", processed)
+	}
+	stale, _, _ = repo.ReindexStatus(ctx)
+	if stale != 0 {
+		t.Fatalf("stale after reembed = %d, want 0", stale)
+	}
+}
