@@ -86,6 +86,7 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Add(ttl)
 	if err := h.sessions.Create(r.Context(), model.Session{
 		ID: id, UserID: u.ID, RememberMe: body.Remember, ExpiresAt: expiresAt,
+		UserAgent: r.UserAgent(), IP: auth.ClientIP(r),
 	}); err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not create session")
 		return
