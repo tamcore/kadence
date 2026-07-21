@@ -23,6 +23,10 @@ func NewService(cfg config.Config) (*Service, error) {
 		RPID:          cfg.WebAuthnRPID,
 		RPDisplayName: rpDisplayName,
 		RPOrigins:     cfg.TrustedOrigins,
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			UserVerification: protocol.VerificationPreferred,
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("webauthn: new: %w", err)

@@ -26,7 +26,10 @@ type Config struct {
 	TrustedOrigins []string
 	// WebAuthnRPID is the WebAuthn Relying Party ID (the site's effective
 	// domain, e.g. kadence.example.com), from KADENCE_WEBAUTHN_RP_ID.
-	// Empty disables passkeys entirely.
+	// Empty disables passkeys entirely. Enabling passkeys also requires
+	// KADENCE_TRUSTED_ORIGINS (relying-party origins) and a 32-byte
+	// KADENCE_ENCRYPTION_KEY (ceremony/session-data cipher); the server
+	// fails fast at boot if either is missing.
 	WebAuthnRPID string
 
 	// Admin bootstrap (used once, on first run, when the users table is empty).

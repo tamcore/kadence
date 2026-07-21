@@ -22,6 +22,7 @@ func TestWebAuthnRepo_CreateListGet(t *testing.T) {
 	cred := model.WebAuthnCredential{
 		UserID: u.ID, CredentialID: []byte("cred-abc"), PublicKey: []byte("pub"),
 		AAGUID: []byte("aa"), SignCount: 1, Transports: []string{"internal"}, Name: "MacBook",
+		BackupEligible: true, BackupState: true,
 	}
 	if err := repo.Create(ctx, cred); err != nil {
 		t.Fatalf("create: %v", err)
@@ -34,6 +35,9 @@ func TestWebAuthnRepo_CreateListGet(t *testing.T) {
 	got := list[0]
 	if got.PublicID == "" || got.Name != "MacBook" || got.SignCount != 1 {
 		t.Fatalf("bad row: %+v", got)
+	}
+	if !got.BackupEligible || !got.BackupState {
+		t.Fatalf("backup flags not persisted: %+v", got)
 	}
 
 	byCred, err := repo.GetByCredentialID(ctx, []byte("cred-abc"))

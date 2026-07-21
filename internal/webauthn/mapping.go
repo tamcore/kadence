@@ -6,9 +6,10 @@ import (
 	"github.com/tamcore/kadence/internal/model"
 )
 
-// ToCredential reconstructs a gwa.Credential from stored columns. Only the
-// fields go-webauthn checks during assertion (ID, PublicKey, AAGUID,
-// SignCount, Transport) are needed for discoverable login.
+// ToCredential reconstructs a gwa.Credential from stored columns. Flags
+// (BackupEligible/BackupState) must round-trip exactly: go-webauthn's login
+// validation rejects an assertion when the stored credential's
+// Flags.BackupEligible differs from the incoming assertion's flag.
 func ToCredential(c model.WebAuthnCredential) gwa.Credential {
 	ts := make([]protocol.AuthenticatorTransport, len(c.Transports))
 	for i, t := range c.Transports {
@@ -17,6 +18,7 @@ func ToCredential(c model.WebAuthnCredential) gwa.Credential {
 	cred := gwa.Credential{ID: c.CredentialID, PublicKey: c.PublicKey, Transport: ts}
 	cred.Authenticator.AAGUID = c.AAGUID
 	cred.Authenticator.SignCount = c.SignCount
+	cred.Flags = gwa.CredentialFlags{BackupEligible: c.BackupEligible, BackupState: c.BackupState}
 	return cred
 }
 
@@ -27,12 +29,14 @@ func FromCredential(cred *gwa.Credential, userID int64, name string) model.WebAu
 		ts[i] = string(t)
 	}
 	return model.WebAuthnCredential{
-		UserID:       userID,
-		CredentialID: cred.ID,
-		PublicKey:    cred.PublicKey,
-		AAGUID:       cred.Authenticator.AAGUID,
-		SignCount:    cred.Authenticator.SignCount,
-		Transports:   ts,
-		Name:         name,
+		UserID:         userID,
+		CredentialID:   cred.ID,
+		PublicKey:      cred.PublicKey,
+		AAGUID:         cred.Authenticator.AAGUID,
+		SignCount:      cred.Authenticator.SignCount,
+		Transports:     ts,
+		Name:           name,
+		BackupEligible: cred.Flags.BackupEligible,
+		BackupState:    cred.Flags.BackupState,
 	}
 }
