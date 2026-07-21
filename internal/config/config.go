@@ -24,6 +24,10 @@ type Config struct {
 	CSRFSecret string
 	// TrustedOrigins are CSRF-trusted origins (KADENCE_TRUSTED_ORIGINS, comma-split, trimmed).
 	TrustedOrigins []string
+	// WebAuthnRPID is the WebAuthn Relying Party ID (the site's effective
+	// domain, e.g. kadence.example.com), from KADENCE_WEBAUTHN_RP_ID.
+	// Empty disables passkeys entirely.
+	WebAuthnRPID string
 
 	// Admin bootstrap (used once, on first run, when the users table is empty).
 	AdminUsername string
@@ -116,6 +120,7 @@ func Load() Config {
 		AdminEmail:     os.Getenv("KADENCE_ADMIN_EMAIL"),
 		AdminPassword:  os.Getenv("KADENCE_ADMIN_PASSWORD"),
 	}
+	cfg.WebAuthnRPID = strings.TrimSpace(os.Getenv("KADENCE_WEBAUTHN_RP_ID"))
 
 	cfg.LLMBaseURL = envOr("KADENCE_LLM_BASE_URL", "https://api.openai.com/v1")
 	cfg.LLMAPIKey = os.Getenv("KADENCE_LLM_API_KEY")
@@ -161,6 +166,9 @@ func Load() Config {
 // Accepts both "prod" and "production" so a conventional KADENCE_ENV value
 // still enables production behaviour (Secure cookies, strict CSRF origin checks).
 func (c Config) IsProd() bool { return c.Env == envProd || c.Env == envProduction }
+
+// WebAuthnEnabled reports whether passkey (WebAuthn) support is configured.
+func (c Config) WebAuthnEnabled() bool { return c.WebAuthnRPID != "" }
 
 // SlogLevel maps LogLevel to a slog.Level, defaulting to Info for unknown values.
 func (c Config) SlogLevel() slog.Level {
