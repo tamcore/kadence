@@ -3,6 +3,14 @@
 	import { currentUser, setAuth } from '$lib/stores/auth';
 	import { updateProfile, changePassword } from '$lib/api/profile';
 	import { listSessions, revokeSession, revokeOtherSessions, type Session } from '$lib/api/sessions';
+	import {
+		isWebAuthnEnabled,
+		registerPasskey,
+		listPasskeys,
+		renamePasskey,
+		deletePasskey,
+		type Passkey
+	} from '$lib/api/webauthn';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 
@@ -82,7 +90,60 @@
 		return `${Math.floor(seconds / SECONDS_PER_DAY)}d ago`;
 	}
 
-	onMount(loadSessions);
+	let passkeysEnabled = $state(false);
+	let passkeys = $state<Passkey[]>([]);
+
+	async function loadPasskeys(): Promise<void> {
+		passkeysEnabled = await isWebAuthnEnabled();
+		if (!passkeysEnabled) return;
+		try {
+			passkeys = await listPasskeys();
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Could not load passkeys';
+		}
+	}
+
+	async function addPasskey(): Promise<void> {
+		const name = (prompt('Name this passkey', 'My device') ?? '').trim();
+		if (!name) return;
+		err = null;
+		msg = null;
+		try {
+			await registerPasskey(name);
+			msg = 'Passkey added';
+			await loadPasskeys();
+		} catch (e) {
+			err =
+				e instanceof Error && e.name === 'NotAllowedError'
+					? 'Passkey registration cancelled'
+					: 'Could not add passkey';
+		}
+	}
+
+	async function renamePk(publicId: string): Promise<void> {
+		const name = (prompt('New name') ?? '').trim();
+		if (!name) return;
+		try {
+			await renamePasskey(publicId, name);
+			await loadPasskeys();
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Rename failed';
+		}
+	}
+
+	async function deletePk(publicId: string): Promise<void> {
+		try {
+			await deletePasskey(publicId);
+			await loadPasskeys();
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Delete failed';
+		}
+	}
+
+	onMount(() => {
+		void loadSessions();
+		void loadPasskeys();
+	});
 </script>
 
 <div class="page">
@@ -166,6 +227,34 @@
 			{/each}
 		</ul>
 	</section>
+
+	{#if passkeysEnabled}
+		<section class="passkeys-section">
+			<h2>Passkeys</h2>
+			<Button variant="ghost" onclick={addPasskey}>Add a passkey</Button>
+			<ul class="passkeys">
+				{#each passkeys as p (p.publicId)}
+					<li>
+						<div class="passkey-info">
+							<span class="dev">{p.name}</span>
+							<span class="muted"
+								>added {new Date(p.createdAt).toLocaleDateString()}{p.lastUsedAt
+									? ` · last used ${new Date(p.lastUsedAt).toLocaleDateString()}`
+									: ''}</span
+							>
+						</div>
+						<div class="passkey-actions">
+							<Button variant="ghost" onclick={() => renamePk(p.publicId)}>Rename</Button>
+							<Button variant="ghost" onclick={() => deletePk(p.publicId)}>Delete</Button>
+						</div>
+					</li>
+				{/each}
+				{#if passkeys.length === 0}
+					<li class="muted">No passkeys yet.</li>
+				{/if}
+			</ul>
+		</section>
+	{/if}
 </div>
 
 <style>
@@ -249,5 +338,34 @@
 		border-radius: var(--radius);
 		padding: 4px 8px;
 		white-space: nowrap;
+	}
+	.passkeys-section {
+		max-width: 560px;
+	}
+	.passkeys {
+		list-style: none;
+		margin-top: 12px;
+		padding: 0;
+		display: grid;
+		gap: 8px;
+	}
+	.passkeys li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 10px 12px;
+	}
+	.passkey-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.passkey-actions {
+		display: flex;
+		gap: 8px;
 	}
 </style>

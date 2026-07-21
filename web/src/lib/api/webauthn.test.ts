@@ -50,3 +50,73 @@ describe('webauthn api', () => {
 		expect(init.method).toBe('DELETE');
 	});
 });
+
+import { registerPasskey, loginWithPasskey } from './webauthn';
+
+describe('webauthn ceremony flows', () => {
+	beforeEach(() => {
+		setCsrfToken('tok');
+		vi.restoreAllMocks();
+	});
+
+	it('registerPasskey begins, calls navigator.create, and finishes with name', async () => {
+		const beginOpts = {
+			data: {
+				publicKey: {
+					challenge: 'AAAA',
+					user: { id: 'BBBB', name: 'a', displayName: 'a' },
+					rp: { id: 'x' },
+					pubKeyCredParams: []
+				}
+			}
+		};
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(200, beginOpts))
+			.mockResolvedValueOnce(jsonResponse(201, { data: { ok: true } }));
+		vi.stubGlobal('fetch', fetchMock);
+		vi.stubGlobal('navigator', {
+			credentials: {
+				create: vi.fn().mockResolvedValue({
+					id: 'cred1',
+					type: 'public-key',
+					rawId: new Uint8Array([1, 2]).buffer,
+					response: {
+						attestationObject: new Uint8Array([3]).buffer,
+						clientDataJSON: new Uint8Array([4]).buffer
+					}
+				})
+			}
+		});
+		await registerPasskey('MacBook');
+		expect(navigator.credentials.create as any).toHaveBeenCalled();
+		const finishUrl = fetchMock.mock.calls[1][0] as string;
+		expect(finishUrl).toContain('/api/webauthn/register/finish?name=MacBook');
+	});
+
+	it('loginWithPasskey returns the user', async () => {
+		const beginOpts = { data: { publicKey: { challenge: 'AAAA' } } };
+		const user = { id: 1, username: 'alice' };
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(200, beginOpts))
+			.mockResolvedValueOnce(jsonResponse(200, { data: user }));
+		vi.stubGlobal('fetch', fetchMock);
+		vi.stubGlobal('navigator', {
+			credentials: {
+				get: vi.fn().mockResolvedValue({
+					id: 'cred1',
+					type: 'public-key',
+					rawId: new Uint8Array([1]).buffer,
+					response: {
+						authenticatorData: new Uint8Array([2]).buffer,
+						clientDataJSON: new Uint8Array([3]).buffer,
+						signature: new Uint8Array([4]).buffer,
+						userHandle: new Uint8Array([5]).buffer
+					}
+				})
+			}
+		});
+		expect(await loginWithPasskey()).toEqual(user);
+	});
+});
