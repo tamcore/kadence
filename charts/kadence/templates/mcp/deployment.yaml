@@ -13,6 +13,14 @@ metadata:
     kadence.io/mcp-server: {{ $server.name }}
 spec:
   replicas: 1
+  {{- if and $server.persistence $server.persistence.enabled }}
+  # A per-server PVC is ReadWriteOnce; the default RollingUpdate keeps the old
+  # pod alive until the new one is Ready, but the new pod can't mount the RWO
+  # volume while the old pod (possibly on another node) still holds it —
+  # deadlocking the rollout. Recreate tears the old pod down first.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "kadence.selectorLabels" $root | nindent 6 }}
