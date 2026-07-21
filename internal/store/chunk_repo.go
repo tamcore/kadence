@@ -104,6 +104,96 @@ func (r *ChunkRepository) SearchContentForUser(ctx context.Context, userID int64
 	return scanChunkRefRows(rows)
 }
 
+// reembedBatchDefault is the number of stale chunks re-embedded per batch.
+const reembedBatchDefault = 64
+
+// AdoptUntagged stamps every chunk with a NULL embedding_model as the current
+// model. Used once on feature introduction so pre-existing vectors (produced by
+// the then-current model) are treated as current rather than re-embedded.
+func (r *ChunkRepository) AdoptUntagged(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE chunks SET embedding_model = $1 WHERE embedding_model IS NULL`, r.embeddingModel)
+	if err != nil {
+		return 0, fmt.Errorf("adopt untagged chunks: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ReindexStatus reports how many chunks are stale (not on the current embedding
+// model) and the total, across all users.
+func (r *ChunkRepository) ReindexStatus(ctx context.Context) (stale, total int64, err error) {
+	err = r.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE embedding_model IS DISTINCT FROM $1), count(*) FROM chunks`,
+		r.embeddingModel).Scan(&stale, &total)
+	if err != nil {
+		return 0, 0, fmt.Errorf("reindex status: %w", err)
+	}
+	return stale, total, nil
+}
+
+// ReembedBatch re-embeds up to batch stale chunks in a single transaction,
+// claiming them with FOR UPDATE SKIP LOCKED so concurrent workers (multiple
+// replicas) never process the same row. Returns the number re-embedded; 0 means
+// no stale chunks remain.
+func (r *ChunkRepository) ReembedBatch(ctx context.Context, embed func(context.Context, []string) ([][]float32, error), batch int) (int, error) {
+	if batch <= 0 {
+		batch = reembedBatchDefault
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reembed begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, content FROM chunks
+		 WHERE embedding_model IS DISTINCT FROM $1
+		 ORDER BY id
+		 LIMIT $2
+		 FOR UPDATE SKIP LOCKED`, r.embeddingModel, batch)
+	if err != nil {
+		return 0, fmt.Errorf("reembed claim: %w", err)
+	}
+	var ids []int64
+	var contents []string
+	for rows.Next() {
+		var id int64
+		var content string
+		if err := rows.Scan(&id, &content); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("reembed scan: %w", err)
+		}
+		ids = append(ids, id)
+		contents = append(contents, content)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("reembed rows: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	vecs, err := embed(ctx, contents)
+	if err != nil {
+		return 0, fmt.Errorf("reembed embed: %w", err)
+	}
+	if len(vecs) != len(ids) {
+		return 0, fmt.Errorf("reembed: got %d vectors for %d chunks", len(vecs), len(ids))
+	}
+	for i, id := range ids {
+		if _, err := tx.Exec(ctx,
+			`UPDATE chunks SET embedding = $1, embedding_model = $2 WHERE id = $3`,
+			pgvector.NewVector(vecs[i]), r.embeddingModel, id); err != nil {
+			return 0, fmt.Errorf("reembed update id %d: %w", id, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("reembed commit: %w", err)
+	}
+	return len(ids), nil
+}
+
 // scanChunkRefRows scans rows selected as (content, source_kind, document_id)
 // into ChunkRef values.
 func scanChunkRefRows(rows pgx.Rows) ([]ChunkRef, error) {
