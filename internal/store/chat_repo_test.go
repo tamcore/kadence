@@ -62,6 +62,48 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	}
 }
 
+func TestMessageToolCallsPersisted(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	msgs := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	u, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	c, err := convs.Create(ctx, u.ID, "chat")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	calls := []model.MessageToolCall{
+		{Name: "garmin__get_activities_by_date", Arguments: `{"start_date":"2026-07-19"}`},
+		{Name: "garmin__get_activity_weather", Arguments: `{"activity_id":123}`},
+	}
+	if _, err := msgs.AddWithToolCalls(ctx, c.ID, model.MsgRoleAssistant, "answer", calls); err != nil {
+		t.Fatalf("add with tool calls: %v", err)
+	}
+	// A plain Add stores no tool calls.
+	if _, err := msgs.Add(ctx, c.ID, model.MsgRoleUser, "thanks"); err != nil {
+		t.Fatalf("add user msg: %v", err)
+	}
+
+	list, err := msgs.ListByConversation(ctx, c.ID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: %v len=%d", err, len(list))
+	}
+	if len(list[0].ToolCalls) != 2 || list[0].ToolCalls[0].Name != "garmin__get_activities_by_date" ||
+		list[0].ToolCalls[0].Arguments != `{"start_date":"2026-07-19"}` {
+		t.Fatalf("assistant tool calls not round-tripped: %+v", list[0].ToolCalls)
+	}
+	if list[1].ToolCalls != nil {
+		t.Fatalf("plain Add should store no tool calls, got: %+v", list[1].ToolCalls)
+	}
+}
+
 func TestConversationScopedToOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
