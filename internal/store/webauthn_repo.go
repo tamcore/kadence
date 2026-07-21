@@ -11,7 +11,7 @@ import (
 	"github.com/tamcore/kadence/internal/model"
 )
 
-const webauthnCredCols = "id, public_id, user_id, credential_id, public_key, aaguid, sign_count, transports, name, created_at, last_used_at"
+const webauthnCredCols = "id, public_id, user_id, credential_id, public_key, aaguid, sign_count, transports, name, backup_eligible, backup_state, created_at, last_used_at"
 
 // WebAuthnCredentialRepository stores registered passkeys.
 type WebAuthnCredentialRepository struct{ pool *pgxpool.Pool }
@@ -25,7 +25,8 @@ func scanWebAuthnCred(row pgx.Row) (model.WebAuthnCredential, error) {
 	var c model.WebAuthnCredential
 	var signCount int64
 	err := row.Scan(&c.ID, &c.PublicID, &c.UserID, &c.CredentialID, &c.PublicKey,
-		&c.AAGUID, &signCount, &c.Transports, &c.Name, &c.CreatedAt, &c.LastUsedAt)
+		&c.AAGUID, &signCount, &c.Transports, &c.Name, &c.BackupEligible, &c.BackupState,
+		&c.CreatedAt, &c.LastUsedAt)
 	c.SignCount = uint32(signCount)
 	return c, err
 }
@@ -33,9 +34,9 @@ func scanWebAuthnCred(row pgx.Row) (model.WebAuthnCredential, error) {
 // Create inserts a credential (public_id/created_at via column defaults).
 func (r *WebAuthnCredentialRepository) Create(ctx context.Context, c model.WebAuthnCredential) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO webauthn_credentials (user_id, credential_id, public_key, aaguid, sign_count, transports, name)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		c.UserID, c.CredentialID, c.PublicKey, c.AAGUID, c.SignCount, c.Transports, c.Name)
+		`INSERT INTO webauthn_credentials (user_id, credential_id, public_key, aaguid, sign_count, transports, name, backup_eligible, backup_state)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		c.UserID, c.CredentialID, c.PublicKey, c.AAGUID, c.SignCount, c.Transports, c.Name, c.BackupEligible, c.BackupState)
 	return err
 }
 

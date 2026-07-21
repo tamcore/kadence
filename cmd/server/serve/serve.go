@@ -77,12 +77,16 @@ func Run() error {
 	if cfg.WebAuthnEnabled() {
 		s, wErr := webauthn.NewService(cfg)
 		if wErr != nil {
-			return fmt.Errorf("webauthn service: %w", wErr)
+			return fmt.Errorf(
+				"passkeys enabled (KADENCE_WEBAUTHN_RP_ID set) but webauthn service failed "+
+					"to initialize; also requires KADENCE_TRUSTED_ORIGINS: %w", wErr)
 		}
 		waSvc = s
 		c, cErr := crypto.NewCipher(cfg.EncryptionKey)
 		if cErr != nil {
-			return fmt.Errorf("webauthn cipher: %w", cErr)
+			return fmt.Errorf(
+				"passkeys enabled (KADENCE_WEBAUTHN_RP_ID set) but cipher failed to initialize; "+
+					"also requires a 32-byte KADENCE_ENCRYPTION_KEY: %w", cErr)
 		}
 		waCipher = c
 	}

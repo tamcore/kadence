@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -86,15 +87,18 @@ func (h *WebAuthn) RegisterBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	waUser, err := h.userAdapter(r.Context(), *u)
 	if err != nil {
+		slog.Error("webauthn: load credentials", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not load credentials")
 		return
 	}
 	options, sess, err := h.svc.BeginRegistration(waUser)
 	if err != nil {
+		slog.Error("webauthn: begin registration", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not begin registration")
 		return
 	}
 	if err := webauthn.WriteCeremony(w, h.cfg, h.cipher, sess); err != nil {
+		slog.Error("webauthn: write ceremony", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not start ceremony")
 		return
 	}
@@ -120,11 +124,13 @@ func (h *WebAuthn) RegisterFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	waUser, err := h.userAdapter(r.Context(), *u)
 	if err != nil {
+		slog.Error("webauthn: load credentials", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not load credentials")
 		return
 	}
 	cred, err := h.svc.FinishRegistration(waUser, sess, r)
 	if err != nil {
+		slog.Error("webauthn: finish registration", "err", err)
 		webauthn.ClearCeremony(w, h.cfg)
 		RespondError(w, http.StatusBadRequest, "could not verify passkey")
 		return
@@ -134,6 +140,7 @@ func (h *WebAuthn) RegisterFinish(w http.ResponseWriter, r *http.Request) {
 		name = defaultPasskeyName
 	}
 	if err := h.creds.Create(r.Context(), webauthn.FromCredential(cred, u.ID, name)); err != nil {
+		slog.Error("webauthn: store passkey", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not store passkey")
 		return
 	}
@@ -148,10 +155,12 @@ func (h *WebAuthn) LoginBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	options, sess, err := h.svc.BeginDiscoverableLogin()
 	if err != nil {
+		slog.Error("webauthn: begin discoverable login", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not begin login")
 		return
 	}
 	if err := webauthn.WriteCeremony(w, h.cfg, h.cipher, sess); err != nil {
+		slog.Error("webauthn: write ceremony", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not start ceremony")
 		return
 	}
@@ -195,11 +204,14 @@ func (h *WebAuthn) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusUnauthorized, "could not verify passkey")
 		return
 	}
-	_ = h.creds.UpdateSignCount(r.Context(), cred.ID, cred.Authenticator.SignCount, time.Now())
+	if err := h.creds.UpdateSignCount(r.Context(), cred.ID, cred.Authenticator.SignCount, time.Now()); err != nil {
+		slog.Error("webauthn: update sign count", "err", err)
+	}
 	webauthn.ClearCeremony(w, h.cfg)
 
 	pub, err := startSession(w, r, h.cfg, h.sessions, matched, false)
 	if err != nil {
+		slog.Error("webauthn: start session", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -225,6 +237,7 @@ func (h *WebAuthn) ListCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := h.creds.ListByUser(r.Context(), u.ID)
 	if err != nil {
+		slog.Error("webauthn: list credentials", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not list passkeys")
 		return
 	}
@@ -267,6 +280,7 @@ func (h *WebAuthn) RenameCredential(w http.ResponseWriter, r *http.Request) {
 			RespondError(w, http.StatusNotFound, "passkey not found")
 			return
 		}
+		slog.Error("webauthn: rename credential", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not rename passkey")
 		return
 	}
@@ -289,6 +303,7 @@ func (h *WebAuthn) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 			RespondError(w, http.StatusNotFound, "passkey not found")
 			return
 		}
+		slog.Error("webauthn: delete credential", "err", err)
 		RespondError(w, http.StatusInternalServerError, "could not delete passkey")
 		return
 	}

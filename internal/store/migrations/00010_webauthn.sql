@@ -12,6 +12,8 @@ CREATE TABLE webauthn_credentials (
     sign_count    BIGINT      NOT NULL DEFAULT 0,
     transports    TEXT[]      NOT NULL DEFAULT '{}',
     name          TEXT        NOT NULL DEFAULT '',
+    backup_eligible BOOLEAN   NOT NULL DEFAULT false,
+    backup_state    BOOLEAN   NOT NULL DEFAULT false,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_used_at  TIMESTAMPTZ
 );
