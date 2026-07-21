@@ -57,7 +57,7 @@
 
 	async function refreshMcp(): Promise<void> {
 		try {
-			const servers = await listMcp();
+			const { servers } = await listMcp();
 			mcp = {
 				unhealthy: servers.filter((s) => s.state === 'unhealthy').length,
 				total: servers.length
