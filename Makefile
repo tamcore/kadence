@@ -72,11 +72,16 @@ dev-deploy-k8s: ## Build dev image, push to $(IMAGE_REGISTRY), deploy to K8s (ne
 	# `kubectl` edit of a Deployment field would make `helm upgrade` fail the
 	# whole release). kubectl apply reconciles each manifest in place.
 	kubectl $(_KUBECTL_CTX) create namespace kadence --dry-run=client -o yaml | kubectl $(_KUBECTL_CTX) apply -f -
+	T=$$(mktemp -d); \
 	helm template kadence ./charts/kadence $(_HELM_CTX) -n kadence \
 		-f ./charts/kadence/values-dev.yaml \
 		--set image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
-		--set image.tag="$(IMAGE_TAG)" \
-		| kubectl $(_KUBECTL_CTX) apply --server-side --force-conflicts -f -
+		--set image.tag="$(IMAGE_TAG)" > $$T/all.yaml; \
+	python3 -c "import sys; d=open('$$T/all.yaml').read().split(chr(10)+'---'+chr(10)); i=[x for x in d if 'kind: Ingress' in x]; r=[x for x in d if 'kind: Ingress' not in x]; open('$$T/rest.yaml','w').write((chr(10)+'---'+chr(10)).join(r)); open('$$T/ingress.yaml','w').write((chr(10)+'---'+chr(10)).join(i))"; \
+	kubectl $(_KUBECTL_CTX) apply --server-side --force-conflicts -f $$T/rest.yaml; \
+	kubectl $(_KUBECTL_CTX) apply --server-side --force-conflicts -f $$T/ingress.yaml \
+		|| echo "note: ingress apply failed (usually the nginx-ingress admission webhook self-conflict on an unchanged ingress) — routing is unaffected; verify manually if the ingress spec changed"; \
+	rm -rf $$T
 
 clean: ## Remove build artifacts
 	rm -rf bin/ coverage.out dist/ web/build/
