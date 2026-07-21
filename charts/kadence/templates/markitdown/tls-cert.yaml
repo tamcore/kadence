@@ -1,0 +1,23 @@
+{{- if and .Values.markitdown.enabled .Values.mcp.tls.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $fullname := include "kadence.markitdown.fullname" . }}
+{{- $caIssuer := printf "%s-mcp-ca-issuer" (include "kadence.fullname" .) }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-tls
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: markitdown
+spec:
+  secretName: {{ $fullname }}-tls
+  dnsNames:
+  - {{ $fullname | quote }}
+  - {{ printf "%s.%s" $fullname $ns | quote }}
+  - {{ printf "%s.%s.svc" $fullname $ns | quote }}
+  - {{ printf "%s.%s.svc.cluster.local" $fullname $ns | quote }}
+  issuerRef:
+    name: {{ $caIssuer }}
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}

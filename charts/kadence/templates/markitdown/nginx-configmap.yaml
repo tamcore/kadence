@@ -9,7 +9,14 @@ metadata:
 data:
   default.conf: |
     server {
+      {{- if .Values.mcp.tls.enabled }}
+      listen 8080 ssl;
+      ssl_certificate /etc/nginx/tls/tls.crt;
+      ssl_certificate_key /etc/nginx/tls/tls.key;
+      ssl_protocols TLSv1.2 TLSv1.3;
+      {{- else }}
       listen 8080;
+      {{- end }}
 
       # Uploads are base64-encoded into a data: URI before conversion (~1.34x
       # the raw bytes), so this must comfortably exceed KADENCE_UPLOAD_MAX_BYTES

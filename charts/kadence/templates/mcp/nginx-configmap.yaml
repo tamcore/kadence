@@ -12,7 +12,14 @@ metadata:
 data:
   default.conf: |
     server {
+      {{- if $root.Values.mcp.tls.enabled }}
+      listen 8080 ssl;
+      ssl_certificate /etc/nginx/tls/tls.crt;
+      ssl_certificate_key /etc/nginx/tls/tls.key;
+      ssl_protocols TLSv1.2 TLSv1.3;
+      {{- else }}
       listen 8080;
+      {{- end }}
 
       auth_basic "Kadence MCP";
       auth_basic_user_file /etc/nginx/.htpasswd;

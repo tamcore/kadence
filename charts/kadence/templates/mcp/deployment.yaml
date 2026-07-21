@@ -79,6 +79,11 @@ spec:
           mountPath: /var/cache/nginx
         - name: nginx-run
           mountPath: /var/run
+        {{- if $root.Values.mcp.tls.enabled }}
+        - name: nginx-tls
+          mountPath: /etc/nginx/tls
+          readOnly: true
+        {{- end }}
       volumes:
       - name: nginx-conf
         configMap:
@@ -95,6 +100,11 @@ spec:
         emptyDir: {}
       - name: nginx-run
         emptyDir: {}
+      {{- if $root.Values.mcp.tls.enabled }}
+      - name: nginx-tls
+        secret:
+          secretName: {{ $fullname }}-tls
+      {{- end }}
       {{- if and $server.persistence $server.persistence.enabled }}
       - name: data
         persistentVolumeClaim:
