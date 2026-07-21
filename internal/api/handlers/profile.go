@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -29,9 +28,7 @@ type profileUsers interface {
 
 // profileSessions is the session persistence the profile handler needs.
 type profileSessions interface {
-	GetByID(ctx context.Context, id string) (model.Session, error)
-	DeleteAllByUser(ctx context.Context, userID int64) error
-	Create(ctx context.Context, s model.Session) error
+	DeleteOthersByUser(ctx context.Context, userID int64, exceptID string) error
 }
 
 // Profile handles authenticated self-service profile and password updates.
@@ -139,48 +136,26 @@ func (h *Profile) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if in.LogoutOthers {
-		h.revokeOthersKeepCurrent(w, r, u.ID)
+		h.revokeOthersKeepCurrent(r, u.ID)
 	}
 	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// revokeOthersKeepCurrent deletes all sessions for userID and issues a fresh
-// session cookie for the current browser so the caller is not logged out by
-// their own password change. The current session's RememberMe flag is
-// preserved. Failures here are logged and swallowed: the password change
-// itself already succeeded by the time this runs, so a 500 response would be
-// misleading.
-func (h *Profile) revokeOthersKeepCurrent(w http.ResponseWriter, r *http.Request, userID int64) {
-	ctx := r.Context()
-
-	var rememberMe bool
-	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
-		if cur, gErr := h.sessions.GetByID(ctx, c.Value); gErr == nil {
-			rememberMe = cur.RememberMe
-		}
+// revokeOthersKeepCurrent deletes every session for userID except the
+// caller's current one, identified by the session cookie on r. The current
+// session is left completely untouched: no recreate, no cookie rotation, so
+// there is no window where the caller could be logged out by their own
+// password change. Failures here are logged and swallowed: the password
+// change itself already succeeded by the time this runs, so a 500 response
+// would be misleading.
+func (h *Profile) revokeOthersKeepCurrent(r *http.Request, userID int64) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		slog.Warn("logout-others requested without a current session cookie", "user_id", userID)
+		return
 	}
 
-	if err := h.sessions.DeleteAllByUser(ctx, userID); err != nil {
+	if err := h.sessions.DeleteOthersByUser(r.Context(), userID, c.Value); err != nil {
 		slog.Error("revoke other sessions after password change", "user_id", userID, "err", err)
-		return
 	}
-
-	newID, err := auth.NewSessionID()
-	if err != nil {
-		slog.Error("generate replacement session after password change", "user_id", userID, "err", err)
-		return
-	}
-	ttl := defaultTTL
-	if rememberMe {
-		ttl = rememberTTL
-	}
-	expiresAt := time.Now().Add(ttl)
-	if err := h.sessions.Create(ctx, model.Session{
-		ID: newID, UserID: userID, RememberMe: rememberMe, ExpiresAt: expiresAt,
-	}); err != nil {
-		slog.Error("create replacement session after password change", "user_id", userID, "err", err)
-		return
-	}
-
-	setSessionCookie(w, h.cfg, newID, expiresAt)
 }
