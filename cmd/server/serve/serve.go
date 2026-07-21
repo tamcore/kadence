@@ -22,6 +22,7 @@ import (
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/provider"
+	"github.com/tamcore/kadence/internal/reindex"
 	"github.com/tamcore/kadence/internal/secret"
 	"github.com/tamcore/kadence/internal/store"
 )
@@ -82,17 +83,19 @@ func Run() error {
 		var rag *chat.RAG
 		if cfg.RAGEnabled() {
 			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel)
-			rag = chat.NewRAG(embedder, store.NewChunkRepository(pool, cfg.EmbedModel), cfg.RAGTopK)
+			chunkRepo := store.NewChunkRepository(pool, cfg.EmbedModel)
+			rag = chat.NewRAG(embedder, chunkRepo, cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
+			go reindex.Run(context.Background(), chunkRepo, embedder.Embed, slog.Default())
 
 			docsRepo := store.NewDocumentRepository(pool)
 			extractors := buildIngestExtractors(cfg)
 			ingestSvc := ingest.NewService(
 				extractors,
-				embedder, docsRepo, store.NewChunkRepository(pool, cfg.EmbedModel), cfg.IngestChunkChars,
+				embedder, docsRepo, chunkRepo, cfg.IngestChunkChars,
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
-			deps.Context = handlers.NewContext(store.NewChunkRepository(pool, cfg.EmbedModel), docsRepo)
+			deps.Context = handlers.NewContext(chunkRepo, docsRepo)
 		}
 		mcpHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)
 		if err != nil {
