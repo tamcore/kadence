@@ -27,6 +27,7 @@ func HTTPClientWithCA(caFile string) (*http.Client, error) {
 		pool = x509.NewCertPool()
 	}
 
+	// #nosec G304 -- caFile is an operator-controlled path from KADENCE_MCP_CA_FILE (env config), not user input.
 	pemBytes, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: read CA file %s: %w", caFile, err)
