@@ -30,7 +30,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 
 func scanUser(row pgx.Row) (model.User, error) {
 	var u model.User
-	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem, &u.CreatedAt, &u.WebAuthnHandle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.User{}, ErrNotFound
 	}
@@ -40,7 +40,7 @@ func scanUser(row pgx.Row) (model.User, error) {
 	return u, nil
 }
 
-const userCols = "id, username, email, password_hash, role, display_name, unit_system, created_at"
+const userCols = "id, username, email, password_hash, role, display_name, unit_system, created_at, webauthn_user_handle"
 
 // Create inserts a new user and returns it with ID and CreatedAt populated.
 func (r *UserRepository) Create(ctx context.Context, u model.User) (model.User, error) {
@@ -119,4 +119,13 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, id int64, passwordH
 		return fmt.Errorf("update password: %w", err)
 	}
 	return nil
+}
+
+// GetByWebAuthnHandle looks up a user by their opaque WebAuthn handle.
+func (r *UserRepository) GetByWebAuthnHandle(ctx context.Context, handle string) (model.User, error) {
+	u, err := scanUser(r.pool.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE webauthn_user_handle=$1`, handle))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.User{}, ErrNotFound
+	}
+	return u, err
 }
