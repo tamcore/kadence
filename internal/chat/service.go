@@ -25,6 +25,7 @@ type ConversationStore interface {
 // MessageStore is the message persistence the service needs.
 type MessageStore interface {
 	Add(ctx context.Context, conversationID string, role, content string) (model.Message, error)
+	AddWithToolCalls(ctx context.Context, conversationID string, role, content string, toolCalls []model.MessageToolCall) (model.Message, error)
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 }
 
@@ -303,7 +304,7 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 	req.Tools = s.assembleTools(ctx, username)
 
 	redactor := &turnRedactor{}
-	full, err := s.runToolLoop(ctx, streamCtx, conversationID, userID, username, req, redactor, sink)
+	full, turnCalls, err := s.runToolLoop(ctx, streamCtx, conversationID, userID, username, req, redactor, sink)
 	if err != nil {
 		return err
 	}
@@ -312,7 +313,7 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		full = secret.Redact(full, redactor.snapshot(s.secrets, userID))
 	}
 
-	assistantMsg, err := s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, full)
+	assistantMsg, err := s.msgs.AddWithToolCalls(ctx, conversationID, model.MsgRoleAssistant, full, turnCalls)
 	if err != nil {
 		slog.Error("persist assistant message", "err", err)
 	}
@@ -374,11 +375,15 @@ func (s *Service) applyGuardrail(
 func (s *Service) runToolLoop(
 	ctx, streamCtx context.Context, conversationID string, userID int64, username string,
 	req provider.ChatRequest, redactor *turnRedactor, sink EventSink,
-) (string, error) {
+) (string, []model.MessageToolCall, error) {
 	maxIter := s.maxIterations
 	if maxIter <= 0 {
 		maxIter = defaultMaxToolIterations
 	}
+
+	// turnCalls records every tool the assistant invokes this turn (name +
+	// redacted args) for the persisted audit trail on the assistant message.
+	var turnCalls []model.MessageToolCall
 
 	onToken := func(delta string) error {
 		if s.secrets != nil {
@@ -400,18 +405,23 @@ func (s *Service) runToolLoop(
 				if s.secrets != nil {
 					content = secret.Redact(content, redactor.snapshot(s.secrets, userID))
 				}
-				_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, content)
+				_, _ = s.msgs.AddWithToolCalls(ctx, conversationID, model.MsgRoleAssistant, content, turnCalls)
 			}
-			return "", s.fail(sink, "the assistant could not complete the response")
+			return "", turnCalls, s.fail(sink, "the assistant could not complete the response")
 		}
 		if len(result.ToolCalls) == 0 {
-			return result.Content, nil
+			return result.Content, turnCalls, nil
 		}
 
 		req.Messages = append(req.Messages, provider.Message{
 			Role: model.MsgRoleAssistant, Content: result.Content, ToolCalls: result.ToolCalls,
 		})
 		for _, tc := range result.ToolCalls {
+			args := tc.Arguments
+			if s.secrets != nil {
+				args = secret.Redact(args, redactor.snapshot(s.secrets, userID))
+			}
+			turnCalls = append(turnCalls, model.MessageToolCall{Name: tc.Name, Arguments: args})
 			req.Messages = append(req.Messages, s.dispatchTool(ctx, streamCtx, userID, username, tc, gated, redactor, sink))
 		}
 	}
@@ -425,9 +435,9 @@ func (s *Service) runToolLoop(
 	final, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
 	if streamErr != nil {
 		slog.Error("final answer stream failed", "err", streamErr, "conversation", conversationID)
-		return "", s.fail(sink, "the assistant could not complete the response")
+		return "", turnCalls, s.fail(sink, "the assistant could not complete the response")
 	}
-	return final.Content, nil
+	return final.Content, turnCalls, nil
 }
 
 // skillTool builds the built-in load_skill tool definition, listing available

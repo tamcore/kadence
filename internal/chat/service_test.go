@@ -71,6 +71,11 @@ func (f *fakeMsgs) Add(_ context.Context, convID string, role, content string) (
 	f.added = append(f.added, m)
 	return m, nil
 }
+func (f *fakeMsgs) AddWithToolCalls(_ context.Context, convID string, role, content string, toolCalls []model.MessageToolCall) (model.Message, error) {
+	m := model.Message{ID: int64(len(f.added) + 1), ConversationID: convID, Role: role, Content: content, ToolCalls: toolCalls}
+	f.added = append(f.added, m)
+	return m, nil
+}
 func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Message, error) {
 	return f.added, nil
 }
@@ -452,6 +457,32 @@ func TestStreamInjectsRAGContextAndStores(t *testing.T) {
 	}
 	if len(fc.inserted) != 2 {
 		t.Fatalf("expected 2 chunks stored (user+assistant), got %d", len(fc.inserted))
+	}
+}
+
+// TestStreamPersistsToolCallsOnAssistantMessage verifies the turn's tool calls
+// (name + arguments) are recorded on the persisted assistant message, closing
+// the post-hoc audit gap.
+func TestStreamPersistsToolCallsOnAssistantMessage(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
+	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}, callResult: testToolReply}
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "", "what's the weather", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	last := msgs.added[len(msgs.added)-1]
+	if last.Role != model.MsgRoleAssistant {
+		t.Fatalf("last message role = %q, want assistant", last.Role)
+	}
+	if len(last.ToolCalls) != 1 {
+		t.Fatalf("persisted tool calls = %d, want 1 (%+v)", len(last.ToolCalls), last.ToolCalls)
+	}
+	if last.ToolCalls[0].Name != testToolName || last.ToolCalls[0].Arguments != testToolArgs {
+		t.Fatalf("persisted tool call = %+v, want {%s %s}", last.ToolCalls[0], testToolName, testToolArgs)
 	}
 }
 
