@@ -29,6 +29,7 @@ spec:
       containers:
       - name: mcp
         image: {{ $server.image }}
+        imagePullPolicy: {{ $server.pullPolicy | default "IfNotPresent" }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: false
