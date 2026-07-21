@@ -16,6 +16,9 @@ config:
   KADENCE_LLM_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
   KADENCE_LLM_MODEL: "your-llm-model"
   KADENCE_EMBED_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
+  # Changing the embedding model re-embeds existing RAG chunks automatically.
+  # ROLLOUT RULE: don't change it in the same deploy that first ships the
+  # re-index feature — change it in a later deploy (see values.yaml comment).
   KADENCE_EMBED_MODEL: "your-embedding-model"
   KADENCE_ADMIN_USERNAME: "admin"
   KADENCE_ADMIN_EMAIL: "admin@example.com"

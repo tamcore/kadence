@@ -50,6 +50,16 @@ config:
   KADENCE_LLM_BASE_URL: ""
   KADENCE_LLM_MODEL: ""
   KADENCE_EMBED_BASE_URL: ""
+  # Changing KADENCE_EMBED_MODEL re-embeds existing RAG chunks in place (no data
+  # loss): on startup the app tags any untagged chunks as the current model, then
+  # a background worker re-embeds anything still on a different model. Vector
+  # search filters to the current model, so recall degrades gracefully and
+  # self-heals — never a hard error.
+  # ROLLOUT RULE: do NOT change this model in the SAME deploy that first
+  # introduces the re-index feature. Roll the feature out first; change the model
+  # in a LATER deploy. Otherwise pre-existing vectors get tagged as the new model
+  # without being re-embedded, and mixed-dimension vectors reach the distance
+  # operator (query errors) instead of being re-embedded.
   KADENCE_EMBED_MODEL: ""
   KADENCE_ADMIN_USERNAME: ""
   KADENCE_ADMIN_EMAIL: ""
