@@ -58,7 +58,9 @@ func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 	owner := newUser(t, users, "wa-owner")
 	other := newUser(t, users, "wa-other")
 
-	_ = repo.Create(ctx, model.WebAuthnCredential{UserID: owner.ID, CredentialID: []byte("c1"), PublicKey: []byte("p")})
+	if err := repo.Create(ctx, model.WebAuthnCredential{UserID: owner.ID, CredentialID: []byte("c1"), PublicKey: []byte("p")}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
 	pub := mustList(t, repo, owner.ID)[0].PublicID
 
 	if err := repo.Rename(ctx, pub, other.ID, "hijack"); err != store.ErrNotFound {
@@ -88,7 +90,9 @@ func TestWebAuthnRepo_UpdateSignCount(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
 	u := newUser(t, users, "wa-sc")
-	_ = repo.Create(ctx, model.WebAuthnCredential{UserID: u.ID, CredentialID: []byte("c"), PublicKey: []byte("p")})
+	if err := repo.Create(ctx, model.WebAuthnCredential{UserID: u.ID, CredentialID: []byte("c"), PublicKey: []byte("p")}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
 
 	now := time.Now().UTC().Truncate(time.Second)
 	if err := repo.UpdateSignCount(ctx, []byte("c"), 42, now); err != nil {
