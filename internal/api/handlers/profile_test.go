@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,9 +43,13 @@ type fakeProfileSessions struct {
 	deletedAll bool
 	created    bool
 	cur        model.Session
+	getErr     error
 }
 
 func (f *fakeProfileSessions) GetByID(_ context.Context, _ string) (model.Session, error) {
+	if f.getErr != nil {
+		return model.Session{}, f.getErr
+	}
 	return f.cur, nil
 }
 
@@ -143,7 +148,38 @@ func TestProfile_ChangePassword(t *testing.T) {
 		t.Fatalf("expected pw update + revoke-others + recreate; users=%+v sessions=%+v", users, sessions)
 	}
 	if strings.Contains(body, "longenough123") {
-		t.Fatalf("password leaked in response: %s", body)
+		t.Fatalf("new password leaked in response: %s", body)
+	}
+	if strings.Contains(body, "current-pw") || strings.Contains(body, "WRONG") {
+		t.Fatalf("current password leaked in response: %s", body)
+	}
+	if strings.Contains(body, "passwordHash") || strings.Contains(body, "PasswordHash") {
+		t.Fatalf("password hash field leaked in response: %s", body)
+	}
+}
+
+func TestProfile_ChangePassword_SessionLookupError_StillSucceeds(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("current-pw"), bcrypt.DefaultCost)
+	users := &fakeProfileUsers{user: model.User{ID: 1, PasswordHash: string(hash)}}
+	sessions := &fakeProfileSessions{getErr: errors.New("session store unavailable")}
+	h := handlers.NewProfile(users, sessions, config.Config{})
+
+	rec := doAuthedPostRaw(t, h.ChangePassword, `{"currentPassword":"current-pw","newPassword":"longenough123","logoutOthers":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 (password already changed; session-recreate failure should be swallowed)", rec.Code)
+	}
+	body := rec.Body.String()
+	if !users.passwordUpdated {
+		t.Fatal("expected password to be updated despite session lookup error")
+	}
+	if !sessions.deletedAll || !sessions.created {
+		t.Fatalf("expected revoke-others + recreate to proceed despite GetByID error; sessions=%+v", sessions)
+	}
+	if strings.Contains(body, "current-pw") || strings.Contains(body, "WRONG") {
+		t.Fatalf("current password leaked in response: %s", body)
+	}
+	if strings.Contains(body, "passwordHash") || strings.Contains(body, "PasswordHash") {
+		t.Fatalf("password hash field leaked in response: %s", body)
 	}
 }
 
