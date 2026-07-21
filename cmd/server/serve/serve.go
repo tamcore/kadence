@@ -67,6 +67,7 @@ func Run() error {
 	}
 
 	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
+	deps.Profile = handlers.NewProfile(users, sessions, cfg)
 
 	if cfg.ChatEnabled() {
 		convs := store.NewConversationRepository(pool)
