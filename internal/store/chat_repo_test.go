@@ -15,9 +15,10 @@ const testAliceUsername = "alice"
 // Shared test-fixture emails, reused across store_test files to avoid
 // goconst duplicate-literal warnings.
 const (
-	testEmailA = "a@x.io"
-	testEmailB = "b@x.io"
-	testEmailO = "o@x.io"
+	testEmailA   = "a@x.io"
+	testEmailB   = "b@x.io"
+	testEmailO   = "o@x.io"
+	testEmailBob = "bob@x.io"
 )
 
 func TestConversationAndMessageFlow(t *testing.T) {

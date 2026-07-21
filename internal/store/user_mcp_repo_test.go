@@ -31,7 +31,7 @@ func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	bob, err := users.Create(ctx, model.User{Username: testBobUsername, Email: "bob@x.io", PasswordHash: "h", Role: model.RoleUser})
+	bob, err := users.Create(ctx, model.User{Username: testBobUsername, Email: testEmailBob, PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestUserServerRepo_OwnerIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	bob, err := users.Create(ctx, model.User{Username: testBobUsername, Email: "bob@x.io", PasswordHash: "h", Role: model.RoleUser})
+	bob, err := users.Create(ctx, model.User{Username: testBobUsername, Email: testEmailBob, PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
 		t.Fatalf("create bob: %v", err)
 	}

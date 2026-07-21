@@ -9,6 +9,12 @@ const (
 	RoleUser  = "user"
 )
 
+// Unit system values.
+const (
+	UnitMetric   = "metric"
+	UnitImperial = "imperial"
+)
+
 // User is an application account. Login is by Username; Email is the canonical
 // backend identity (unique, used for future OIDC linking and notifications).
 type User struct {
@@ -17,6 +23,8 @@ type User struct {
 	Email        string
 	PasswordHash string
 	Role         string
+	DisplayName  string
+	UnitSystem   string
 	CreatedAt    time.Time
 }
 
