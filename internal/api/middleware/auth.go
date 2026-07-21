@@ -3,16 +3,23 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/model"
 )
 
-// SessionGetter loads a live session by id.
+// SessionGetter loads a live session by id and records recent activity.
 type SessionGetter interface {
 	GetByID(ctx context.Context, id string) (model.Session, error)
+	Touch(ctx context.Context, id string, ip string, at time.Time) error
 }
+
+// sessionTouchInterval throttles how often LoadUser updates a session's
+// last-active timestamp, to avoid a write on every single request.
+const sessionTouchInterval = 5 * time.Minute
 
 // UserGetter loads a user by id.
 type UserGetter interface {
@@ -35,6 +42,12 @@ func LoadUser(sessions SessionGetter, users UserGetter) func(http.Handler) http.
 			if err != nil {
 				next.ServeHTTP(w, r)
 				return
+			}
+			now := time.Now()
+			if now.Sub(sess.LastSeenAt) > sessionTouchInterval {
+				if err := sessions.Touch(r.Context(), sess.ID, auth.ClientIP(r), now); err != nil {
+					slog.Warn("session touch failed", "err", err)
+				}
 			}
 			u, err := users.GetByID(r.Context(), sess.UserID)
 			if err != nil {

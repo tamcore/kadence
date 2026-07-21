@@ -13,13 +13,33 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
-type fakeSessions struct{ s model.Session }
+const (
+	testSessionID     = "sid"
+	testUsername      = "alice"
+	testSessionCookie = "session_id"
+)
+
+type fakeSessions struct {
+	s         model.Session
+	touchedID *string
+	touchedIP *string
+}
 
 func (f fakeSessions) GetByID(_ context.Context, id string) (model.Session, error) {
 	if id == f.s.ID {
 		return f.s, nil
 	}
 	return model.Session{}, store.ErrNotFound
+}
+
+func (f fakeSessions) Touch(_ context.Context, id string, ip string, _ time.Time) error {
+	if f.touchedID != nil {
+		*f.touchedID = id
+	}
+	if f.touchedIP != nil {
+		*f.touchedIP = ip
+	}
+	return nil
 }
 
 type fakeUsers struct{ u model.User }
@@ -32,16 +52,16 @@ func (f fakeUsers) GetByID(_ context.Context, id int64) (model.User, error) {
 }
 
 func TestLoadUserPutsUserInContext(t *testing.T) {
-	sess := model.Session{ID: "sid", UserID: 5, ExpiresAt: time.Now().Add(time.Hour)}
-	usr := model.User{ID: 5, Username: "alice", Role: model.RoleUser}
-	mw := middleware.LoadUser(fakeSessions{sess}, fakeUsers{usr})
+	sess := model.Session{ID: testSessionID, UserID: 5, ExpiresAt: time.Now().Add(time.Hour)}
+	usr := model.User{ID: 5, Username: testUsername, Role: model.RoleUser}
+	mw := middleware.LoadUser(fakeSessions{s: sess}, fakeUsers{usr})
 
 	var seen *model.User
 	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = auth.UserFromContext(r.Context())
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(&http.Cookie{Name: "session_id", Value: "sid"})
+	req.AddCookie(&http.Cookie{Name: testSessionCookie, Value: testSessionID})
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	if seen == nil || seen.ID != 5 {
@@ -62,6 +82,50 @@ func TestLoadUserNoCookieProceedsAnonymous(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
 	if !called {
 		t.Fatal("next handler not called")
+	}
+}
+
+func TestLoadUser_TouchesStaleSession(t *testing.T) {
+	sess := model.Session{
+		ID: testSessionID, UserID: 5, ExpiresAt: time.Now().Add(time.Hour),
+		LastSeenAt: time.Now().Add(-10 * time.Minute),
+	}
+	usr := model.User{ID: 5, Username: testUsername, Role: model.RoleUser}
+	var touchedID, touchedIP string
+	fake := fakeSessions{s: sess, touchedID: &touchedID, touchedIP: &touchedIP}
+	mw := middleware.LoadUser(fake, fakeUsers{usr})
+
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: testSessionCookie, Value: testSessionID})
+	req.RemoteAddr = "5.6.7.8:1111"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if touchedID != testSessionID {
+		t.Errorf("touchedID = %q, want %q", touchedID, testSessionID)
+	}
+	if touchedIP != "5.6.7.8" {
+		t.Errorf("touchedIP = %q, want %q", touchedIP, "5.6.7.8")
+	}
+}
+
+func TestLoadUser_SkipsFreshSession(t *testing.T) {
+	sess := model.Session{
+		ID: testSessionID, UserID: 5, ExpiresAt: time.Now().Add(time.Hour),
+		LastSeenAt: time.Now(),
+	}
+	usr := model.User{ID: 5, Username: testUsername, Role: model.RoleUser}
+	var touchedID string
+	fake := fakeSessions{s: sess, touchedID: &touchedID}
+	mw := middleware.LoadUser(fake, fakeUsers{usr})
+
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: testSessionCookie, Value: testSessionID})
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if touchedID != "" {
+		t.Errorf("touchedID = %q, want empty (no touch)", touchedID)
 	}
 }
 
