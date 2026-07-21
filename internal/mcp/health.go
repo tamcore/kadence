@@ -85,10 +85,12 @@ func (p *HealthPoller) probeAll(ctx context.Context) {
 // StatusFor returns cached health for every configured server applicable to
 // username, in configured order. A not-yet-probed server has a zero CheckedAt.
 func (p *HealthPoller) StatusFor(username string) []ServerHealth {
+	servers := p.src.Servers()
+
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	var out []ServerHealth
-	for _, s := range p.src.Servers() {
+	for _, s := range servers {
 		if !s.AppliesTo(username) {
 			continue
 		}
@@ -104,9 +106,11 @@ func (p *HealthPoller) StatusFor(username string) []ServerHealth {
 // ToolsFor returns cached tools for one server applicable to username
 // (case-insensitive name match). ok is false when the server is not applicable.
 func (p *HealthPoller) ToolsFor(username, serverName string) ([]ToolInfo, bool) {
+	servers := p.src.Servers()
+
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	for _, s := range p.src.Servers() {
+	for _, s := range servers {
 		if !strings.EqualFold(s.Name, serverName) || !s.AppliesTo(username) {
 			continue
 		}
