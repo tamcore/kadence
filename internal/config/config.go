@@ -73,6 +73,12 @@ type Config struct {
 	// single chat request, as defense-in-depth against provider tool-count
 	// limits (e.g. OpenAI's 128-tool cap) when many MCP servers are configured.
 	MCPMaxTools int
+	// MCPCAFile is the path to a PEM-encoded CA certificate used to verify
+	// MCP server (and markitdown) TLS certs over HTTPS (KADENCE_MCP_CA_FILE).
+	// Empty means no custom CA: MCP traffic uses mcp-go's default HTTP
+	// client (plaintext http, or https verified against the system trust
+	// store).
+	MCPCAFile string
 }
 
 const (
@@ -135,6 +141,7 @@ func Load() Config {
 
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 16)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
+	cfg.MCPCAFile = os.Getenv("KADENCE_MCP_CA_FILE")
 
 	return cfg
 }

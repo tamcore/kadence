@@ -83,7 +83,7 @@ func TestRegistry_ToolsForAndCall(t *testing.T) {
 
 	reg := NewRegistry([]Server{
 		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
-	})
+	}, nil)
 	if !reg.Enabled() {
 		t.Fatal("registry with servers must be Enabled")
 	}
@@ -121,7 +121,7 @@ func TestRegistry_UserScopeIsolation(t *testing.T) {
 
 	reg := NewRegistry([]Server{
 		{Name: testGarminName, Scope: testUserPhilippScope, URL: ts.URL, Transport: transportStreamableHTTP},
-	})
+	}, nil)
 
 	ctx := context.Background()
 
@@ -147,7 +147,7 @@ func TestRegistry_UserScopeIsolation(t *testing.T) {
 }
 
 func TestRegistry_EnabledFalseWhenNoServers(t *testing.T) {
-	reg := NewRegistry(nil)
+	reg := NewRegistry(nil, nil)
 	if reg.Enabled() {
 		t.Fatal("registry with no servers must not be Enabled")
 	}
@@ -157,7 +157,7 @@ func TestRegistry_CallUnknownTool(t *testing.T) {
 	ts := newFakeGarminServer(t)
 	reg := NewRegistry([]Server{
 		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
-	})
+	}, nil)
 	ctx := context.Background()
 
 	if _, err := reg.Call(ctx, "anyuser", "unknownserver__whatever", `{}`); err == nil {
@@ -176,7 +176,7 @@ func TestRegistry_ToolsForFiltersByTools(t *testing.T) {
 			Transport: transportStreamableHTTP,
 			Tools:     []string{"get_*"},
 		},
-	})
+	}, nil)
 
 	ctx := context.Background()
 	tools, err := reg.ToolsFor(ctx, "anyuser")
@@ -207,7 +207,7 @@ func TestRegistry_CallRejectsFilteredOutTool(t *testing.T) {
 			Transport: transportStreamableHTTP,
 			Tools:     []string{"get_*"},
 		},
-	})
+	}, nil)
 
 	ctx := context.Background()
 	_, err := reg.Call(ctx, "anyuser", "garmin__create_run_workout", `{}`)

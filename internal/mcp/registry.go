@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path"
 	"strings"
 	"sync"
@@ -16,18 +17,24 @@ import (
 // list (namespaced by server) and dispatches tool calls back to the
 // owning server.
 type Registry struct {
-	servers []Server
+	servers    []Server
+	httpClient *http.Client // optional CA-verifying client; nil = mcp-go default
 
 	mu      sync.Mutex
 	clients map[string]mcpClient // keyed by Name+"/"+Scope
 }
 
 // NewRegistry builds a Registry over the given servers. Clients are created
-// lazily on first use.
-func NewRegistry(servers []Server) *Registry {
+// lazily on first use. httpClient, if non-nil (e.g. from HTTPClientWithCA),
+// is used for every server's transport instead of mcp-go's default client —
+// used to verify MCP servers' TLS certs against a custom CA. Pass nil to
+// preserve today's behavior (plaintext http, or https verified against the
+// system trust store).
+func NewRegistry(servers []Server, httpClient *http.Client) *Registry {
 	return &Registry{
-		servers: servers,
-		clients: make(map[string]mcpClient),
+		servers:    servers,
+		httpClient: httpClient,
+		clients:    make(map[string]mcpClient),
 	}
 }
 
@@ -142,7 +149,7 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 		return c, nil
 	}
 
-	c, err := newClient(ctx, s)
+	c, err := newClient(ctx, s, r.httpClient)
 	if err != nil {
 		return nil, err
 	}
