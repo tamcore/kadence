@@ -2,15 +2,19 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	gwa "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/crypto"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 	"github.com/tamcore/kadence/internal/webauthn"
 )
 
@@ -200,4 +204,93 @@ func (h *WebAuthn) LoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	RespondJSON(w, http.StatusOK, pub)
+}
+
+type credentialDTO struct {
+	PublicID   string  `json:"publicId"`
+	Name       string  `json:"name"`
+	CreatedAt  string  `json:"createdAt"`
+	LastUsedAt *string `json:"lastUsedAt"`
+}
+
+// ListCredentials returns the authenticated user's passkeys (no secret bytes).
+func (h *WebAuthn) ListCredentials(w http.ResponseWriter, r *http.Request) {
+	if h.disabled(w) {
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	if u == nil {
+		RespondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	list, err := h.creds.ListByUser(r.Context(), u.ID)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not list passkeys")
+		return
+	}
+	out := make([]credentialDTO, 0, len(list))
+	for _, c := range list {
+		dto := credentialDTO{PublicID: c.PublicID, Name: c.Name, CreatedAt: c.CreatedAt.Format(time.RFC3339)}
+		if c.LastUsedAt != nil {
+			s := c.LastUsedAt.Format(time.RFC3339)
+			dto.LastUsedAt = &s
+		}
+		out = append(out, dto)
+	}
+	RespondJSON(w, http.StatusOK, out)
+}
+
+// RenameCredential renames one of the user's passkeys.
+func (h *WebAuthn) RenameCredential(w http.ResponseWriter, r *http.Request) {
+	if h.disabled(w) {
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	if u == nil {
+		RespondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = defaultPasskeyName
+	}
+	publicID := chi.URLParam(r, "publicId")
+	if err := h.creds.Rename(r.Context(), publicID, u.ID, name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "passkey not found")
+			return
+		}
+		RespondError(w, http.StatusInternalServerError, "could not rename passkey")
+		return
+	}
+	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// DeleteCredential removes one of the user's passkeys.
+func (h *WebAuthn) DeleteCredential(w http.ResponseWriter, r *http.Request) {
+	if h.disabled(w) {
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	if u == nil {
+		RespondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	publicID := chi.URLParam(r, "publicId")
+	if err := h.creds.DeleteByPublicIDForUser(r.Context(), publicID, u.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "passkey not found")
+			return
+		}
+		RespondError(w, http.StatusInternalServerError, "could not delete passkey")
+		return
+	}
+	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
