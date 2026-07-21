@@ -1,0 +1,42 @@
+{{- if .Values.mcp.tls.enabled }}
+{{- $fullname := include "kadence.fullname" . }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-mcp-selfsigned
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-mcp-ca
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  isCA: true
+  commonName: kadence-mcp-ca
+  secretName: {{ $fullname }}-mcp-ca
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ $fullname }}-mcp-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-mcp-ca-issuer
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  ca:
+    secretName: {{ $fullname }}-mcp-ca
+{{- end }}

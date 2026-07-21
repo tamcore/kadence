@@ -69,8 +69,9 @@ spec:
         {{- $prefix := include "kadence.mcp.envPrefix" (dict "root" $ "server" $server) }}
         {{- $svc := include "kadence.mcp.fullname" (dict "root" $ "server" $server) }}
         {{- $secret := $.Values.mcp.basicAuth.existingSecret | default (include "kadence.mcp.authSecretName" $) }}
+        {{- $scheme := ternary "https" "http" $.Values.mcp.tls.enabled }}
         - name: {{ $prefix }}_URL
-          value: {{ printf "http://%s:8080%s" $svc ($server.path | default "/mcp") | quote }}
+          value: {{ printf "%s://%s:8080%s" $scheme $svc ($server.path | default "/mcp") | quote }}
         - name: {{ $prefix }}_TRANSPORT
           value: {{ $server.transport | default "streamable-http" | quote }}
         - name: {{ $prefix }}_AUTH_USER
@@ -85,14 +86,19 @@ spec:
         {{- if .Values.markitdown.enabled }}
         {{- $mdSvc := include "kadence.markitdown.fullname" . }}
         {{- $mdSecret := include "kadence.markitdown.authSecretName" . }}
+        {{- $mdScheme := ternary "https" "http" .Values.mcp.tls.enabled }}
         - name: KADENCE_MARKITDOWN_URL
-          value: {{ printf "http://%s:8080%s" $mdSvc .Values.markitdown.path | quote }}
+          value: {{ printf "%s://%s:8080%s" $mdScheme $mdSvc .Values.markitdown.path | quote }}
         - name: KADENCE_MARKITDOWN_TRANSPORT
           value: "streamable-http"
         - name: KADENCE_MARKITDOWN_AUTH_USER
           valueFrom: { secretKeyRef: { name: {{ $mdSecret }}, key: username } }
         - name: KADENCE_MARKITDOWN_AUTH_PASS
           valueFrom: { secretKeyRef: { name: {{ $mdSecret }}, key: password } }
+        {{- end }}
+        {{- if .Values.mcp.tls.enabled }}
+        - name: KADENCE_MCP_CA_FILE
+          value: /etc/kadence/mcp-ca/ca.crt
         {{- end }}
         envFrom:
         - configMapRef:
@@ -120,6 +126,20 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        {{- if .Values.mcp.tls.enabled }}
+        - name: mcp-ca
+          mountPath: /etc/kadence/mcp-ca/ca.crt
+          subPath: ca.crt
+          readOnly: true
+        {{- end }}
       volumes:
       - name: tmp
         emptyDir: {}
+      {{- if .Values.mcp.tls.enabled }}
+      - name: mcp-ca
+        secret:
+          secretName: {{ include "kadence.fullname" . }}-mcp-ca
+          items:
+          - key: ca.crt
+            path: ca.crt
+      {{- end }}

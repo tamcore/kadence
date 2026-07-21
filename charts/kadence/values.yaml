@@ -91,6 +91,8 @@ mcp:
   authUsername: kadence # basicAuth username the app uses for every MCP server
   basicAuth:
     existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated + sticky)
+  tls:
+    enabled: false # requires cert-manager on cluster; mints per-server certs and serves app<->MCP over HTTPS
 
 # Optional markitdown-mcp ingestion sidecar. When enabled, renders a fixed
 # Deployment (markitdown-mcp) + nginx basicAuth sidecar + Service +

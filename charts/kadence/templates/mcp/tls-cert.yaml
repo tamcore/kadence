@@ -1,0 +1,29 @@
+{{- if .Values.mcp.tls.enabled }}
+{{- $root := . }}
+{{- $ns := .Release.Namespace }}
+{{- $caIssuer := printf "%s-mcp-ca-issuer" (include "kadence.fullname" .) }}
+{{- range .Values.mcp.servers }}
+{{- $server := . }}
+{{- $fullname := include "kadence.mcp.fullname" (dict "root" $root "server" $server) }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-tls
+  labels:
+    {{- include "kadence.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: mcp
+    kadence.io/mcp-server: {{ $server.name }}
+spec:
+  secretName: {{ $fullname }}-tls
+  dnsNames:
+  - {{ $fullname | quote }}
+  - {{ printf "%s.%s" $fullname $ns | quote }}
+  - {{ printf "%s.%s.svc" $fullname $ns | quote }}
+  - {{ printf "%s.%s.svc.cluster.local" $fullname $ns | quote }}
+  issuerRef:
+    name: {{ $caIssuer }}
+    kind: Issuer
+    group: cert-manager.io
+---
+{{- end }}
+{{- end }}
