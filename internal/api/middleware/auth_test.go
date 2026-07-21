@@ -2,6 +2,7 @@ package middleware_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -23,6 +24,7 @@ type fakeSessions struct {
 	s         model.Session
 	touchedID *string
 	touchedIP *string
+	touchErr  error
 }
 
 func (f fakeSessions) GetByID(_ context.Context, id string) (model.Session, error) {
@@ -39,7 +41,7 @@ func (f fakeSessions) Touch(_ context.Context, id string, ip string, _ time.Time
 	if f.touchedIP != nil {
 		*f.touchedIP = ip
 	}
-	return nil
+	return f.touchErr
 }
 
 type fakeUsers struct{ u model.User }
@@ -106,6 +108,28 @@ func TestLoadUser_TouchesStaleSession(t *testing.T) {
 	}
 	if touchedIP != "5.6.7.8" {
 		t.Errorf("touchedIP = %q, want %q", touchedIP, "5.6.7.8")
+	}
+}
+
+func TestLoadUser_ProceedsWhenTouchFails(t *testing.T) {
+	sess := model.Session{
+		ID: testSessionID, UserID: 5, ExpiresAt: time.Now().Add(time.Hour),
+		LastSeenAt: time.Now().Add(-10 * time.Minute),
+	}
+	usr := model.User{ID: 5, Username: testUsername, Role: model.RoleUser}
+	fake := fakeSessions{s: sess, touchErr: errors.New("touch failed")}
+	mw := middleware.LoadUser(fake, fakeUsers{usr})
+
+	var seen *model.User
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seen = auth.UserFromContext(r.Context())
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: testSessionCookie, Value: testSessionID})
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if seen == nil || seen.ID != 5 {
+		t.Fatalf("user not loaded despite touch error: %+v", seen)
 	}
 }
 
