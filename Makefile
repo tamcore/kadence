@@ -76,7 +76,7 @@ dev-deploy-k8s: ## Build dev image, push to $(IMAGE_REGISTRY), deploy to K8s (ne
 		-f ./charts/kadence/values-dev.yaml \
 		--set image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
 		--set image.tag="$(IMAGE_TAG)" \
-		| kubectl $(_KUBECTL_CTX) apply -f -
+		| kubectl $(_KUBECTL_CTX) apply --server-side --force-conflicts -f -
 
 clean: ## Remove build artifacts
 	rm -rf bin/ coverage.out dist/ web/build/
