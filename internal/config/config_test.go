@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -290,6 +291,77 @@ func TestUserMCPDisabledWhenNoKey(t *testing.T) {
 	c := Load()
 	if c.UserMCPEnabled() {
 		t.Fatal("UserMCPEnabled=true want false (no key)")
+	}
+}
+
+func TestValidateRequiresEncryptionKeyInProdWhenAllowlistSet(t *testing.T) {
+	t.Setenv("KADENCE_DATABASE_URL", "postgres://x")
+	t.Setenv("KADENCE_ENV", "prod")
+	t.Setenv("KADENCE_CSRF_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
+	t.Setenv("KADENCE_ENCRYPTION_KEY", "")
+
+	cfg := Load()
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error for missing encryption key in prod with allowlist set")
+	}
+	const wantSubstring = "KADENCE_ENCRYPTION_KEY must be a base64-encoded 32-byte key"
+	if !strings.Contains(err.Error(), wantSubstring) {
+		t.Fatalf("Validate() error = %q, want substring %q", err.Error(), wantSubstring)
+	}
+}
+
+func TestValidatePassesInProdWithValidEncryptionKeyAndAllowlist(t *testing.T) {
+	t.Setenv("KADENCE_DATABASE_URL", "postgres://x")
+	t.Setenv("KADENCE_ENV", "prod")
+	t.Setenv("KADENCE_CSRF_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
+	t.Setenv("KADENCE_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+
+	cfg := Load()
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil with valid 32-byte encryption key", err)
+	}
+}
+
+func TestValidateSkipsEncryptionKeyRuleOutsideProd(t *testing.T) {
+	t.Setenv("KADENCE_DATABASE_URL", "postgres://x")
+	t.Setenv("KADENCE_ENV", "")
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
+	t.Setenv("KADENCE_ENCRYPTION_KEY", "")
+
+	cfg := Load()
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil outside prod even without encryption key", err)
+	}
+}
+
+func TestDecodeKeyInvalidBase64YieldsNilKeyAndDisablesUserMCP(t *testing.T) {
+	t.Setenv("KADENCE_ENCRYPTION_KEY", "not-valid-base64!!!")
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
+
+	cfg := Load()
+
+	if len(cfg.EncryptionKey) != 0 {
+		t.Fatalf("EncryptionKey len=%d, want 0 for invalid base64", len(cfg.EncryptionKey))
+	}
+	if cfg.UserMCPEnabled() {
+		t.Fatal("UserMCPEnabled() = true, want false for invalid base64 key")
+	}
+}
+
+func TestUserMCPDisabledWithWrongKeyLength(t *testing.T) {
+	t.Setenv("KADENCE_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(make([]byte, 16)))
+	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
+
+	cfg := Load()
+
+	if cfg.UserMCPEnabled() {
+		t.Fatal("UserMCPEnabled() = true, want false for 16-byte key")
 	}
 }
 
