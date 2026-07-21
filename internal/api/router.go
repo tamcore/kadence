@@ -27,6 +27,7 @@ type Deps struct {
 	Context     *handlers.Context
 	Credentials *handlers.Credentials
 	MCP         *handlers.MCP
+	Profile     *handlers.Profile
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -112,6 +113,11 @@ func mountAuth(r chi.Router, deps Deps) {
 
 		if deps.Credentials != nil {
 			r.Post("/api/credentials/{requestId}", deps.Credentials.Submit)
+		}
+
+		if deps.Profile != nil {
+			r.Patch("/api/profile", deps.Profile.Update)
+			r.Post("/api/profile/password", deps.Profile.ChangePassword)
 		}
 
 		r.Group(func(r chi.Router) {

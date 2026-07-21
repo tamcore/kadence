@@ -42,14 +42,19 @@ func NewAuth(cfg config.Config, users AuthUsers, sessions AuthSessions) *Auth {
 }
 
 type publicUser struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	Email       string `json:"email"`
+	Role        string `json:"role"`
+	DisplayName string `json:"displayName"`
+	UnitSystem  string `json:"unitSystem"`
 }
 
 func toPublic(u model.User) publicUser {
-	return publicUser{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role}
+	return publicUser{
+		ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role,
+		DisplayName: u.DisplayName, UnitSystem: u.UnitSystem,
+	}
 }
 
 // Login authenticates by username + password and starts a session.
@@ -86,12 +91,19 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setSessionCookie(w, h.cfg, id, expiresAt)
+	RespondJSON(w, http.StatusOK, toPublic(u))
+}
+
+// setSessionCookie writes the session cookie with the exact name and
+// attributes used across all session-issuing handlers (login, and profile
+// password-change session rotation).
+func setSessionCookie(w http.ResponseWriter, cfg config.Config, id string, expiresAt time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: id, Path: "/",
 		Expires: expiresAt, MaxAge: int(time.Until(expiresAt).Seconds()),
-		HttpOnly: true, Secure: h.cfg.IsProd(), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: cfg.IsProd(), SameSite: http.SameSiteLaxMode,
 	})
-	RespondJSON(w, http.StatusOK, toPublic(u))
 }
 
 // Logout deletes the current session and clears the cookie.
