@@ -33,10 +33,21 @@ func scanWebAuthnCred(row pgx.Row) (model.WebAuthnCredential, error) {
 
 // Create inserts a credential (public_id/created_at via column defaults).
 func (r *WebAuthnCredentialRepository) Create(ctx context.Context, c model.WebAuthnCredential) error {
+	// aaguid/transports are NOT NULL columns; a nil slice sends explicit SQL
+	// NULL (column DEFAULT does not apply), so coalesce to empty non-nil
+	// values without mutating the caller's struct.
+	aaguid := c.AAGUID
+	if aaguid == nil {
+		aaguid = []byte{}
+	}
+	transports := c.Transports
+	if transports == nil {
+		transports = []string{}
+	}
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO webauthn_credentials (user_id, credential_id, public_key, aaguid, sign_count, transports, name, backup_eligible, backup_state)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		c.UserID, c.CredentialID, c.PublicKey, c.AAGUID, c.SignCount, c.Transports, c.Name, c.BackupEligible, c.BackupState)
+		c.UserID, c.CredentialID, c.PublicKey, aaguid, c.SignCount, transports, c.Name, c.BackupEligible, c.BackupState)
 	return err
 }
 
