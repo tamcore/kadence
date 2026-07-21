@@ -96,6 +96,18 @@ externalDatabase:
 # MCP servers. Each entry -> a Deployment (MCP image) + nginx basicAuth sidecar
 # + Service + NetworkPolicy, and MCP_<NAME>_<SCOPE>_* env injected into the main app.
 # See values-dev.yaml.example.
+#
+# Per-server object keys:
+#   name        (required) DNS-safe, NO underscores (breaks the MCP_<NAME>_* Go parser)
+#   scope       "global" (all users) or {user: <username>}
+#   image, pullPolicy, transport (streamable-http|sse), port, path
+#   tools       app-side glob allowlist, e.g. ["browser_*"]
+#   env         [{name, value}] passed to the MCP container
+#   existingSecret / persistence  (optional)
+#   resources   (optional) standard container resources; unset -> no limits
+#   shm         (optional) size string, e.g. "512Mi"; mounts a Memory-backed
+#               emptyDir at /dev/shm — required for Chromium-based servers
+#               (Playwright/cloakbrowser) which crash on the default 64Mi shm
 mcp:
   servers: []
   authUsername: kadence # basicAuth username the app uses for every MCP server

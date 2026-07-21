@@ -48,6 +48,10 @@ spec:
         ports:
         - containerPort: {{ $server.port }}
           name: mcp
+        {{- with $server.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         {{- with $server.env }}
         env:
           {{- toYaml . | nindent 8 }}
@@ -57,10 +61,17 @@ spec:
         - secretRef:
             name: {{ $server.existingSecret }}
         {{- end }}
-        {{- if and $server.persistence $server.persistence.enabled }}
+        {{- if or (and $server.persistence $server.persistence.enabled) $server.shm }}
         volumeMounts:
+        {{- if and $server.persistence $server.persistence.enabled }}
         - name: data
           mountPath: {{ $server.persistence.mountPath }}
+        {{- end }}
+        {{- if $server.shm }}
+        # Chromium-based MCP servers crash on the default 64Mi /dev/shm.
+        - name: dshm
+          mountPath: /dev/shm
+        {{- end }}
         {{- end }}
       - name: nginx
         image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
@@ -117,6 +128,12 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: {{ $fullname }}
+      {{- end }}
+      {{- if $server.shm }}
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ $server.shm }}
       {{- end }}
 ---
 {{- if and $server.persistence $server.persistence.enabled }}
