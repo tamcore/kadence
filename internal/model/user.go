@@ -18,14 +18,15 @@ const (
 // User is an application account. Login is by Username; Email is the canonical
 // backend identity (unique, used for future OIDC linking and notifications).
 type User struct {
-	ID           int64
-	Username     string
-	Email        string
-	PasswordHash string
-	Role         string
-	DisplayName  string
-	UnitSystem   string
-	CreatedAt    time.Time
+	ID             int64
+	Username       string
+	Email          string
+	PasswordHash   string
+	Role           string
+	DisplayName    string
+	UnitSystem     string
+	CreatedAt      time.Time
+	WebAuthnHandle string
 }
 
 // IsAdmin reports whether the user has the admin role.
