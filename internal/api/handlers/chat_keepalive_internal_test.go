@@ -17,7 +17,7 @@ import (
 // finishing, so the keepalive ticker fires at least once.
 type slowStreamer struct{ delay time.Duration }
 
-func (s slowStreamer) Stream(_ context.Context, _ int64, _ string, _ string, _ string, sink chat.EventSink) error {
+func (s slowStreamer) Stream(_ context.Context, _ int64, _ string, _ string, _ string, _ string, sink chat.EventSink) error {
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: "conv-uuid-1"})
 	_ = sink.Flush()
 	time.Sleep(s.delay)

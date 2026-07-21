@@ -16,7 +16,7 @@ import (
 
 type fakeStreamer struct{ gotText string }
 
-func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ string, _ string, text string, sink chat.EventSink) error {
+func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ string, _ string, _ string, text string, sink chat.EventSink) error {
 	f.gotText = text
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: "conv-uuid-1"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventToken, Delta: "hi"})
