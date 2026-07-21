@@ -49,6 +49,7 @@ go.work.sum
 .superpowers
 docs/superpowers
 IDEA.md
+AGENTS.md.local
 
 # Stray root-level node deps (frontend lives in web/)
 /node_modules/
