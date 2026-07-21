@@ -99,6 +99,9 @@ func mountAuth(r chi.Router, deps Deps) {
 		if deps.MCP != nil {
 			r.Get("/api/mcp", deps.MCP.List)
 			r.Get("/api/mcp/{name}/tools", deps.MCP.Tools)
+			r.Post("/api/mcp", deps.MCP.Create)
+			r.Put("/api/mcp/{id}", deps.MCP.Update)
+			r.Delete("/api/mcp/{id}", deps.MCP.Delete)
 		}
 
 		if deps.Documents != nil {

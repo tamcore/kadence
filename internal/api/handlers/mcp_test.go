@@ -14,7 +14,10 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 )
+
+const allowedTestHost = "a.example.io"
 
 type fakeMcpHealth struct {
 	status []mcp.ServerHealth
@@ -28,6 +31,73 @@ func (f *fakeMcpHealth) StatusFor(_ string) []mcp.ServerHealth {
 func (f *fakeMcpHealth) ToolsFor(_, serverName string) ([]mcp.ToolInfo, bool) {
 	t, ok := f.tools[serverName]
 	return t, ok
+}
+
+// fakeUserStore is a test double for the mcpUserStore seam.
+type fakeUserStore struct {
+	created   bool
+	createErr error
+	deleteErr error
+	updateErr error
+	listRecs  []store.UserMCPRecord
+	listErr   error
+}
+
+func (f *fakeUserStore) Create(_ context.Context, _ int64, _ store.UserMCPInput) (int64, error) {
+	f.created = true
+	if f.createErr != nil {
+		return 0, f.createErr
+	}
+	return 1, nil
+}
+
+func (f *fakeUserStore) Update(_ context.Context, _, _ int64, _ store.UserMCPInput) error {
+	return f.updateErr
+}
+
+func (f *fakeUserStore) Delete(_ context.Context, _, _ int64) error {
+	return f.deleteErr
+}
+
+func (f *fakeUserStore) ListForOwner(_ context.Context, _ int64) ([]store.UserMCPRecord, error) {
+	return f.listRecs, f.listErr
+}
+
+// doAuthedPost builds an authed POST request with a JSON body, invokes fn,
+// and returns the status code.
+func doAuthedPost(t *testing.T, fn http.HandlerFunc, role, body string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(body))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: "u", Role: role}))
+	rec := httptest.NewRecorder()
+	fn(rec, req)
+	return rec.Code
+}
+
+// doAuthedPostBody builds an authed POST request with a JSON body, invokes
+// fn, and returns the response body string.
+func doAuthedPostBody(t *testing.T, fn http.HandlerFunc, role, body string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(body))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: "u", Role: role}))
+	rec := httptest.NewRecorder()
+	fn(rec, req)
+	return rec.Body.String()
+}
+
+// doAuthedDeleteParam builds an authed DELETE request with a chi URL param
+// attached, invokes fn, and returns the status code.
+func doAuthedDeleteParam(t *testing.T, fn http.HandlerFunc, role, paramName, paramValue string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/api/mcp/"+paramValue, nil)
+	ctx := auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: "u", Role: role})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(paramName, paramValue)
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, rctx)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	fn(rec, req)
+	return rec.Code
 }
 
 // doAuthedGet builds an authed GET request for path, invokes fn, and returns
@@ -84,7 +154,7 @@ func TestMCP_List_AdminSeesUrlAndError_MemberDoesNot(t *testing.T) {
 		{Name: "garmin", Scope: "GLOBAL", Transport: "streamable-http", URL: "http://secret", OK: true, ToolCount: 3, CheckedAt: time.Now()},
 		{Name: "down", Scope: "GLOBAL", URL: "http://d", OK: false, Err: "boom", CheckedAt: time.Now()},
 	}}
-	h := handlers.NewMCP(fake)
+	h := handlers.NewMCP(fake, nil, nil, false)
 
 	adminBody := doAuthedGet(t, h.List, model.RoleAdmin, "/api/mcp")
 	memberBody := doAuthedGet(t, h.List, model.RoleUser, "/api/mcp")
@@ -96,7 +166,7 @@ func TestMCP_List_AdminSeesUrlAndError_MemberDoesNot(t *testing.T) {
 
 func TestMCP_Tools_404ForNonApplicable(t *testing.T) {
 	fake := &fakeMcpHealth{tools: map[string][]mcp.ToolInfo{"garmin": {{Name: "get_x", Description: "d", Schema: []byte(`{"type":"object"}`)}}}}
-	h := handlers.NewMCP(fake)
+	h := handlers.NewMCP(fake, nil, nil, false)
 
 	ok := doAuthedGetParam(t, h.Tools, model.RoleUser, "/api/mcp/garmin/tools", "name", "garmin")
 	if ok.Code != 200 {
@@ -110,7 +180,7 @@ func TestMCP_Tools_404ForNonApplicable(t *testing.T) {
 }
 
 func TestMCP_List_RequiresUser(t *testing.T) {
-	h := handlers.NewMCP(&fakeMcpHealth{})
+	h := handlers.NewMCP(&fakeMcpHealth{}, nil, nil, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
 	rec := httptest.NewRecorder()
 	h.List(rec, req)
@@ -120,7 +190,7 @@ func TestMCP_List_RequiresUser(t *testing.T) {
 }
 
 func TestMCP_Tools_RequiresUser(t *testing.T) {
-	h := handlers.NewMCP(&fakeMcpHealth{})
+	h := handlers.NewMCP(&fakeMcpHealth{}, nil, nil, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/mcp/garmin/tools", nil)
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("name", "garmin")
@@ -129,5 +199,32 @@ func TestMCP_Tools_RequiresUser(t *testing.T) {
 	h.Tools(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+}
+
+func TestMCP_Create_AllowlistAndDisabled(t *testing.T) {
+	us := &fakeUserStore{}
+	hDisabled := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, false)
+	if code := doAuthedPost(t, hDisabled.Create, model.RoleUser, `{"name":"x","url":"https://`+allowedTestHost+`/mcp","transport":"sse"}`); code != 403 {
+		t.Fatalf("disabled create code=%d want 403", code)
+	}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true)
+	if code := doAuthedPost(t, h.Create, model.RoleUser, `{"name":"x","url":"https://evil.com/mcp","transport":"sse"}`); code != 400 {
+		t.Fatalf("bad-host create code=%d want 400", code)
+	}
+	body := doAuthedPostBody(t, h.Create, model.RoleUser, `{"name":"x","url":"https://`+allowedTestHost+`/mcp","transport":"sse","authUser":"u","authPass":"p"}`)
+	if !us.created {
+		t.Fatal("store.Create not called")
+	}
+	if strings.Contains(body, `authPass`) || strings.Contains(body, `"p"`) {
+		t.Fatalf("create response leaked password: %s", body)
+	}
+}
+
+func TestMCP_DeleteOwnerScoped(t *testing.T) {
+	us := &fakeUserStore{deleteErr: store.ErrNotFound}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true)
+	if code := doAuthedDeleteParam(t, h.Delete, model.RoleUser, "id", "9"); code != 404 {
+		t.Fatalf("delete non-owned code=%d want 404", code)
 	}
 }
