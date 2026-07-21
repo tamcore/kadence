@@ -5,10 +5,12 @@
 	import '$lib/styles/app.css';
 	import { api, APIError } from '$lib/api/client';
 	import { getOverview } from '$lib/api/context';
+	import { listMcp } from '$lib/api/mcp';
 	import { clearAuth, setAuth } from '$lib/stores/auth';
 	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import ReindexStrip from '$lib/components/ReindexStrip.svelte';
+	import McpHealthStrip from '$lib/components/McpHealthStrip.svelte';
 
 	const MOBILE_BREAKPOINT_PX = 900;
 	const REINDEX_POLL_INTERVAL_MS = 10000;
@@ -16,6 +18,7 @@
 	let { children } = $props();
 	let checking = $state(true);
 	let reindex = $state({ stale: 0, total: 0 });
+	let mcp = $state({ unhealthy: 0, total: 0 });
 	let reindexTimer: ReturnType<typeof setInterval> | undefined;
 
 	function isPublic(path: string): boolean {
@@ -43,6 +46,18 @@
 		}
 	}
 
+	async function refreshMcp(): Promise<void> {
+		try {
+			const servers = await listMcp();
+			mcp = {
+				unhealthy: servers.filter((s) => s.state === 'unhealthy').length,
+				total: servers.length
+			};
+		} catch {
+			// leave the strip hidden on failure
+		}
+	}
+
 	onMount(async () => {
 		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
 
@@ -51,7 +66,11 @@
 			const user = await api.getCurrentUser();
 			setAuth(user);
 			await refreshReindexStatus();
-			reindexTimer = setInterval(refreshReindexStatus, REINDEX_POLL_INTERVAL_MS);
+			await refreshMcp();
+			reindexTimer = setInterval(() => {
+				refreshReindexStatus();
+				refreshMcp();
+			}, REINDEX_POLL_INTERVAL_MS);
 		} catch (err) {
 			clearAuth();
 			if (err instanceof APIError && err.status === 401 && !isPublic(path)) {
@@ -73,6 +92,7 @@
 	{@render children()}
 {:else}
 	<ReindexStrip stale={reindex.stale} total={reindex.total} />
+	<McpHealthStrip unhealthy={mcp.unhealthy} total={mcp.total} />
 	<div class="shell">
 		<div class="scrim" class:show={$sidebarOpen} onclick={closeSidebar} aria-hidden="true"></div>
 		<aside class="sidebar" class:open={$sidebarOpen}><Sidebar /></aside>
