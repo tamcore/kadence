@@ -12,6 +12,13 @@ import (
 	"github.com/tamcore/kadence/internal/provider"
 )
 
+// UserServerSource supplies per-user, DB-backed MCP servers (credentials
+// decrypted) to merge with the env-configured ones. Implemented by the store.
+type UserServerSource interface {
+	ServersForUser(ctx context.Context, username string) ([]Server, error)
+	AllServers(ctx context.Context) ([]Server, error)
+}
+
 // Registry holds the configured remote MCP servers and lazily-created
 // clients for them, keyed by (Name, Scope). It exposes a per-user tool
 // list (namespaced by server) and dispatches tool calls back to the
@@ -19,9 +26,10 @@ import (
 type Registry struct {
 	servers    []Server
 	httpClient *http.Client // optional CA-verifying client; nil = mcp-go default
+	userSrc    UserServerSource
 
 	mu      sync.Mutex
-	clients map[string]mcpClient // keyed by Name+"/"+Scope
+	clients map[string]mcpClient // keyed by Name+"/"+Scope; env servers only
 }
 
 // NewRegistry builds a Registry over the given servers. Clients are created
@@ -29,18 +37,34 @@ type Registry struct {
 // is used for every server's transport instead of mcp-go's default client —
 // used to verify MCP servers' TLS certs against a custom CA. Pass nil to
 // preserve today's behavior (plaintext http, or https verified against the
-// system trust store).
-func NewRegistry(servers []Server, httpClient *http.Client) *Registry {
+// system trust store). userSrc, if non-nil, supplies per-user DB-backed MCP
+// servers to merge with servers; pass nil to disable user-defined servers.
+func NewRegistry(servers []Server, httpClient *http.Client, userSrc UserServerSource) *Registry {
 	return &Registry{
 		servers:    servers,
 		httpClient: httpClient,
+		userSrc:    userSrc,
 		clients:    make(map[string]mcpClient),
 	}
 }
 
 // Enabled reports whether any MCP servers are configured.
 func (r *Registry) Enabled() bool {
-	return len(r.servers) > 0
+	return len(r.servers) > 0 || r.userSrc != nil
+}
+
+// applicableServers returns env servers plus the user's own DB servers.
+func (r *Registry) applicableServers(ctx context.Context, username string) []Server {
+	out := append([]Server(nil), r.servers...)
+	if r.userSrc != nil {
+		us, err := r.userSrc.ServersForUser(ctx, username)
+		if err != nil {
+			slog.Warn("mcp: user server source failed", "user", username, "error", err)
+		} else {
+			out = append(out, us...)
+		}
+	}
+	return out
 }
 
 // ToolsFor returns the tool definitions available to the given user: the
@@ -52,7 +76,7 @@ func (r *Registry) Enabled() bool {
 func (r *Registry) ToolsFor(ctx context.Context, username string) ([]provider.ToolDefinition, error) {
 	var defs []provider.ToolDefinition
 
-	for _, s := range r.servers {
+	for _, s := range r.applicableServers(ctx, username) {
 		if !s.AppliesTo(username) {
 			continue
 		}
@@ -94,7 +118,7 @@ func (r *Registry) Call(ctx context.Context, username, toolName, argsJSON string
 		return "", fmt.Errorf("mcp: invalid tool name %q (expected <server>__<tool>)", toolName)
 	}
 
-	s, ok := r.findApplicableServer(username, serverName)
+	s, ok := r.findApplicableServer(ctx, username, serverName)
 	if !ok {
 		return "", fmt.Errorf("mcp: no server %q available for user %q", serverName, username)
 	}
@@ -111,10 +135,17 @@ func (r *Registry) Call(ctx context.Context, username, toolName, argsJSON string
 	return client.CallTool(ctx, realTool, argsJSON)
 }
 
-// Servers returns a copy of the configured servers.
+// Servers returns a copy of the configured env servers plus all users' DB
+// servers (used by the health poller, which has no per-user context).
 func (r *Registry) Servers() []Server {
-	out := make([]Server, len(r.servers))
-	copy(out, r.servers)
+	out := append([]Server(nil), r.servers...)
+	if r.userSrc != nil {
+		if all, err := r.userSrc.AllServers(context.Background()); err != nil {
+			slog.Warn("mcp: all user servers failed", "error", err)
+		} else {
+			out = append(out, all...)
+		}
+	}
 	return out
 }
 
@@ -155,9 +186,11 @@ func (s Server) allowsTool(toolName string) bool {
 }
 
 // findApplicableServer finds the server matching serverName (case-insensitive
-// on the server's Name) that applies to username.
-func (r *Registry) findApplicableServer(username, serverName string) (Server, bool) {
-	for _, s := range r.servers {
+// on the server's Name) that applies to username, searching env servers
+// before the user's own DB servers. On a name collision, the env server
+// wins.
+func (r *Registry) findApplicableServer(ctx context.Context, username, serverName string) (Server, bool) {
+	for _, s := range r.applicableServers(ctx, username) {
 		if strings.EqualFold(s.Name, serverName) && s.AppliesTo(username) {
 			return s, true
 		}
@@ -165,9 +198,15 @@ func (r *Registry) findApplicableServer(username, serverName string) (Server, bo
 	return Server{}, false
 }
 
-// clientFor returns the cached client for the given server, creating and
-// caching one if none exists yet.
+// clientFor returns a client for the given server. Env-configured servers use
+// a lazily-created, cached client (keyed by Name+Scope). User-defined (DB)
+// servers always get a fresh client — they're not cached, since their
+// credentials/URL can change or be revoked at any time.
 func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
+	if !r.isEnvServer(s) {
+		return newClient(ctx, s, r.httpClient)
+	}
+
 	key := s.Name + "/" + s.Scope
 
 	r.mu.Lock()
@@ -183,4 +222,15 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 	}
 	r.clients[key] = c
 	return c, nil
+}
+
+// isEnvServer reports whether s is one of the env-configured servers (vs. a
+// per-user DB server supplied by userSrc).
+func (r *Registry) isEnvServer(s Server) bool {
+	for _, e := range r.servers {
+		if e.Name == s.Name && e.Scope == s.Scope {
+			return true
+		}
+	}
+	return false
 }

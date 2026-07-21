@@ -109,7 +109,7 @@ func Run() error {
 		if servers, sErr := mcp.ServersFromEnv(os.Environ()); sErr != nil {
 			slog.Warn("failed to parse MCP env, continuing without tools", "err", sErr)
 		} else if len(servers) > 0 {
-			registry := mcp.NewRegistry(servers, mcpHTTPClient)
+			registry := mcp.NewRegistry(servers, mcpHTTPClient, nil)
 			mcpTools = registry
 			slog.Info("mcp enabled", "servers", len(servers))
 
