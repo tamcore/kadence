@@ -192,9 +192,9 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 // falls back to metric.
 func unitPromptLine(unitSystem string) string {
 	if unitSystem == "imperial" {
-		return "The user prefers imperial units — report all distances in miles and paces/splits in min/mile."
+		return "UNITS: the user uses imperial. ALWAYS convert every distance to miles and every pace/split to min/mile before reporting — tools (e.g. Garmin) return metric, so you MUST convert; never show kilometers or min/km in your reply."
 	}
-	return "The user prefers metric units — report all distances in kilometers and paces/splits in min/km."
+	return "UNITS: the user uses metric. ALWAYS report every distance in kilometers and every pace/split in min/km — if a tool returns miles, convert first; never show miles or min/mile in your reply."
 }
 
 func (s *Service) systemPrompt(unitSystem string) string {
