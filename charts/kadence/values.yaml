@@ -100,7 +100,13 @@ mcp:
   servers: []
   authUsername: kadence # basicAuth username the app uses for every MCP server
   basicAuth:
-    existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated + sticky)
+    existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated)
+    # Optional: bring your own basicAuth password (stable across renders).
+    # RECOMMENDED when deploying via `helm template | kubectl apply` — there the
+    # auto-generation's lookup-based stickiness does not work and the password
+    # would be regenerated every deploy, breaking MCP sidecar auth until pods
+    # restart. Set a fixed value here to avoid that. Empty = auto-generate.
+    password: ""
   tls:
     enabled: false # requires cert-manager on cluster; mints per-server certs and serves app<->MCP over HTTPS
 
