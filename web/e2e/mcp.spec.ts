@@ -25,13 +25,14 @@ test('user can add, edit, and delete their own MCP server', async ({ page }) => 
 	const link = page.getByRole('link', { name: new RegExp(serverName) });
 	await expect(link).toBeVisible();
 
-	// Edit: the row swaps in the same form, prefilled.
+	// Edit: the row swaps its link OUT for the form, so a `has: link` card
+	// locator stops matching while editing — target the (only) in-list form.
 	const card = page.locator('li', { has: link });
 	await card.getByRole('button', { name: /edit/i }).click();
 	const newUrl = `https://${serverName}-edited.e2e.test/mcp`;
-	// Scope to the card's form to avoid matching add-section form
-	await card.locator('form').getByLabel('URL', { exact: true }).fill(newUrl);
-	await page.getByRole('button', { name: 'Save' }).click();
+	const editForm = page.locator('li form');
+	await editForm.getByLabel('URL', { exact: true }).fill(newUrl);
+	await editForm.getByRole('button', { name: 'Save' }).click();
 	await expect(link).toBeVisible();
 
 	// Delete requires confirmation.
