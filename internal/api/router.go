@@ -51,7 +51,7 @@ func NewRouter(deps Deps) http.Handler {
 	r.Use(chimw.RealIP) //nolint:staticcheck // trusted proxy sets X-Forwarded-For/X-Real-IP; used only for access logging, not auth decisions
 	r.Use(middleware.AccessLog)
 	r.Use(chimw.Recoverer)
-	r.Use(middleware.SecurityHeaders)
+	r.Use(middleware.SecurityHeaders(deps.Config.IsProd(), web.CSPScriptHashes()))
 
 	r.Get("/api/healthz", healthz)
 
