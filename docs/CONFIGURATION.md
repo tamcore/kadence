@@ -78,7 +78,7 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_EMBED_API_KEY` | — | Embeddings API key. RAG is disabled if unset. |
 | `KADENCE_EMBED_MODEL` | `text-embedding-3-small` | Embeddings model id. Changing it triggers a background re-index. |
 | `KADENCE_RAG_TOP_K` | `5` | Number of chunks retrieved per query. |
-| `KADENCE_EMBED_DIMENSIONS` | `1024` | Pins the embedding vector length so it fits a fixed-width `vector(1024)` column with an HNSW index. Sent as the OpenAI-compat `dimensions` request field; if the provider ignores it, the client truncates to N dims and L2-renormalizes (valid for Matryoshka/MRL-trained models). `0` disables pinning (provider default dimensionality, no HNSW index contract). Changing it (like the model) triggers a background re-index. |
+| `KADENCE_EMBED_DIMENSIONS` | `1024` | Pins the embedding vector length so it fits a fixed-width `vector(1024)` column with an HNSW index. Sent as the OpenAI-compat `dimensions` request field; if the provider ignores it, the client truncates to N dims and L2-renormalizes (valid for Matryoshka/MRL-trained models). `0` only stops the client from sending the `dimensions` field and disables client-side truncation; after migration 00011 the DB column stays `vector(1024)`, so 0 must not be used unless the provider natively returns 1024-dim vectors — otherwise inserts/searches fail with a Postgres "different vector dimensions" error. Only changing KADENCE_EMBED_MODEL (not dimensions) triggers a background re-index. |
 
 ## Ingestion
 
