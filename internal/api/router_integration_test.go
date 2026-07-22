@@ -1,9 +1,11 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +24,7 @@ import (
 
 const testUsername = "alice"
 const testEmail = "a@x.io"
+const testCSRFSecret = "0123456789abcdef0123456789abcdef"
 
 func TestLoginThenCurrentUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
@@ -82,7 +85,7 @@ func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Users:    users,
 		Sessions: sessions,
-		Config:   config.Config{CSRFSecret: "0123456789abcdef0123456789abcdef"},
+		Config:   config.Config{CSRFSecret: testCSRFSecret},
 	}))
 	defer srv.Close()
 	jar := &cookieJar{}
@@ -132,7 +135,7 @@ func TestChatEndToEnd(t *testing.T) {
 	chatH := handlers.NewChat(chatSvc, convs, msgs)
 
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
-		Users: users, Sessions: sessions, Config: config.Config{CSRFSecret: "0123456789abcdef0123456789abcdef"}, Chat: chatH,
+		Users: users, Sessions: sessions, Config: config.Config{CSRFSecret: testCSRFSecret}, Chat: chatH,
 	}))
 	defer srv.Close()
 	jar := &cookieJar{}
@@ -172,6 +175,126 @@ func TestChatEndToEnd(t *testing.T) {
 	if len(stored) != 2 {
 		t.Fatalf("messages = %d, want 2", len(stored))
 	}
+}
+
+// TestBodyLimit_GlobalCapAppliesButUploadOverrides covers WAVE2-hardening.md
+// §11: the global KADENCE_MAX_BODY_BYTES cap applies to ordinary JSON routes
+// (oversized body -> 400, normal body -> 200) but does not block
+// /api/documents uploads, which re-wrap r.Body with the larger
+// cfg.UploadMaxBytes at the route level.
+func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+	docs := store.NewDocumentRepository(pool)
+
+	hash, _ := auth.HashPassword("pw123")
+	if _, err := users.Create(context.Background(), model.User{
+		Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser,
+	}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	const globalCap = 32 // bytes: small enough that a normal profile PATCH still fits, but not a padded one.
+	cfg := config.Config{
+		CSRFSecret:     testCSRFSecret,
+		MaxBodyBytes:   globalCap,
+		UploadMaxBytes: 1 << 20, // 1 MiB: comfortably larger than globalCap.
+	}
+	documentsH := handlers.NewDocuments(bodyLimitFakeIngester{}, docs, cfg.UploadMaxBytes)
+	profileH := handlers.NewProfile(users, sessions, cfg)
+
+	srv := httptest.NewServer(api.NewRouter(api.Deps{
+		Users: users, Sessions: sessions, Config: cfg, Documents: documentsH, Profile: profileH,
+	}))
+	defer srv.Close()
+	jar := &cookieJar{}
+
+	resp, _ := http.Post(srv.URL+"/api/session", "application/json",
+		strings.NewReader(`{"username":"`+testUsername+`","password":"pw123","remember":false}`))
+	jar.capture(resp)
+	_ = resp.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/session", nil)
+	jar.apply(req)
+	sresp, _ := http.DefaultClient.Do(req)
+	jar.capture(sresp)
+	token := sresp.Header.Get("X-CSRF-Token")
+	_ = sresp.Body.Close()
+
+	// Oversized JSON body on an ordinary route: rejected by the global cap.
+	oversized := `{"displayName":"` + strings.Repeat("x", globalCap) + `","email":"a@x.io","unitSystem":"metric"}`
+	oreq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/profile", strings.NewReader(oversized))
+	oreq.Header.Set("Content-Type", "application/json")
+	oreq.Header.Set("X-CSRF-Token", token)
+	jar.apply(oreq)
+	oresp, err := http.DefaultClient.Do(oreq)
+	if err != nil {
+		t.Fatalf("oversized profile patch: %v", err)
+	}
+	_ = oresp.Body.Close()
+	if oresp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized profile patch status = %d, want 400", oresp.StatusCode)
+	}
+
+	// Normal-sized request on the same route: passes through fine.
+	normal := `{"displayName":"Alice","email":"a@x.io","unitSystem":"metric"}`
+	nreq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/profile", strings.NewReader(normal))
+	nreq.Header.Set("Content-Type", "application/json")
+	nreq.Header.Set("X-CSRF-Token", token)
+	jar.apply(nreq)
+	nresp, err := http.DefaultClient.Do(nreq)
+	if err != nil {
+		t.Fatalf("normal profile patch: %v", err)
+	}
+	_ = nresp.Body.Close()
+	if nresp.StatusCode != http.StatusOK {
+		t.Fatalf("normal profile patch status = %d, want 200", nresp.StatusCode)
+	}
+
+	// Upload larger than the global cap, but under UploadMaxBytes: unaffected.
+	uploadBody, contentType := multipartFile(t, "sample.pdf", bytes.Repeat([]byte("a"), globalCap*4))
+	ureq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/documents", uploadBody)
+	ureq.Header.Set("Content-Type", contentType)
+	ureq.Header.Set("X-CSRF-Token", token)
+	jar.apply(ureq)
+	uresp, err := http.DefaultClient.Do(ureq)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	defer func() { _ = uresp.Body.Close() }()
+	if uresp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(uresp.Body)
+		t.Fatalf("upload status = %d, want 200, body=%s", uresp.StatusCode, body)
+	}
+}
+
+// bodyLimitFakeIngester satisfies the Documents handler's ingest dependency
+// without running the real extract/chunk/embed pipeline.
+type bodyLimitFakeIngester struct{}
+
+func (bodyLimitFakeIngester) Ingest(_ context.Context, ownerUserID *int64, scope, filename, mime string, _ []byte) (model.Document, error) {
+	return model.Document{ID: 1, OwnerUserID: ownerUserID, Scope: scope, Filename: filename, Mime: mime, SourceType: model.DocSourcePDF}, nil
+}
+
+// multipartFile builds a multipart/form-data body with a single "file" field,
+// returning the body reader and its Content-Type header value.
+func multipartFile(t *testing.T, filename string, data []byte) (io.Reader, string) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	mw := multipart.NewWriter(buf)
+	part, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	return buf, mw.FormDataContentType()
 }
 
 type chatFakeProvider struct{ reply string }

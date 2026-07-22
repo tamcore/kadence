@@ -46,10 +46,13 @@ func NewRouter(deps Deps) http.Handler {
 	r.Get("/api/healthz", healthz)
 
 	if deps.Users != nil && deps.Sessions != nil {
-		// Global per-IP cap on all other /api routes; healthz and the static
-		// frontend are registered outside this group and stay unlimited.
+		// Global per-IP cap and body-size cap on all other /api routes;
+		// healthz and the static frontend are registered outside this group
+		// and stay unlimited. /api/documents overrides the body cap at the
+		// route level with the larger cfg.UploadMaxBytes (see documents.go).
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(deps.Config.RateLimitGlobal))
+			r.Use(middleware.MaxBodyBytes(deps.Config.ResolvedMaxBodyBytes()))
 			mountAuth(r, deps)
 		})
 	}

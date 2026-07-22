@@ -34,6 +34,7 @@ Values shown are the built-in defaults; `—` means unset/empty.
 |---|---|---|
 | `KADENCE_RATE_LIMIT_GLOBAL` | `300` | Per-IP requests/minute across all `/api` routes (`/api/healthz` and the static frontend are exempt). `0` disables. |
 | `KADENCE_RATE_LIMIT_AUTH` | `10` | Per-IP requests/minute on auth-sensitive endpoints: `POST /api/session`, `POST /api/webauthn/login/begin`, `POST /api/webauthn/login/finish`, `POST /api/credentials/{requestId}`. `0` disables. |
+| `KADENCE_MAX_BODY_BYTES` | `1048576` (1 MiB) | Max request body size across `/api` routes in general. `POST /api/documents` overrides this at the route level with the larger `KADENCE_UPLOAD_MAX_BYTES`. Oversized bodies fail with `400`. |
 
 Both limiters key on the request's resolved client IP (in-memory sliding window,
 via `go-chi/httprate`), which chi's `RealIP` middleware derives from

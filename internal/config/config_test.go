@@ -11,6 +11,29 @@ import (
 // Validate() to see a non-empty DatabaseURL.
 const testDatabaseURL = "postgres://x"
 
+// testWebAuthnRPID is a placeholder WebAuthn Relying Party ID used across
+// WebAuthn-related tests.
+const testWebAuthnRPID = "kadence.example.com"
+
+// validConfig returns a Config that passes Validate() outright: every field
+// Validate() range-checks is set to a sane positive value (mirroring Load()'s
+// defaults), so tests that exercise exactly one Validate() rule can start
+// from this baseline and override only the field(s) under test, without
+// tripping unrelated range checks.
+func validConfig() Config {
+	return Config{
+		DatabaseURL:            testDatabaseURL,
+		LLMContextBudgetTokens: 32000,
+		LLMMaxTokens:           2048,
+		LLMTimeout:             300,
+		RAGTopK:                5,
+		MCPMaxIterations:       16,
+		MCPMaxTools:            100,
+		UploadMaxBytes:         10485760,
+		IngestChunkChars:       1000,
+	}
+}
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("KADENCE_LISTEN_ADDR", "")
 	t.Setenv("KADENCE_ENV", "")
@@ -131,7 +154,8 @@ func TestValidateRejectsNonPositiveContextBudget(t *testing.T) {
 }
 
 func TestValidateAllowsPositiveContextBudget(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, LLMContextBudgetTokens: 32000}
+	cfg := validConfig()
+	cfg.LLMContextBudgetTokens = 32000
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil for positive LLMContextBudgetTokens", err)
 	}
@@ -399,10 +423,171 @@ func TestUserMCPDisabledWithWrongKeyLength(t *testing.T) {
 	}
 }
 
+// TestValidateFailsFastOnTypoedEncryptionKey covers WAVE2-hardening.md §12:
+// a KADENCE_ENCRYPTION_KEY that was set but is invalid (bad base64, or valid
+// base64 of the wrong length) must fail Validate() outright — a typo must
+// not silently disable passkeys/user-MCP.
+func TestValidateFailsFastOnTypoedEncryptionKey(t *testing.T) {
+	cases := map[string]string{
+		"invalid base64":       "not-valid-base64!!!",
+		"wrong decoded length": base64.StdEncoding.EncodeToString(make([]byte, 16)),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("KADENCE_DATABASE_URL", testDatabaseURL)
+			t.Setenv("KADENCE_ENCRYPTION_KEY", raw)
+
+			cfg := Load()
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() = nil, want error for a typo'd KADENCE_ENCRYPTION_KEY")
+			}
+			if !strings.Contains(err.Error(), "KADENCE_ENCRYPTION_KEY") {
+				t.Fatalf("Validate() error = %q, want it to name KADENCE_ENCRYPTION_KEY", err.Error())
+			}
+		})
+	}
+}
+
+// TestValidatePassesWithNoEncryptionKeySet ensures leaving
+// KADENCE_ENCRYPTION_KEY entirely unset (the common case: passkeys/user-MCP
+// simply not used) is not itself a Validate() failure.
+func TestValidatePassesWithNoEncryptionKeySet(t *testing.T) {
+	t.Setenv("KADENCE_DATABASE_URL", testDatabaseURL)
+	t.Setenv("KADENCE_ENCRYPTION_KEY", "")
+
+	cfg := Load()
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil when KADENCE_ENCRYPTION_KEY is simply unset", err)
+	}
+}
+
+// TestValidateRangeChecks is the table-driven range-check test for
+// WAVE2-hardening.md §12's field list: each field must be a positive integer
+// (or, for MaxBodyBytes, non-negative — 0 falls back to a default via
+// ResolvedMaxBodyBytes).
+func TestValidateRangeChecks(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantEnv string
+	}{
+		{"LLMMaxTokens", func(c *Config) { c.LLMMaxTokens = 0 }, "KADENCE_LLM_MAX_TOKENS"},
+		{"LLMTimeout", func(c *Config) { c.LLMTimeout = 0 }, "KADENCE_LLM_TIMEOUT"},
+		{"RAGTopK", func(c *Config) { c.RAGTopK = 0 }, "KADENCE_RAG_TOP_K"},
+		{"MCPMaxIterations", func(c *Config) { c.MCPMaxIterations = 0 }, "KADENCE_MCP_MAX_ITERATIONS"},
+		{"MCPMaxTools", func(c *Config) { c.MCPMaxTools = 0 }, "KADENCE_MCP_MAX_TOOLS"},
+		{"UploadMaxBytes", func(c *Config) { c.UploadMaxBytes = 0 }, "KADENCE_UPLOAD_MAX_BYTES"},
+		{"IngestChunkChars", func(c *Config) { c.IngestChunkChars = 0 }, "KADENCE_INGEST_CHUNK_CHARS"},
+		{"MaxBodyBytes negative", func(c *Config) { c.MaxBodyBytes = -1 }, "KADENCE_MAX_BODY_BYTES"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error for invalid %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantEnv) {
+				t.Fatalf("Validate() error = %q, want it to mention %s", err.Error(), tc.wantEnv)
+			}
+		})
+	}
+}
+
+// TestValidateAllowsZeroMaxBodyBytes documents that MaxBodyBytes=0 (the
+// zero-value default for a Config{} literal not built via Load()) is not a
+// Validate() failure: ResolvedMaxBodyBytes() falls back to a sane default.
+func TestValidateAllowsZeroMaxBodyBytes(t *testing.T) {
+	cfg := validConfig()
+	cfg.MaxBodyBytes = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for MaxBodyBytes=0", err)
+	}
+	if got := cfg.ResolvedMaxBodyBytes(); got != defaultMaxBodyBytes {
+		t.Fatalf("ResolvedMaxBodyBytes() = %d, want default %d", got, defaultMaxBodyBytes)
+	}
+}
+
+// TestValidateRequiresCSRFSecretLengthInProd covers the CSRFSecret >= 32
+// bytes requirement in production.
+func TestValidateRequiresCSRFSecretLengthInProd(t *testing.T) {
+	cfg := validConfig()
+	cfg.Env = envProd
+	cfg.CSRFSecret = "too-short"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error for a CSRF secret shorter than 32 bytes in prod")
+	}
+	if !strings.Contains(err.Error(), "KADENCE_CSRF_SECRET") {
+		t.Fatalf("Validate() error = %q, want it to mention KADENCE_CSRF_SECRET", err.Error())
+	}
+}
+
+func TestValidateAllowsCSRFSecretOfExactly32BytesInProd(t *testing.T) {
+	cfg := validConfig()
+	cfg.Env = envProd
+	cfg.CSRFSecret = strings.Repeat("a", 32)
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for a 32-byte CSRF secret in prod", err)
+	}
+}
+
+// TestValidateWebAuthnPreconditions covers WAVE2-hardening.md §12: Validate()
+// must enforce the same preconditions cmd/server/serve.Run relies on before
+// constructing webauthn.Service/crypto.Cipher (TrustedOrigins set, and a
+// valid 32-byte EncryptionKey), so a misconfigured deployment fails at
+// Validate() instead of partway through startup.
+func TestValidateWebAuthnPreconditions(t *testing.T) {
+	validKey := make([]byte, encryptionKeyLen)
+
+	t.Run("missing trusted origins", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebAuthnRPID = testWebAuthnRPID
+		cfg.EncryptionKey = validKey
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "KADENCE_TRUSTED_ORIGINS") {
+			t.Fatalf("Validate() = %v, want error mentioning KADENCE_TRUSTED_ORIGINS", err)
+		}
+	})
+
+	t.Run("missing encryption key", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebAuthnRPID = testWebAuthnRPID
+		cfg.TrustedOrigins = []string{"https://kadence.example.com"}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "KADENCE_ENCRYPTION_KEY") {
+			t.Fatalf("Validate() = %v, want error mentioning KADENCE_ENCRYPTION_KEY", err)
+		}
+	})
+
+	t.Run("all preconditions met", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.WebAuthnRPID = testWebAuthnRPID
+		cfg.TrustedOrigins = []string{"https://kadence.example.com"}
+		cfg.EncryptionKey = validKey
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil when all WebAuthn preconditions are met", err)
+		}
+	})
+
+	t.Run("disabled: no RPID means no preconditions enforced", func(t *testing.T) {
+		cfg := validConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil when WebAuthn is disabled (no RPID)", err)
+		}
+	})
+}
+
 func TestLoad_WebAuthnRPID(t *testing.T) {
 	t.Setenv("KADENCE_WEBAUTHN_RP_ID", "  kadence.example.com  ")
 	cfg := Load()
-	if cfg.WebAuthnRPID != "kadence.example.com" {
+	if cfg.WebAuthnRPID != testWebAuthnRPID {
 		t.Fatalf("WebAuthnRPID = %q, want trimmed kadence.example.com", cfg.WebAuthnRPID)
 	}
 	if !cfg.WebAuthnEnabled() {
@@ -445,7 +630,7 @@ func TestRateLimitOverrides(t *testing.T) {
 }
 
 func TestValidateRejectsNegativeRateLimits(t *testing.T) {
-	base := Config{DatabaseURL: testDatabaseURL, LLMContextBudgetTokens: 32000}
+	base := validConfig()
 
 	global := base
 	global.RateLimitGlobal = -1
@@ -461,7 +646,9 @@ func TestValidateRejectsNegativeRateLimits(t *testing.T) {
 }
 
 func TestValidateAllowsZeroRateLimits(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, RateLimitGlobal: 0, RateLimitAuth: 0, LLMContextBudgetTokens: 32000}
+	cfg := validConfig()
+	cfg.RateLimitGlobal = 0
+	cfg.RateLimitAuth = 0
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (0 disables rate limiting)", err)
 	}
@@ -488,14 +675,16 @@ func TestEmbedDimensionsOverride(t *testing.T) {
 }
 
 func TestValidateRejectsNegativeEmbedDimensions(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: -1, LLMContextBudgetTokens: 32000}
+	cfg := validConfig()
+	cfg.EmbedDimensions = -1
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_EMBED_DIMENSIONS") {
 		t.Fatalf("Validate() = %v, want error mentioning KADENCE_EMBED_DIMENSIONS", err)
 	}
 }
 
 func TestValidateAllowsZeroEmbedDimensions(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: 0, LLMContextBudgetTokens: 32000}
+	cfg := validConfig()
+	cfg.EmbedDimensions = 0
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (0 disables dimension pinning)", err)
 	}

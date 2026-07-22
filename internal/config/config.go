@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -84,6 +85,13 @@ type Config struct {
 	UploadMaxBytes   int
 	IngestChunkChars int
 
+	// MaxBodyBytes caps the request body size for /api routes in general
+	// (KADENCE_MAX_BODY_BYTES, default 1 MiB). /api/documents overrides this
+	// with the larger UploadMaxBytes at the route level (documents.go wraps
+	// r.Body again with its own http.MaxBytesReader), so this global cap
+	// never blocks legitimate uploads.
+	MaxBodyBytes int
+
 	// Markitdown ingestion extractor (markitdown-mcp). Enabled iff
 	// MarkitdownURL != "".
 	MarkitdownURL       string
@@ -110,6 +118,12 @@ type Config struct {
 	// comma-split, trimmed) that user-defined MCP server URLs must match.
 	EncryptionKey       []byte
 	UserMCPAllowedHosts []string
+	// encryptionKeyErr carries a non-nil error from Load() when
+	// KADENCE_ENCRYPTION_KEY was set but failed to decode (bad base64, or
+	// the wrong byte length), so Validate() can fail fast on a typo instead
+	// of silently treating it as unset. Left nil (no problem) by any Config
+	// literal built directly rather than via Load(), e.g. in tests.
+	encryptionKeyErr error
 
 	// Rate limiting (per-IP, sliding window). 0 disables the respective limiter.
 	// RateLimitGlobal caps all /api requests; RateLimitAuth caps the
@@ -123,6 +137,19 @@ const (
 	defaultEnv        = "dev"
 	envProd           = "prod"
 	envProduction     = "production"
+
+	// defaultMaxBodyBytes is both the KADENCE_MAX_BODY_BYTES default and the
+	// fallback ResolvedMaxBodyBytes() returns for a zero-value Config (e.g.
+	// tests constructing Config{} directly instead of via Load()).
+	defaultMaxBodyBytes = 1 << 20 // 1 MiB
+
+	// minProdCSRFSecretLen is the minimum KADENCE_CSRF_SECRET length required
+	// in production; gorilla/csrf accepts shorter secrets but a weak secret
+	// undermines the CSRF token's unforgeability guarantee.
+	minProdCSRFSecretLen = 32
+
+	// encryptionKeyLen is the required decoded length of KADENCE_ENCRYPTION_KEY.
+	encryptionKeyLen = 32
 
 	defaultDomainName    = "Kadence, an endurance-sports coaching assistant"
 	defaultAllowedTopics = "endurance training and racing (running, cycling, swimming, triathlon), " +
@@ -173,6 +200,7 @@ func Load() Config {
 
 	cfg.UploadMaxBytes = envIntOr("KADENCE_UPLOAD_MAX_BYTES", 10485760)
 	cfg.IngestChunkChars = envIntOr("KADENCE_INGEST_CHUNK_CHARS", 1000)
+	cfg.MaxBodyBytes = envIntOr("KADENCE_MAX_BODY_BYTES", defaultMaxBodyBytes)
 
 	cfg.MarkitdownURL = os.Getenv("KADENCE_MARKITDOWN_URL")
 	cfg.MarkitdownAuthUser = os.Getenv("KADENCE_MARKITDOWN_AUTH_USER")
@@ -183,7 +211,9 @@ func Load() Config {
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 	cfg.MCPCAFile = os.Getenv("KADENCE_MCP_CA_FILE")
 
-	cfg.EncryptionKey = decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
+	key, keyErr := decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
+	cfg.EncryptionKey = key
+	cfg.encryptionKeyErr = keyErr
 	cfg.UserMCPAllowedHosts = splitCSV(os.Getenv("KADENCE_USER_MCP_ALLOWED_HOSTS"))
 
 	cfg.RateLimitGlobal = envIntOr("KADENCE_RATE_LIMIT_GLOBAL", 300)
@@ -226,19 +256,56 @@ func (c Config) MarkitdownEnabled() bool { return c.MarkitdownURL != "" }
 // UserMCPEnabled reports whether user-defined MCP servers can be registered:
 // a valid 32-byte encryption key AND at least one allowlisted host.
 func (c Config) UserMCPEnabled() bool {
-	return len(c.EncryptionKey) == 32 && len(c.UserMCPAllowedHosts) > 0
+	return len(c.EncryptionKey) == encryptionKeyLen && len(c.UserMCPAllowedHosts) > 0
 }
 
-// Validate checks required runtime configuration. Call before starting the server.
+// ResolvedMaxBodyBytes returns the configured global request-body cap,
+// falling back to defaultMaxBodyBytes when MaxBodyBytes is unset (e.g. a
+// Config{} literal built directly in tests rather than via Load()).
+func (c Config) ResolvedMaxBodyBytes() int64 {
+	if c.MaxBodyBytes > 0 {
+		return int64(c.MaxBodyBytes)
+	}
+	return defaultMaxBodyBytes
+}
+
+// Validate checks required runtime configuration. Call before starting the
+// server. This is the single source of truth for "is this configuration
+// startable" — cmd/server/serve.Run must not duplicate these checks; it may
+// only add further construction-time errors that Validate cannot anticipate
+// (e.g. a malformed WebAuthnRPID rejected by the go-webauthn library itself).
 func (c Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return errors.New("KADENCE_DATABASE_URL is required")
 	}
-	if c.IsProd() && c.CSRFSecret == "" {
-		return errors.New("KADENCE_CSRF_SECRET is required in production")
+	if c.IsProd() {
+		if c.CSRFSecret == "" {
+			return errors.New("KADENCE_CSRF_SECRET is required in production")
+		}
+		if len(c.CSRFSecret) < minProdCSRFSecretLen {
+			return fmt.Errorf("KADENCE_CSRF_SECRET must be at least %d bytes in production", minProdCSRFSecretLen)
+		}
 	}
-	if c.IsProd() && len(c.UserMCPAllowedHosts) > 0 && len(c.EncryptionKey) != 32 {
+	// A KADENCE_ENCRYPTION_KEY that was set but failed to decode (bad base64,
+	// or the wrong byte length) is a typo, not "feature disabled": fail fast
+	// rather than silently disabling passkeys/user-MCP.
+	if c.encryptionKeyErr != nil {
+		return fmt.Errorf("KADENCE_ENCRYPTION_KEY is invalid: %w", c.encryptionKeyErr)
+	}
+	if c.IsProd() && len(c.UserMCPAllowedHosts) > 0 && len(c.EncryptionKey) != encryptionKeyLen {
 		return errors.New("KADENCE_ENCRYPTION_KEY must be a base64-encoded 32-byte key when KADENCE_USER_MCP_ALLOWED_HOSTS is set")
+	}
+	// WebAuthn (passkeys): mirrors the preconditions cmd/server/serve.Run
+	// enforces before constructing webauthn.Service/crypto.Cipher, so a
+	// misconfigured deployment fails at Validate() rather than partway
+	// through startup.
+	if c.WebAuthnEnabled() {
+		if len(c.TrustedOrigins) == 0 {
+			return errors.New("KADENCE_TRUSTED_ORIGINS is required when KADENCE_WEBAUTHN_RP_ID is set")
+		}
+		if len(c.EncryptionKey) != encryptionKeyLen {
+			return errors.New("KADENCE_ENCRYPTION_KEY must be a base64-encoded 32-byte key when KADENCE_WEBAUTHN_RP_ID is set")
+		}
 	}
 	if c.RateLimitGlobal < 0 {
 		return errors.New("KADENCE_RATE_LIMIT_GLOBAL must be a non-negative integer")
@@ -251,6 +318,30 @@ func (c Config) Validate() error {
 	}
 	if c.LLMContextBudgetTokens <= 0 {
 		return errors.New("KADENCE_LLM_CONTEXT_BUDGET must be a positive integer")
+	}
+	if c.LLMMaxTokens <= 0 {
+		return errors.New("KADENCE_LLM_MAX_TOKENS must be a positive integer")
+	}
+	if c.LLMTimeout <= 0 {
+		return errors.New("KADENCE_LLM_TIMEOUT must be a positive duration")
+	}
+	if c.RAGTopK <= 0 {
+		return errors.New("KADENCE_RAG_TOP_K must be a positive integer")
+	}
+	if c.MCPMaxIterations <= 0 {
+		return errors.New("KADENCE_MCP_MAX_ITERATIONS must be a positive integer")
+	}
+	if c.MCPMaxTools <= 0 {
+		return errors.New("KADENCE_MCP_MAX_TOOLS must be a positive integer")
+	}
+	if c.UploadMaxBytes <= 0 {
+		return errors.New("KADENCE_UPLOAD_MAX_BYTES must be a positive integer")
+	}
+	if c.IngestChunkChars <= 0 {
+		return errors.New("KADENCE_INGEST_CHUNK_CHARS must be a positive integer")
+	}
+	if c.MaxBodyBytes < 0 {
+		return errors.New("KADENCE_MAX_BODY_BYTES must be a non-negative integer")
 	}
 	return nil
 }
@@ -322,17 +413,24 @@ func envBoolOr(key string, fallback bool) bool {
 	return fallback
 }
 
-// decodeKey base64-decodes an encryption key; returns nil on empty/invalid input.
-func decodeKey(s string) []byte {
+// decodeKey base64-decodes an encryption key. Empty input is not an error
+// (the key is simply unset); non-empty input that fails to decode, or that
+// decodes to anything other than encryptionKeyLen bytes, returns an error so
+// the caller (Load, via Config.encryptionKeyErr) can have Validate() fail
+// fast on a typo rather than silently disabling the key.
+func decodeKey(s string) ([]byte, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil
+		return nil, nil
 	}
 	b, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("invalid base64: %w", err)
 	}
-	return b
+	if len(b) != encryptionKeyLen {
+		return nil, fmt.Errorf("must decode to %d bytes, got %d", encryptionKeyLen, len(b))
+	}
+	return b, nil
 }
 
 // splitCSV splits a comma-separated env value, trimming spaces and dropping empties.
