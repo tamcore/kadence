@@ -216,7 +216,7 @@ func TestRouter_WebAuthnEnabledEndpoint(t *testing.T) {
 		t.Fatalf("request: %v", err)
 	}
 	defer func() { _ = resp2.Body.Close() }()
-	if resp2.StatusCode != http.StatusForbidden {
-		t.Fatalf("register/begin code = %d, want 403 (CSRF-gated route reached without a token)", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("register/begin code = %d, want 401 (RequireAuth rejects the anonymous request before CSRF is checked)", resp2.StatusCode)
 	}
 }

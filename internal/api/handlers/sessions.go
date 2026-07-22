@@ -44,10 +44,6 @@ type sessionDTO struct {
 // List handles GET /api/sessions.
 func (h *Sessions) List(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	sessions, err := h.store.ListByUser(r.Context(), u.ID)
 	if err != nil {
@@ -77,10 +73,6 @@ func (h *Sessions) List(w http.ResponseWriter, r *http.Request) {
 // Revoke handles DELETE /api/sessions/{publicId}.
 func (h *Sessions) Revoke(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	publicID := chi.URLParam(r, "publicId")
 	if err := h.store.DeleteByPublicIDForUser(r.Context(), publicID, u.ID); err != nil {
@@ -97,10 +89,6 @@ func (h *Sessions) Revoke(w http.ResponseWriter, r *http.Request) {
 // RevokeOthers handles POST /api/sessions/revoke-others.
 func (h *Sessions) RevokeOthers(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	c, err := r.Cookie(sessionCookie)
 	if err != nil || c.Value == "" {

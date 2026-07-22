@@ -170,16 +170,6 @@ func TestUploadBodyTooLarge(t *testing.T) {
 	}
 }
 
-func TestUploadRequiresUser(t *testing.T) {
-	h, _ := newDocumentsHandler(t, 10<<20)
-	req := multipartUploadRequest(t, "sample.pdf", "application/pdf", []byte("%PDF..."))
-	rec := httptest.NewRecorder()
-	h.Upload(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
-	}
-}
-
 func TestListReturnsUploadedDoc(t *testing.T) {
 	h, docs := newDocumentsHandler(t, 10<<20)
 	uid := sampleUserID
@@ -193,15 +183,6 @@ func TestListReturnsUploadedDoc(t *testing.T) {
 
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"a.pdf"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestListRequiresUser(t *testing.T) {
-	h, _ := newDocumentsHandler(t, 10<<20)
-	rec := httptest.NewRecorder()
-	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
 	}
 }
 

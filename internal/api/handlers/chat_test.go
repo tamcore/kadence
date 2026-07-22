@@ -90,15 +90,6 @@ func TestChatSendStreamsSSE(t *testing.T) {
 	}
 }
 
-func TestChatSendRequiresUser(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	rec := httptest.NewRecorder()
-	h.Send(rec, httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"x"}`)))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-}
-
 func TestListConversations(t *testing.T) {
 	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{list: []model.Conversation{{ID: "conv-uuid-1", Title: "a"}}}, fakeMsgLister{})
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
@@ -106,15 +97,6 @@ func TestListConversations(t *testing.T) {
 	h.ListConversations(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"a"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestListConversationsMissingUser(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	rec := httptest.NewRecorder()
-	h.ListConversations(rec, httptest.NewRequest(http.MethodGet, "/api/conversations", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
 	}
 }
 
@@ -136,15 +118,6 @@ func TestMessagesEmptyID(t *testing.T) {
 	h.Messages(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400", rec.Code)
-	}
-}
-
-func TestMessagesMissingUser(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	rec := httptest.NewRecorder()
-	h.Messages(rec, httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
 	}
 }
 
@@ -183,15 +156,6 @@ func TestDeleteConversationEmptyID(t *testing.T) {
 	}
 }
 
-func TestDeleteConversationMissingUser(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	rec := httptest.NewRecorder()
-	h.DeleteConversation(rec, httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
-	}
-}
-
 func patchReq(t *testing.T, body string) *http.Request { //nolint:unparam
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPatch, "/api/conversations/1", strings.NewReader(body))
@@ -204,16 +168,6 @@ func TestPatchConversationSuccess(t *testing.T) {
 	h.PatchConversation(rec, patchReq(t, `{"title":"  New title  "}`))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"New title"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestPatchConversationMissingUser(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
-	rec := httptest.NewRecorder()
-	req := withChiParam(httptest.NewRequest(http.MethodPatch, "/api/conversations/1", strings.NewReader(`{"title":"x"}`)), "id", "1")
-	h.PatchConversation(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
 	}
 }
 

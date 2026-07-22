@@ -166,16 +166,6 @@ func TestContext_Overview_IncludesReindexStatus(t *testing.T) {
 	}
 }
 
-func TestOverviewRequiresUser(t *testing.T) {
-	h := handlers.NewContext(&fakeContextChunks{}, &fakeContextDocs{})
-	req := httptest.NewRequest(http.MethodGet, "/api/context/overview", nil)
-	rec := httptest.NewRecorder()
-	h.Overview(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
-	}
-}
-
 func TestSearchEmptyTermReturns400(t *testing.T) {
 	h := handlers.NewContext(&fakeContextChunks{}, &fakeContextDocs{})
 	req := withContextUser(httptest.NewRequest(http.MethodGet, "/api/context/search?term=", nil))
@@ -194,16 +184,6 @@ func TestSearchOversizedTermReturns400(t *testing.T) {
 	h.Search(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400, body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestSearchRequiresUser(t *testing.T) {
-	h := handlers.NewContext(&fakeContextChunks{}, &fakeContextDocs{})
-	req := httptest.NewRequest(http.MethodGet, "/api/context/search?term=foo", nil)
-	rec := httptest.NewRecorder()
-	h.Search(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
 	}
 }
 

@@ -105,15 +105,14 @@ func TestLoginUnknownUserRunsDummyCompareAndMatchesWrongPasswordResponse(t *test
 	}
 }
 
-func TestCurrentUserRequiresContext(t *testing.T) {
+// TestCurrentUserReturnsContextUser covers CurrentUser's happy path. The
+// anonymous (no user in context) case is now a router-level invariant
+// enforced by middleware.RequireAuth ahead of this handler — see
+// TestRequireAuthBlocksAnonymous and TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist.
+func TestCurrentUserReturnsContextUser(t *testing.T) {
 	h, _ := newAuth(t, "x")
-	rec := httptest.NewRecorder()
-	h.CurrentUser(rec, httptest.NewRequest(http.MethodGet, "/api/session", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
 
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/session", nil)
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 9, Username: "bob"}))
 	h.CurrentUser(rec, req)

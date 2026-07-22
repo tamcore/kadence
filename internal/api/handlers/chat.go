@@ -92,10 +92,6 @@ func (s *sseSink) keepalive() error {
 // Send handles POST /api/chat (SSE stream).
 func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	var body struct {
 		ConversationID string `json:"conversationId"`
 		Message        string `json:"message"`
@@ -142,10 +138,6 @@ type conversationDTO struct {
 // ListConversations handles GET /api/conversations.
 func (h *Chat) ListConversations(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	list, err := h.convs.ListByUser(r.Context(), u.ID)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not list conversations")
@@ -166,10 +158,6 @@ type messageDTO struct {
 // Messages handles GET /api/conversations/{id}/messages (ownership enforced).
 func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		RespondError(w, http.StatusBadRequest, "id is required")
@@ -199,10 +187,6 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 // bound by the same limit as auto-derived titles.
 func (h *Chat) PatchConversation(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		RespondError(w, http.StatusBadRequest, "id is required")
@@ -243,10 +227,6 @@ func (h *Chat) PatchConversation(w http.ResponseWriter, r *http.Request) {
 // DeleteConversation handles DELETE /api/conversations/{id}.
 func (h *Chat) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		RespondError(w, http.StatusBadRequest, "id is required")

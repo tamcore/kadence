@@ -76,10 +76,6 @@ type reindexStatusDTO struct {
 // TF-IDF-ranked top terms across all visible chunk content.
 func (c *Context) Overview(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	own, err := c.docs.ListByOwner(r.Context(), u.ID)
 	if err != nil {
@@ -153,10 +149,6 @@ type searchResponse struct {
 // the caller's own and public chunk content, returning truncated snippets.
 func (c *Context) Search(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	term := strings.TrimSpace(r.URL.Query().Get("term"))
 	if term == "" || len(term) > maxTermLen {

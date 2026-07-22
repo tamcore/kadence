@@ -38,10 +38,6 @@ type credentialSubmitBody struct {
 // logged anywhere in this handler.
 func (c *Credentials) Submit(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	requestID := chi.URLParam(r, "requestId")
 	if requestID == "" {

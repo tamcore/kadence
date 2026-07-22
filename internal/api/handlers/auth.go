@@ -145,9 +145,5 @@ func (h *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 // CurrentUser returns the authenticated user from context.
 func (h *Auth) CurrentUser(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	RespondJSON(w, http.StatusOK, toPublic(*u))
 }
