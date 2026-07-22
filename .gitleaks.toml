@@ -1,0 +1,17 @@
+title = "kadence gitleaks config"
+
+# Extend gitleaks' default ruleset rather than replacing it — we only ever
+# add narrow allowlist entries for known-fake fixtures below, never disable
+# rules or widen matching.
+[extend]
+useDefault = true
+
+[allowlist]
+description = '''Deterministic, non-secret CSRF fixture value ("0123456789abcdef0123456789abcdef")
+used across Go tests (internal/config/config_test.go,
+internal/api/router_integration_test.go) and the committed KinD e2e values
+file (charts/kadence/values-ci.yaml). Ephemeral test/CI-only value, never
+used outside test code or the disposable e2e-kind cluster.'''
+regexes = [
+  '''0123456789abcdef0123456789abcdef''',
+]

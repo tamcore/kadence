@@ -46,3 +46,35 @@ jobs:
             echo "expected identical markitdown basicAuth password across renders, got '$pass1' vs '$pass2'"
             exit 1
           fi
+
+  kube-linter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - name: Render manifests (same combos as lint-and-template)
+        run: |
+          helm template kadence ./charts/kadence > rendered-default.yaml
+          helm template kadence ./charts/kadence -f ./charts/kadence/values-dev.yaml.example > rendered-example.yaml
+          helm template kadence ./charts/kadence \
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]' > rendered-mcp.yaml
+      - name: Run kube-linter (advisory)
+        # ADVISORY: continue-on-error means findings never fail the workflow.
+        # See .kube-linter.yaml for the documented current baseline. Flip to
+        # blocking once the Wave 2 securityContext/resources hardening lands
+        # and those findings clear.
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f916643f54ca291ac38cf7d01ef591ff3f9 \
+            lint --config=.kube-linter.yaml rendered-default.yaml rendered-example.yaml rendered-mcp.yaml \
+            | tee kube-linter-report.txt
+      - name: Add kube-linter report to job summary
+        if: always()
+        run: |
+          {
+            echo "### kube-linter (advisory)"
+            echo '```'
+            cat kube-linter-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

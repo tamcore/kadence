@@ -1,0 +1,25 @@
+# kube-linter config (advisory only — see .github/workflows/chart.yaml, job
+# "kube-linter"). Uses kube-linter's default check bundle; nothing is
+# disabled or excluded here, so this file has no effect on which checks run
+# today. It exists to document the current baseline and as a place to add
+# a scoped `exclude` block later if a specific, justified false positive
+# needs suppressing — never a blanket disable of a check that otherwise
+# passes.
+#
+# Known findings as of 2026-07-22 (`helm template` against default values,
+# values-dev.yaml.example, and the example MCP server combo — see
+# chart.yaml's lint-and-template job for the exact commands):
+#   - pdb-unhealthy-pod-eviction-policy: PDB doesn't set unhealthyPodEvictionPolicy
+#   - no-anti-affinity: app Deployment (2 replicas) has no inter-pod anti-affinity
+#   - no-read-only-root-fs / run-as-non-root / unset-cpu-requirements /
+#     unset-memory-requirements: postgres StatefulSet and MCP sidecar
+#     Deployments (mcp + nginx containers) don't yet set a hardened
+#     securityContext or resource requests/limits
+#   - latest-tag: the example MCP server manifest in values-dev.yaml.example
+#     intentionally uses "example/garmin-mcp:latest" as a placeholder
+#
+# The mcp/postgres securityContext + resource hardening is tracked for
+# Wave 2; flip this job from advisory (continue-on-error) to blocking once
+# those land and the findings above are gone.
+checks:
+  doNotAutoAddDefaults: false
