@@ -1,6 +1,9 @@
+import { goto } from '$app/navigation';
+import { clearAuth } from '$lib/stores/auth';
 import type { User } from '$lib/types';
 
 const API_BASE = '/api';
+const LOGIN_PATH = '/login';
 
 export class APIError extends Error {
 	status: number;
@@ -26,6 +29,17 @@ export function setCsrfToken(v: string | null): void {
 
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const REQUEST_TIMEOUT_MS = 15000;
+
+// handleUnauthorized centralizes the reaction to a 401: drop local auth state and
+// send the user back to /login with a returnTo, unless the failing request already
+// originated from the login page (avoids a redirect loop on a failed login attempt).
+export function handleUnauthorized(): void {
+	if (typeof window === 'undefined') return;
+	clearAuth();
+	if (window.location.pathname === LOGIN_PATH) return;
+	const returnTo = window.location.pathname + window.location.search;
+	void goto(`${LOGIN_PATH}?returnTo=${encodeURIComponent(returnTo)}`);
+}
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
 	const method = (options.method ?? 'GET').toUpperCase();
@@ -61,6 +75,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 		}
 
 		if (!resp.ok) {
+			if (resp.status === 401) handleUnauthorized();
 			throw new APIError(resp.status, envelope?.error ?? `request failed (${resp.status})`);
 		}
 		return (envelope?.data as T) ?? (undefined as T);
