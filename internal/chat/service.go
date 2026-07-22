@@ -51,6 +51,11 @@ type ServiceConfig struct {
 	Timeout          time.Duration
 	MCPMaxIterations int
 	MCPMaxTools      int
+	// ContextBudgetTokens bounds how many (estimated) tokens of prior
+	// conversation history are sent with each request, separate from
+	// MaxTokens (the completion cap). <=0 falls back to
+	// defaultContextBudgetTokens.
+	ContextBudgetTokens int
 	// Now supplies the current time used to stamp the system prompt with
 	// today's date. Defaults to time.Now when nil (overridable in tests).
 	Now func() time.Time
@@ -58,6 +63,15 @@ type ServiceConfig struct {
 
 const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
+
+// estBytesPerToken approximates 4 bytes per token (a common rough heuristic
+// for English/JSON-ish text), used to bound chat history to a token budget
+// without an actual provider tokenizer round-trip.
+const estBytesPerToken = 4
+
+// defaultContextBudgetTokens is used when ServiceConfig.ContextBudgetTokens
+// is unset (<=0); mirrors config.Load()'s KADENCE_LLM_CONTEXT_BUDGET default.
+const defaultContextBudgetTokens = 32000
 const loadSkillToolName = "kadence__load_skill"
 const credsToolName = "kadence__request_credentials" // #nosec G101 -- a tool name, not a credential
 
@@ -141,6 +155,7 @@ type Service struct {
 	mcp           MCPTools
 	maxIterations int
 	maxTools      int
+	contextBudget int
 	now           func() time.Time
 	skills        *skill.Registry
 	secrets       *secret.Broker
@@ -175,6 +190,10 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	if maxTools <= 0 {
 		maxTools = defaultMaxTools
 	}
+	contextBudget := cfg.ContextBudgetTokens
+	if contextBudget <= 0 {
+		contextBudget = defaultContextBudgetTokens
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
@@ -182,7 +201,7 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	return &Service{
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
-		maxIterations: maxIterations, maxTools: maxTools, now: now,
+		maxIterations: maxIterations, maxTools: maxTools, contextBudget: contextBudget, now: now,
 		skills:  deps.Skills,
 		secrets: deps.Secrets,
 	}
@@ -251,8 +270,14 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		MaxTokens:   s.cfg.MaxTokens,
 		Temperature: s.cfg.Temperature,
 	}
-	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: s.systemPrompt(unitSystem)})
-	for _, m := range history {
+	systemPrompt := s.systemPrompt(unitSystem)
+	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: systemPrompt})
+	boundedHistory, droppedCount := s.boundHistory(history, systemPrompt, userText)
+	if droppedCount > 0 {
+		slog.Debug("chat history trimmed to fit token budget",
+			"conversation", conversationID, "dropped_messages", droppedCount, "budget_tokens", s.contextBudget)
+	}
+	for _, m := range boundedHistory {
 		req.Messages = append(req.Messages, provider.Message{Role: m.Role, Content: m.Content})
 	}
 	req.Messages = append(req.Messages, provider.Message{Role: "user", Content: userText})
@@ -784,6 +809,100 @@ func preview(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…(truncated)"
+}
+
+// estimateTokens approximates the token count of s using a fixed
+// bytes-per-token heuristic (no provider tokenizer round-trip).
+func estimateTokens(s string) int {
+	return len(s) / estBytesPerToken
+}
+
+// historyTurn is one logical turn of stored conversation history: a user
+// message followed by everything the assistant produced in reply for that
+// turn (its message, carrying any persisted tool-call audit metadata).
+// Turns are the unit of truncation in boundHistory, so a turn (and any
+// tool-call/result pairing it represents) is never split across the
+// kept/dropped boundary.
+type historyTurn struct {
+	messages []model.Message
+}
+
+// tokens estimates this turn's total token cost.
+func (t historyTurn) tokens() int {
+	n := 0
+	for _, m := range t.messages {
+		n += estimateTokens(m.Content)
+	}
+	return n
+}
+
+// groupHistoryTurns splits chronological history into turns, starting a new
+// turn at each user-role message. A stray leading non-user message (should
+// not occur in practice) becomes its own turn rather than being dropped.
+func groupHistoryTurns(history []model.Message) []historyTurn {
+	var turns []historyTurn
+	for _, m := range history {
+		if m.Role == model.MsgRoleUser || len(turns) == 0 {
+			turns = append(turns, historyTurn{})
+		}
+		last := &turns[len(turns)-1]
+		last.messages = append(last.messages, m)
+	}
+	return turns
+}
+
+// boundHistory trims stored conversation history to fit within the
+// service's token budget, estimating cost with the len/4 heuristic against
+// systemPrompt + userText + the kept history. It always keeps the first
+// turn (so the conversation's opening user message is never dropped), then
+// walks backward from the newest turn, keeping whole turns while they still
+// fit the budget. The contiguous oldest-middle turns that don't fit are
+// dropped in full — a turn (and so a tool-call/result pair, which live
+// within the same turn) is never split. Returns the bounded message slice
+// and the count of dropped messages (for a debug log; never their content).
+func (s *Service) boundHistory(history []model.Message, systemPrompt, userText string) ([]model.Message, int) {
+	if len(history) == 0 {
+		return history, 0
+	}
+	turns := groupHistoryTurns(history)
+	if len(turns) == 0 {
+		return history, 0
+	}
+
+	budget := s.contextBudget
+	if budget <= 0 {
+		budget = defaultContextBudgetTokens
+	}
+	used := estimateTokens(systemPrompt) + estimateTokens(userText) + turns[0].tokens()
+
+	keptFromEnd := 0
+	for i := len(turns) - 1; i > 0; i-- {
+		cost := turns[i].tokens()
+		if used+cost > budget {
+			break
+		}
+		used += cost
+		keptFromEnd++
+	}
+
+	firstKeptFromEnd := len(turns) - keptFromEnd
+	const firstDropped = 1 // turn 0 is always kept
+	if firstDropped >= firstKeptFromEnd {
+		// Every turn after the first already fits: nothing to drop.
+		return history, 0
+	}
+
+	dropped := 0
+	for i := firstDropped; i < firstKeptFromEnd; i++ {
+		dropped += len(turns[i].messages)
+	}
+
+	out := make([]model.Message, 0, len(history)-dropped)
+	out = append(out, turns[0].messages...)
+	for i := firstKeptFromEnd; i < len(turns); i++ {
+		out = append(out, turns[i].messages...)
+	}
+	return out, dropped
 }
 
 // insertAfterSystem inserts m right after a leading system message, or

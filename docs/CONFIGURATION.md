@@ -56,6 +56,7 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_LLM_TEMPERATURE` | `0.3` | Sampling temperature. |
 | `KADENCE_LLM_TIMEOUT` | `300s` | Per-request timeout (Go duration). |
 | `KADENCE_SYSTEM_PROMPT` | — | Overrides the built-in chat system prompt. |
+| `KADENCE_LLM_CONTEXT_BUDGET` | `32000` | Token budget (estimated via a `len/4` heuristic, not a real tokenizer) for the prior-conversation history sent with each request, separate from `KADENCE_LLM_MAX_TOKENS` (the completion cap). When history would exceed the budget, whole oldest-middle turns (a user message plus its assistant reply) are dropped — never split mid-turn — always keeping the conversation's first user message and as many of the newest turns as fit. |
 
 ## Guardrail (topic classifier)
 
@@ -148,6 +149,7 @@ In a Helm deployment these are rendered for you from `mcp.servers[]` — see
 3. `KADENCE_USER_MCP_ALLOWED_HOSTS` is set but `KADENCE_ENCRYPTION_KEY` is not a valid
    32-byte key.
 4. `KADENCE_RATE_LIMIT_GLOBAL` or `KADENCE_RATE_LIMIT_AUTH` is negative.
+5. `KADENCE_LLM_CONTEXT_BUDGET` is not a positive integer.
 
 Passkeys additionally require `KADENCE_WEBAUTHN_RP_ID` **and** `KADENCE_TRUSTED_ORIGINS`
 **and** a valid 32-byte `KADENCE_ENCRYPTION_KEY`; if the RP ID is set without the

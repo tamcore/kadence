@@ -46,6 +46,14 @@ type Config struct {
 	LLMTimeout     time.Duration
 	// SystemPrompt overrides the default chat system prompt.
 	SystemPrompt string
+	// LLMContextBudgetTokens bounds how many (estimated) tokens of prior
+	// conversation history are sent with each chat request
+	// (KADENCE_LLM_CONTEXT_BUDGET), separate from LLMMaxTokens (the
+	// completion cap). When history would exceed the budget, whole
+	// oldest-middle turns are dropped (never splitting a tool-call/result
+	// pair), always keeping the first user message and the newest turns
+	// that fit.
+	LLMContextBudgetTokens int
 
 	// Guardrail (opt-in topic classifier). Model/base/key fall back to the LLM* values.
 	GuardrailEnabled       bool
@@ -146,6 +154,7 @@ func Load() Config {
 	cfg.LLMTemperature = envFloatOr("KADENCE_LLM_TEMPERATURE", 0.3)
 	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 300*time.Second)
 	cfg.SystemPrompt = os.Getenv("KADENCE_SYSTEM_PROMPT")
+	cfg.LLMContextBudgetTokens = envIntOr("KADENCE_LLM_CONTEXT_BUDGET", 32000)
 
 	cfg.GuardrailEnabled = envBoolOr("KADENCE_GUARDRAIL_ENABLED", false)
 	cfg.GuardrailModel = os.Getenv("KADENCE_GUARDRAIL_MODEL")
@@ -239,6 +248,9 @@ func (c Config) Validate() error {
 	}
 	if c.EmbedDimensions < 0 {
 		return errors.New("KADENCE_EMBED_DIMENSIONS must be a non-negative integer")
+	}
+	if c.LLMContextBudgetTokens <= 0 {
+		return errors.New("KADENCE_LLM_CONTEXT_BUDGET must be a positive integer")
 	}
 	return nil
 }

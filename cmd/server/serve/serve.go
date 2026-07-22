@@ -176,13 +176,14 @@ func Run() error {
 		// phase, the credentials submit endpoint. Do not construct a second one.
 		broker := secret.NewBroker()
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
-			Model:            cfg.LLMModel,
-			MaxTokens:        cfg.LLMMaxTokens,
-			Temperature:      cfg.LLMTemperature,
-			SystemPrompt:     cfg.SystemPrompt,
-			Timeout:          cfg.LLMTimeout,
-			MCPMaxIterations: cfg.MCPMaxIterations,
-			MCPMaxTools:      cfg.MCPMaxTools,
+			Model:               cfg.LLMModel,
+			MaxTokens:           cfg.LLMMaxTokens,
+			Temperature:         cfg.LLMTemperature,
+			SystemPrompt:        cfg.SystemPrompt,
+			Timeout:             cfg.LLMTimeout,
+			MCPMaxIterations:    cfg.MCPMaxIterations,
+			MCPMaxTools:         cfg.MCPMaxTools,
+			ContextBudgetTokens: cfg.LLMContextBudgetTokens,
 		}, chat.Deps{
 			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
 			Secrets: broker,
