@@ -272,7 +272,21 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 	}
 	systemPrompt := s.systemPrompt(unitSystem)
 	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: systemPrompt})
-	boundedHistory, droppedCount := s.boundHistory(history, systemPrompt, userText)
+
+	// Retrieve RAG context (and the skills it triggers) up front, before
+	// bounding history, so their size can be reserved against the token
+	// budget. They are inserted into req.Messages as mandatory system
+	// messages further down (after the guardrail check), but they must be
+	// sized here or the history bound below would let history fill the
+	// whole budget and the provider request could exceed ContextBudgetTokens
+	// whenever RAG hits or skills attach.
+	ragInserts, queryEmb, ragErr := s.assembleRAGInserts(ctx, conversationID, userID, userText)
+	reservedTokens := 0
+	for _, m := range ragInserts {
+		reservedTokens += estimateTokens(m.Content)
+	}
+
+	boundedHistory, droppedCount := s.boundHistory(history, systemPrompt, userText, reservedTokens)
 	if droppedCount > 0 {
 		slog.Debug("chat history trimmed to fit token budget",
 			"conversation", conversationID, "dropped_messages", droppedCount, "budget_tokens", s.contextBudget)
@@ -300,30 +314,12 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		return err
 	}
 
-	if s.rag != nil {
-		contexts, queryEmb, rErr := s.rag.Retrieve(ctx, userID, userText)
-		if rErr != nil {
-			slog.Warn("rag retrieve failed, proceeding", "err", rErr, "conversation", conversationID)
-		} else {
-			if len(contexts) > 0 {
-				var b strings.Builder
-				b.WriteString("Relevant notes from earlier conversations with this user (use if helpful):\n")
-				for _, c := range contexts {
-					b.WriteString("- ")
-					b.WriteString(c)
-					b.WriteString("\n")
-				}
-				req.Messages = insertAfterSystem(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: b.String()})
-				if s.skills != nil {
-					for _, sk := range s.skills.ForHistory() {
-						req.Messages = insertAfterSystem(req.Messages,
-							provider.Message{Role: model.MsgRoleSystem, Content: sk.Body})
-					}
-				}
-			}
-			if err := s.rag.Store(ctx, userID, conversationID, userMsg.ID, userText, queryEmb); err != nil {
-				slog.Warn("rag store user chunk failed", "err", err)
-			}
+	if s.rag != nil && ragErr == nil {
+		for _, m := range ragInserts {
+			req.Messages = insertAfterSystem(req.Messages, m)
+		}
+		if err := s.rag.Store(ctx, userID, conversationID, userMsg.ID, userText, queryEmb); err != nil {
+			slog.Warn("rag store user chunk failed", "err", err)
 		}
 	}
 
@@ -356,6 +352,44 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		return err
 	}
 	return sink.Flush()
+}
+
+// assembleRAGInserts retrieves RAG context for userText and, if any notes
+// come back, builds the ordered system-message inserts Stream places after
+// the system prompt: the RAG notes themselves, followed by any skills
+// registered for history-triggered injection. It returns the query
+// embedding (for the caller to reuse when storing the user chunk) and any
+// retrieve error (logged here; the caller treats a non-nil error as "no
+// inserts, proceed without RAG" rather than failing the turn).
+func (s *Service) assembleRAGInserts(
+	ctx context.Context, conversationID string, userID int64, userText string,
+) (inserts []provider.Message, queryEmb []float32, err error) {
+	if s.rag == nil {
+		return nil, nil, nil
+	}
+	contexts, emb, err := s.rag.Retrieve(ctx, userID, userText)
+	if err != nil {
+		slog.Warn("rag retrieve failed, proceeding", "err", err, "conversation", conversationID)
+		return nil, emb, err
+	}
+	if len(contexts) == 0 {
+		return nil, emb, nil
+	}
+
+	var b strings.Builder
+	b.WriteString("Relevant notes from earlier conversations with this user (use if helpful):\n")
+	for _, c := range contexts {
+		b.WriteString("- ")
+		b.WriteString(c)
+		b.WriteString("\n")
+	}
+	inserts = append(inserts, provider.Message{Role: model.MsgRoleSystem, Content: b.String()})
+	if s.skills != nil {
+		for _, sk := range s.skills.ForHistory() {
+			inserts = append(inserts, provider.Message{Role: model.MsgRoleSystem, Content: sk.Body})
+		}
+	}
+	return inserts, emb, nil
 }
 
 // applyGuardrail classifies the conversation and, if it's off-topic, streams
@@ -853,14 +887,20 @@ func groupHistoryTurns(history []model.Message) []historyTurn {
 
 // boundHistory trims stored conversation history to fit within the
 // service's token budget, estimating cost with the len/4 heuristic against
-// systemPrompt + userText + the kept history. It always keeps the first
-// turn (so the conversation's opening user message is never dropped), then
-// walks backward from the newest turn, keeping whole turns while they still
-// fit the budget. The contiguous oldest-middle turns that don't fit are
-// dropped in full — a turn (and so a tool-call/result pair, which live
-// within the same turn) is never split. Returns the bounded message slice
-// and the count of dropped messages (for a debug log; never their content).
-func (s *Service) boundHistory(history []model.Message, systemPrompt, userText string) ([]model.Message, int) {
+// systemPrompt + userText + reservedTokens + the kept history. reservedTokens
+// is the estimated size of any other mandatory additions to the request —
+// currently the RAG context and skill bodies inserted after the system
+// message (see insertAfterSystem in Stream) — which are treated like the
+// system prompt itself: they are never dropped, so they reduce the token
+// allowance left for history rather than being bounded themselves. Pass 0
+// when no such inserts apply. boundHistory always keeps the first turn (so
+// the conversation's opening user message is never dropped), then walks
+// backward from the newest turn, keeping whole turns while they still fit
+// the budget. The contiguous oldest-middle turns that don't fit are dropped
+// in full — a turn (and so a tool-call/result pair, which live within the
+// same turn) is never split. Returns the bounded message slice and the
+// count of dropped messages (for a debug log; never their content).
+func (s *Service) boundHistory(history []model.Message, systemPrompt, userText string, reservedTokens int) ([]model.Message, int) {
 	if len(history) == 0 {
 		return history, 0
 	}
@@ -873,7 +913,7 @@ func (s *Service) boundHistory(history []model.Message, systemPrompt, userText s
 	if budget <= 0 {
 		budget = defaultContextBudgetTokens
 	}
-	used := estimateTokens(systemPrompt) + estimateTokens(userText) + turns[0].tokens()
+	used := estimateTokens(systemPrompt) + estimateTokens(userText) + reservedTokens + turns[0].tokens()
 
 	keptFromEnd := 0
 	for i := len(turns) - 1; i > 0; i-- {

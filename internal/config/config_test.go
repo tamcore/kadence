@@ -445,18 +445,18 @@ func TestRateLimitOverrides(t *testing.T) {
 }
 
 func TestValidateRejectsNegativeRateLimits(t *testing.T) {
-	base := Config{DatabaseURL: testDatabaseURL}
+	base := Config{DatabaseURL: testDatabaseURL, LLMContextBudgetTokens: 32000}
 
 	global := base
 	global.RateLimitGlobal = -1
-	if err := global.Validate(); err == nil {
-		t.Fatal("Validate() = nil, want error for negative RateLimitGlobal")
+	if err := global.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_RATE_LIMIT_GLOBAL") {
+		t.Fatalf("Validate() = %v, want error mentioning KADENCE_RATE_LIMIT_GLOBAL", err)
 	}
 
 	authCfg := base
 	authCfg.RateLimitAuth = -1
-	if err := authCfg.Validate(); err == nil {
-		t.Fatal("Validate() = nil, want error for negative RateLimitAuth")
+	if err := authCfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_RATE_LIMIT_AUTH") {
+		t.Fatalf("Validate() = %v, want error mentioning KADENCE_RATE_LIMIT_AUTH", err)
 	}
 }
 
@@ -488,9 +488,9 @@ func TestEmbedDimensionsOverride(t *testing.T) {
 }
 
 func TestValidateRejectsNegativeEmbedDimensions(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: -1}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() = nil, want error for negative EmbedDimensions")
+	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: -1, LLMContextBudgetTokens: 32000}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_EMBED_DIMENSIONS") {
+		t.Fatalf("Validate() = %v, want error mentioning KADENCE_EMBED_DIMENSIONS", err)
 	}
 }
 

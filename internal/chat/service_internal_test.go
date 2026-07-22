@@ -89,7 +89,7 @@ func TestBoundHistorySmallConversationUntouched(t *testing.T) {
 		history = append(history, turnMsgs(i, 10, 10)...)
 	}
 
-	got, dropped := s.boundHistory(history, "system prompt", "new user text")
+	got, dropped := s.boundHistory(history, "system prompt", "new user text", 0)
 	if dropped != 0 {
 		t.Fatalf("dropped = %d, want 0", dropped)
 	}
@@ -107,7 +107,7 @@ func TestBoundHistoryKeepsFirstUserMessage(t *testing.T) {
 		history = append(history, turnMsgs(i, 200, 200)...)
 	}
 
-	got, dropped := s.boundHistory(history, "system prompt", "new user text")
+	got, dropped := s.boundHistory(history, "system prompt", "new user text", 0)
 	if len(got) < 2 {
 		t.Fatalf("len(got) = %d, want at least the first turn (2 messages)", len(got))
 	}
@@ -132,7 +132,7 @@ func TestBoundHistoryRespectsBudgetAndDropsOldestMiddle(t *testing.T) {
 	// Budget: first turn (~50) + room for exactly one more turn (~50), not two.
 	s := &Service{contextBudget: 110}
 
-	got, dropped := s.boundHistory(history, "", "")
+	got, dropped := s.boundHistory(history, "", "", 0)
 	if dropped != 2 {
 		t.Fatalf("dropped = %d, want 2 (the whole middle turn)", dropped)
 	}
@@ -167,7 +167,7 @@ func TestBoundHistoryNeverSplitsATurn(t *testing.T) {
 	}
 
 	s := &Service{contextBudget: 200}
-	got, _ := s.boundHistory(history, "", "")
+	got, _ := s.boundHistory(history, "", "", 0)
 
 	if len(got)%2 != 0 {
 		t.Fatalf("len(got) = %d, want even (whole turns only)", len(got))

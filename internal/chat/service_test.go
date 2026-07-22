@@ -1566,6 +1566,85 @@ func TestStreamSmallHistoryUntouchedByBudget(t *testing.T) {
 	}
 }
 
+// TestStreamBudgetAccountsForRAGAndSkillInserts verifies that a large RAG
+// context plus the skills it triggers are reserved against the token budget
+// before history is bounded (see the boundHistory doc comment on
+// reservedTokens: these inserts are mandatory, like the system prompt, so
+// they shrink the allowance left for history rather than being counted only
+// after the fact). Regression test: previously boundHistory sized the
+// budget against systemPrompt+userText+history alone, so the RAG context and
+// skill bodies inserted afterward via insertAfterSystem could push the
+// actual provider request past ContextBudgetTokens whenever RAG hit or
+// skills attached.
+func TestStreamBudgetAccountsForRAGAndSkillInserts(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	msgs := &fakeMsgs{}
+	// 3 turns of ~500 chars/side (~250 estimated tokens each), same shape as
+	// TestStreamBoundsHistoryToContextBudget.
+	for i := range 3 {
+		msgs.added = append(msgs.added,
+			model.Message{Role: model.MsgRoleUser, Content: strings.Repeat("u", 500) + strconv.Itoa(i)},
+			model.Message{Role: model.MsgRoleAssistant, Content: strings.Repeat("a", 500) + strconv.Itoa(i)},
+		)
+	}
+	firstUserContent := msgs.added[0].Content
+	middleTurnUserContent := msgs.added[2].Content
+	newestTurnUserContent := msgs.added[4].Content
+
+	// A large RAG note (~800 chars => ~219 estimated tokens) plus the memory
+	// skill it triggers (~377-byte body => ~94 estimated tokens) reserve
+	// ~313 tokens against the budget before history is bounded.
+	fc := &fakeChunks{search: []model.Chunk{{Content: strings.Repeat("n", 800)}}}
+	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
+	reg, err := skill.Load()
+	if err != nil {
+		t.Fatalf("skill.Load: %v", err)
+	}
+
+	captP := &capturingProvider{reply: "ok"}
+	// Budget fits system + live user + RAG/skill reserve + first turn + newest
+	// turn (~891 tokens) but not also the middle turn (~1141 tokens), so the
+	// middle turn must be dropped once the RAG/skill reserve is accounted for.
+	// Under the old (buggy) accounting — no reserve — all 3 turns would fit
+	// under 900 and the final request (with RAG+skill inserts added after)
+	// would overshoot the budget.
+	svc := chat.NewService(captP,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32, SystemPrompt: "sp", ContextBudgetTokens: 900},
+		chat.Deps{Convs: convs, Msgs: msgs, RAG: rag, Skills: reg})
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", testConvID, "new question", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var totalTokens int
+	var full strings.Builder
+	for _, m := range captP.gotMessages {
+		totalTokens += len(m.Content) / 4 // mirrors the len/4 estimateTokens heuristic
+		full.WriteString(m.Content)
+		full.WriteString("\n")
+	}
+	if totalTokens > 900 {
+		t.Fatalf("total estimated request tokens = %d, want <= budget (900); messages: %+v", totalTokens, captP.gotMessages)
+	}
+
+	got := full.String()
+	if !strings.Contains(got, firstUserContent) {
+		t.Fatalf("expected first user message retained, got messages: %+v", captP.gotMessages)
+	}
+	if !strings.Contains(got, newestTurnUserContent) {
+		t.Fatalf("expected newest turn retained, got messages: %+v", captP.gotMessages)
+	}
+	if strings.Contains(got, middleTurnUserContent) {
+		t.Fatalf("expected middle turn dropped once RAG/skill reserve is accounted for, got messages: %+v", captP.gotMessages)
+	}
+	if !strings.Contains(got, strings.Repeat("n", 800)) {
+		t.Fatalf("expected RAG note injected, got messages: %+v", captP.gotMessages)
+	}
+	if !strings.Contains(got, "authoritative history") {
+		t.Fatalf("expected memory skill injected alongside RAG notes, got messages: %+v", captP.gotMessages)
+	}
+}
+
 func TestStreamKeepsTitleUnchangedWhenShort(t *testing.T) {
 	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
