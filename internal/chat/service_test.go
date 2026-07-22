@@ -350,6 +350,7 @@ const (
 	testGuardrailDomain          = "Coach"
 	testGuardrailTopics          = "training"
 	testGuardrailRefusal         = "nope, coaching only"
+	testGuardrailOffTopic        = "OFF_TOPIC"
 )
 
 type recordingProvider struct{ called bool }
@@ -369,7 +370,7 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
 	mainP := &recordingProvider{}
-	guard := chat.NewGuardrail(&verdictProvider{verdict: "OFF_TOPIC"}, chat.GuardrailConfig{
+	guard := chat.NewGuardrail(&verdictProvider{verdict: testGuardrailOffTopic}, chat.GuardrailConfig{
 		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
 		RefusalMessage: testGuardrailRefusal, HistoryWindow: 6,
 	})
@@ -412,6 +413,36 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 	}
 	if !mainP.called {
 		t.Fatal("guardrail error must fail open → main provider called")
+	}
+}
+
+// TestStreamGuardrailRefusalSkipsEmbedding is a regression test for a data
+// egress ordering bug: assembleRAGInserts (which embeds the raw user
+// message via an external embedding provider) must never run for a message
+// the guardrail refuses. A refused message must never leave the app.
+func TestStreamGuardrailRefusalSkipsEmbedding(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	mainP := &recordingProvider{}
+	guard := chat.NewGuardrail(&verdictProvider{verdict: testGuardrailOffTopic}, chat.GuardrailConfig{
+		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain, AllowedTopics: testGuardrailTopics,
+		RefusalMessage: testGuardrailRefusal, HistoryWindow: 6,
+	})
+	fc := &fakeChunks{search: []model.Chunk{{Content: "should never be embedded against"}}}
+	embedder := &fakeEmbedder{}
+	rag := chat.NewRAG(embedder, fc, 5)
+	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard, RAG: rag})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), 1, testUsername, "", "", "what's the stock market doing?", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if mainP.called {
+		t.Fatal("main provider should NOT be called on refusal")
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("embedder.calls = %d, want 0: refused message must never reach the embedding provider", embedder.calls)
 	}
 }
 
