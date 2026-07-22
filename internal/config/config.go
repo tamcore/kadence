@@ -65,8 +65,11 @@ type Config struct {
 	RAGTopK      int
 	// EmbedDimensions pins the embedding vector length (KADENCE_EMBED_DIMENSIONS,
 	// default 1024) so it can be stored in a fixed-width pgvector column with an
-	// HNSW index. 0 disables pinning (provider default dimensionality, no
-	// truncation, and no index contract).
+	// HNSW index. 0 only stops the client from sending the dimensions field and
+	// disables client-side truncation; migration 00011 pins the DB column to
+	// vector(1024), so 0 must not be used unless the provider natively returns
+	// 1024-dim vectors, otherwise inserts/searches fail with a Postgres
+	// "different vector dimensions" error.
 	EmbedDimensions int
 
 	// Ingestion.

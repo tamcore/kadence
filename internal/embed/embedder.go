@@ -74,6 +74,8 @@ func (e *OpenAICompat) Embed(ctx context.Context, texts []string) ([][]float32, 
 }
 
 // fitDimensions enforces the pinned dimension contract on a single vector.
+// The e.dimensions <= 0 short-circuit must stay first: it implements the
+// client-side "0 disables" contract (no dimensions field sent, no truncation).
 func (e *OpenAICompat) fitDimensions(v []float32) ([]float32, error) {
 	if e.dimensions <= 0 || len(v) == e.dimensions {
 		return v, nil
