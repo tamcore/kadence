@@ -650,30 +650,43 @@ func (p *alwaysToolProvider) StreamChatWithTools(_ context.Context, _ provider.C
 	}, nil
 }
 
-// fakeMCPTools is a canned MCPTools implementation for tests.
+// fakeMCPTools is a canned MCPTools implementation for tests. SnapshotFor
+// hands out a *fakeMCPSnapshot bound back to this fake, so tests can still
+// assert on Call/ToolsFor invocations via the parent.
 type fakeMCPTools struct {
-	enabled     bool
-	tools       []provider.ToolDefinition
-	callResult  string
-	callErr     error
-	gotUsername string
-	gotToolName string
-	gotArgsJSON string
-	callInvoked bool
+	enabled       bool
+	tools         []provider.ToolDefinition
+	callResult    string
+	callErr       error
+	gotUsername   string
+	gotToolName   string
+	gotArgsJSON   string
+	callInvoked   bool
+	snapshotCalls int
 }
 
 func (f *fakeMCPTools) Enabled() bool { return f.enabled }
 
-func (f *fakeMCPTools) ToolsFor(_ context.Context, _ string) ([]provider.ToolDefinition, error) {
-	return f.tools, nil
+func (f *fakeMCPTools) SnapshotFor(_ context.Context, username string) chat.MCPUserSnapshot {
+	f.snapshotCalls++
+	f.gotUsername = username
+	return &fakeMCPSnapshot{parent: f}
 }
 
-func (f *fakeMCPTools) Call(_ context.Context, username, toolName, argsJSON string) (string, error) {
-	f.callInvoked = true
-	f.gotUsername = username
-	f.gotToolName = toolName
-	f.gotArgsJSON = argsJSON
-	return f.callResult, f.callErr
+// fakeMCPSnapshot is the per-turn snapshot fakeMCPTools.SnapshotFor returns.
+type fakeMCPSnapshot struct {
+	parent *fakeMCPTools
+}
+
+func (s *fakeMCPSnapshot) ToolsFor(_ context.Context) ([]provider.ToolDefinition, error) {
+	return s.parent.tools, nil
+}
+
+func (s *fakeMCPSnapshot) Call(_ context.Context, toolName, argsJSON string) (string, error) {
+	s.parent.callInvoked = true
+	s.parent.gotToolName = toolName
+	s.parent.gotArgsJSON = argsJSON
+	return s.parent.callResult, s.parent.callErr
 }
 
 const (
@@ -926,7 +939,9 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 	}
 }
 
-// countingMCP records how many times Call is invoked and returns canned output.
+// countingMCP records how many times Call is invoked and returns canned
+// output. SnapshotFor hands out a *countingMCPSnapshot bound back to this
+// fake so tests can assert on Call invocations via the parent.
 type countingMCP struct {
 	tools    []provider.ToolDefinition
 	calls    int
@@ -934,12 +949,23 @@ type countingMCP struct {
 }
 
 func (m *countingMCP) Enabled() bool { return true }
-func (m *countingMCP) ToolsFor(context.Context, string) ([]provider.ToolDefinition, error) {
-	return m.tools, nil
+
+func (m *countingMCP) SnapshotFor(context.Context, string) chat.MCPUserSnapshot {
+	return &countingMCPSnapshot{parent: m}
 }
-func (m *countingMCP) Call(_ context.Context, _, toolName, _ string) (string, error) {
-	m.calls++
-	m.lastTool = toolName
+
+// countingMCPSnapshot is the per-turn snapshot countingMCP.SnapshotFor returns.
+type countingMCPSnapshot struct {
+	parent *countingMCP
+}
+
+func (s *countingMCPSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
+	return s.parent.tools, nil
+}
+
+func (s *countingMCPSnapshot) Call(_ context.Context, toolName, _ string) (string, error) {
+	s.parent.calls++
+	s.parent.lastTool = toolName
 	return "ok-result", nil
 }
 

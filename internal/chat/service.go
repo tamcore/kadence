@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -29,17 +30,27 @@ type MessageStore interface {
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 }
 
-// MCPTools is the MCP tool-calling surface the chat service needs: the set
-// of tools available to a user, and dispatching a tool call. Satisfied by
-// *mcp.Registry.
+// MCPTools is the MCP tool-calling surface the chat service needs. Satisfied
+// by *mcp.Registry.
 type MCPTools interface {
 	// Enabled reports whether any MCP servers are configured.
 	Enabled() bool
-	// ToolsFor returns the tool definitions available to the given user.
-	ToolsFor(ctx context.Context, username string) ([]provider.ToolDefinition, error)
+	// SnapshotFor resolves the servers applicable to username once (a single
+	// DB query + decrypt for any user-defined servers) and returns a view
+	// reused for the rest of the chat turn, instead of re-resolving on every
+	// tool call in the loop.
+	SnapshotFor(ctx context.Context, username string) MCPUserSnapshot
+}
+
+// MCPUserSnapshot is a per-turn resolved view of the MCP servers applicable
+// to one user, obtained once via MCPTools.SnapshotFor and reused through the
+// whole tool loop. Satisfied by *mcp.UserSnapshot.
+type MCPUserSnapshot interface {
+	// ToolsFor returns the tool definitions available to this snapshot's user.
+	ToolsFor(ctx context.Context) ([]provider.ToolDefinition, error)
 	// Call invokes a named tool with JSON-encoded arguments and returns its
 	// (also JSON-ish/plain text) result.
-	Call(ctx context.Context, username, toolName, argsJSON string) (string, error)
+	Call(ctx context.Context, toolName, argsJSON string) (string, error)
 }
 
 // ServiceConfig carries model params + system prompt.
@@ -337,10 +348,18 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		}
 	}
 
-	req.Tools = s.assembleTools(ctx, username)
+	// mcpSnap is resolved once here and reused for the whole turn (tool
+	// listing below, plus every tool call in runToolLoop), instead of
+	// re-resolving the user's MCP servers (DB query + credential decrypt) on
+	// every tool call.
+	var mcpSnap MCPUserSnapshot
+	if s.mcp != nil && s.mcp.Enabled() {
+		mcpSnap = s.mcp.SnapshotFor(ctx, username)
+	}
+	req.Tools = s.assembleTools(ctx, mcpSnap)
 
 	redactor := &turnRedactor{}
-	full, turnCalls, err := s.runToolLoop(ctx, streamCtx, conversationID, userID, username, req, redactor, sink)
+	full, turnCalls, err := s.runToolLoop(ctx, streamCtx, conversationID, userID, mcpSnap, req, redactor, sink)
 	if err != nil {
 		return err
 	}
@@ -447,7 +466,7 @@ func (s *Service) applyGuardrail(
 // tool-free assistant content (persistence and RAG-embedding happen in the
 // caller).
 func (s *Service) runToolLoop(
-	ctx, streamCtx context.Context, conversationID string, userID int64, username string,
+	ctx, streamCtx context.Context, conversationID string, userID int64, mcpSnap MCPUserSnapshot,
 	req provider.ChatRequest, redactor *turnRedactor, sink EventSink,
 ) (string, []model.MessageToolCall, error) {
 	maxIter := s.maxIterations
@@ -496,7 +515,7 @@ func (s *Service) runToolLoop(
 				args = secret.Redact(args, redactor.snapshot(s.secrets, userID))
 			}
 			turnCalls = append(turnCalls, model.MessageToolCall{Name: tc.Name, Arguments: args})
-			req.Messages = append(req.Messages, s.dispatchTool(ctx, streamCtx, userID, username, tc, gated, redactor, sink))
+			req.Messages = append(req.Messages, s.dispatchTool(ctx, streamCtx, userID, mcpSnap, tc, gated, redactor, sink))
 		}
 	}
 
@@ -571,10 +590,10 @@ func (s *Service) completeIfTruncated(
 // assembleTools returns the tool definitions offered to the model: the MCP
 // tools (capped, reserving one slot per enabled built-in — load_skill and/or
 // request_credentials) plus the built-in tools themselves.
-func (s *Service) assembleTools(ctx context.Context, username string) []provider.ToolDefinition {
+func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []provider.ToolDefinition {
 	var tools []provider.ToolDefinition
-	if s.mcp != nil && s.mcp.Enabled() {
-		mcpTools, toolsErr := s.mcp.ToolsFor(ctx, username)
+	if mcpSnap != nil {
+		mcpTools, toolsErr := mcpSnap.ToolsFor(ctx)
 		if toolsErr != nil {
 			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
 		} else {
@@ -659,7 +678,7 @@ func (s *Service) skillTool() provider.ToolDefinition {
 // everything else goes to MCP. gated tracks which skills have already
 // pre-gated a call this turn (so the retried call executes for real).
 func (s *Service) dispatchTool(
-	ctx, streamCtx context.Context, userID int64, username string, tc provider.ToolCall,
+	ctx, streamCtx context.Context, userID int64, mcpSnap MCPUserSnapshot, tc provider.ToolCall,
 	gated map[string]bool, redactor *turnRedactor, sink EventSink,
 ) provider.Message {
 	if s.secrets != nil && tc.Name == credsToolName {
@@ -674,7 +693,7 @@ func (s *Service) dispatchTool(
 			return s.gateWithSkill(tc, sk, sink)
 		}
 	}
-	return s.runToolCall(ctx, userID, username, tc, redactor, sink)
+	return s.runToolCall(ctx, userID, mcpSnap, tc, redactor, sink)
 }
 
 // credentialRequestArgs is the parsed request_credentials tool-call payload.
@@ -792,18 +811,19 @@ func (s *Service) gateWithSkill(tc provider.ToolCall, sk skill.Skill, sink Event
 	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: content}
 }
 
-// runToolCall dispatches a single tool call through s.mcp, emitting
-// running/done/error tool events on sink, and returns the resulting
-// role:"tool" message to append to the provider request.
+// runToolCall dispatches a single tool call through mcpSnap (this turn's
+// resolved MCP servers), emitting running/done/error tool events on sink,
+// and returns the resulting role:"tool" message to append to the provider
+// request.
 //
 // Order is security-critical (see docs/superpowers/specs — "Substitution at
 // dispatch"): the running SSE event and debug log below carry the
 // PLACEHOLDER args exactly as the model produced them (tc.Arguments) —
-// UNCHANGED. Only the JSON payload sent to s.mcp.Call ever holds the real
+// UNCHANGED. Only the JSON payload sent to mcpSnap.Call ever holds the real
 // secret value, via broker.Substitute. The MCP result is redacted before it
 // is logged, streamed, or appended to the provider request.
 func (s *Service) runToolCall(
-	ctx context.Context, userID int64, username string, tc provider.ToolCall, redactor *turnRedactor, sink EventSink,
+	ctx context.Context, userID int64, mcpSnap MCPUserSnapshot, tc provider.ToolCall, redactor *turnRedactor, sink EventSink,
 ) provider.Message {
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
 	_ = sink.Flush()
@@ -821,7 +841,13 @@ func (s *Service) runToolCall(
 		callArgs, _ = s.secrets.Substitute(userID, tc.Arguments)
 	}
 
-	out, cErr := s.mcp.Call(ctx, username, tc.Name, callArgs)
+	var out string
+	var cErr error
+	if mcpSnap != nil {
+		out, cErr = mcpSnap.Call(ctx, tc.Name, callArgs)
+	} else {
+		cErr = fmt.Errorf("mcp: no MCP servers available for tool %q", tc.Name)
+	}
 	status := toolStatusDone
 	if cErr != nil {
 		errText := cErr.Error()

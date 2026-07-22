@@ -35,6 +35,31 @@ const (
 	startupTimeout    = 30 * time.Second
 )
 
+// mcpToolsAdapter satisfies chat.MCPTools over *mcp.Registry. It exists only
+// because chat.MCPTools.SnapshotFor must return the chat package's own
+// MCPUserSnapshot interface (to keep the chat package decoupled from mcp),
+// while mcp.Registry.SnapshotFor returns the concrete *mcp.UserSnapshot —
+// Go's interface satisfaction requires an exact return-type match, so this
+// thin wiring-layer wrapper bridges the two.
+type mcpToolsAdapter struct{ reg *mcp.Registry }
+
+func (a mcpToolsAdapter) Enabled() bool { return a.reg.Enabled() }
+
+func (a mcpToolsAdapter) SnapshotFor(ctx context.Context, username string) chat.MCPUserSnapshot {
+	return mcpSnapshotAdapter{a.reg.SnapshotFor(ctx, username)}
+}
+
+// mcpSnapshotAdapter satisfies chat.MCPUserSnapshot over *mcp.UserSnapshot.
+type mcpSnapshotAdapter struct{ snap *mcp.UserSnapshot }
+
+func (a mcpSnapshotAdapter) ToolsFor(ctx context.Context) ([]provider.ToolDefinition, error) {
+	return a.snap.ToolsFor(ctx)
+}
+
+func (a mcpSnapshotAdapter) Call(ctx context.Context, toolName, argsJSON string) (string, error) {
+	return a.snap.Call(ctx, toolName, argsJSON)
+}
+
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
 func Run() error {
 	cfg := config.Load()
@@ -156,7 +181,7 @@ func Run() error {
 		}
 		if len(servers) > 0 || userSrc != nil {
 			registry := mcp.NewRegistry(servers, mcpHTTPClient, userSrc)
-			mcpTools = registry
+			mcpTools = mcpToolsAdapter{registry}
 			slog.Info("mcp enabled", "env_servers", len(servers), "user_mcp", userSrc != nil)
 
 			poller := mcp.NewHealthPoller(registry, mcp.DefaultHealthInterval)
