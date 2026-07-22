@@ -110,6 +110,36 @@ func TestSessionDeleteOthersByUser(t *testing.T) {
 	}
 }
 
+func TestSessionDeleteExpired(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+	ctx := context.Background()
+	u := newUser(t, users, "heidi")
+
+	_ = sessions.Create(ctx, model.Session{ID: "live", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
+	_ = sessions.Create(ctx, model.Session{ID: "expired1", UserID: u.ID, ExpiresAt: time.Now().Add(-time.Minute)})
+	_ = sessions.Create(ctx, model.Session{ID: "expired2", UserID: u.ID, ExpiresAt: time.Now().Add(-time.Hour)})
+
+	n, err := sessions.DeleteExpired(ctx)
+	if err != nil {
+		t.Fatalf("DeleteExpired: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("DeleteExpired count = %d, want 2", n)
+	}
+
+	// Live session survives; a second call is a no-op.
+	if _, err := sessions.GetByID(ctx, "live"); err != nil {
+		t.Fatalf("live session should still exist: %v", err)
+	}
+	n2, err := sessions.DeleteExpired(ctx)
+	if err != nil || n2 != 0 {
+		t.Fatalf("second DeleteExpired: n=%d err=%v, want 0,nil", n2, err)
+	}
+}
+
 func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/tamcore/kadence/internal/config"
@@ -19,6 +20,9 @@ type BootstrapRepo interface {
 func BootstrapAdmin(ctx context.Context, users BootstrapRepo, cfg config.Config) error {
 	if cfg.AdminUsername == "" || cfg.AdminEmail == "" || cfg.AdminPassword == "" {
 		return nil
+	}
+	if len(cfg.AdminPassword) < MinPasswordLen {
+		return fmt.Errorf("KADENCE_ADMIN_PASSWORD must be at least %d characters", MinPasswordLen)
 	}
 	n, err := users.Count(ctx)
 	if err != nil {
