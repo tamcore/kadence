@@ -3,8 +3,34 @@ package mcp
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// serverNamePattern constrains user-defined MCP server names: lowercase
+// alphanumeric, hyphen-separated, max 32 chars. It deliberately excludes
+// "_" entirely, so a server name can never collide with the "__" separator
+// the registry uses to namespace tool names ("<server>__<tool>").
+var serverNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// ValidateServerName reports an error unless name matches serverNamePattern.
+func ValidateServerName(name string) error {
+	if !serverNamePattern.MatchString(name) {
+		return fmt.Errorf("name must match %s", serverNamePattern.String())
+	}
+	return nil
+}
+
+// ValidateTransport reports an error unless transport is one of the
+// recognized Server.Transport values (streamable-http, sse).
+func ValidateTransport(transport string) error {
+	switch transport {
+	case transportStreamableHTTP, transportSSE:
+		return nil
+	default:
+		return fmt.Errorf("transport must be %q or %q", transportStreamableHTTP, transportSSE)
+	}
+}
 
 // HostAllowed validates that rawURL is https and its host matches one of the
 // allowlist patterns. A pattern is either an exact host or a "*." wildcard that

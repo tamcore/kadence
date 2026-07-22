@@ -2,13 +2,26 @@ package mcp
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // DefaultHealthInterval is how often the poller probes each configured server.
 const DefaultHealthInterval = 45 * time.Second
+
+// defaultProbeTimeout bounds a single server probe, so one hanging/
+// unreachable server can never stall the whole poll cycle (or eat into the
+// next one). Overridable per-poller via HealthPoller.probeTimeout (e.g. in
+// tests, to avoid a real 10s wait).
+const defaultProbeTimeout = 10 * time.Second
+
+// maxConcurrentProbes bounds how many servers are probed at once, so a large
+// fleet of configured servers doesn't open unbounded concurrent connections.
+const maxConcurrentProbes = 4
 
 // ServerHealth is the latest probe result for one configured server.
 type ServerHealth struct {
@@ -31,10 +44,11 @@ type healthSource interface {
 // HealthPoller periodically probes every configured MCP server and caches the
 // latest health per (name, scope). Reads are cheap and never touch the network.
 type HealthPoller struct {
-	src      healthSource
-	interval time.Duration
-	mu       sync.RWMutex
-	cache    map[string]ServerHealth // keyed Name+"/"+Scope
+	src          healthSource
+	interval     time.Duration
+	probeTimeout time.Duration
+	mu           sync.RWMutex
+	cache        map[string]ServerHealth // keyed Name+"/"+Scope
 }
 
 // NewHealthPoller builds a poller over src.
@@ -42,7 +56,10 @@ func NewHealthPoller(src healthSource, interval time.Duration) *HealthPoller {
 	if interval <= 0 {
 		interval = DefaultHealthInterval
 	}
-	return &HealthPoller{src: src, interval: interval, cache: make(map[string]ServerHealth)}
+	return &HealthPoller{
+		src: src, interval: interval, probeTimeout: defaultProbeTimeout,
+		cache: make(map[string]ServerHealth),
+	}
 }
 
 // Run probes immediately, then every interval, until ctx is cancelled.
@@ -61,25 +78,52 @@ func (p *HealthPoller) Run(ctx context.Context) {
 }
 
 // probeAll probes every configured server once and replaces its cache entry.
+// Probes run concurrently (bounded by maxConcurrentProbes) and each is capped
+// by probeTimeout, so a single hanging/unreachable server can neither stall
+// the rest of the cycle nor block indefinitely.
 func (p *HealthPoller) probeAll(ctx context.Context) {
-	for _, s := range p.src.Servers() {
-		h := ServerHealth{
-			Name: s.Name, Scope: s.Scope, Transport: s.Transport, URL: s.URL,
-			CheckedAt: time.Now(),
-		}
-		tools, err := p.src.Probe(ctx, s)
-		if err != nil {
-			h.OK = false
-			h.Err = err.Error()
-		} else {
-			h.OK = true
-			h.Tools = tools
-			h.ToolCount = len(tools)
-		}
-		p.mu.Lock()
-		p.cache[s.Name+"/"+s.Scope] = h
-		p.mu.Unlock()
+	start := time.Now()
+	servers := p.src.Servers()
+
+	var g errgroup.Group
+	g.SetLimit(maxConcurrentProbes)
+
+	for _, s := range servers {
+		g.Go(func() error {
+			p.probeOne(ctx, s)
+			return nil
+		})
 	}
+	// probeOne never returns an error (failures are recorded in the cache);
+	// Wait simply blocks until every probe (or its own timeout) completes.
+	_ = g.Wait()
+
+	slog.Debug("mcp: health poll cycle complete",
+		"servers", len(servers), "duration", time.Since(start))
+}
+
+// probeOne probes a single server with a bounded timeout and replaces its
+// cache entry with the result.
+func (p *HealthPoller) probeOne(ctx context.Context, s Server) {
+	probeCtx, cancel := context.WithTimeout(ctx, p.probeTimeout)
+	defer cancel()
+
+	h := ServerHealth{
+		Name: s.Name, Scope: s.Scope, Transport: s.Transport, URL: s.URL,
+		CheckedAt: time.Now(),
+	}
+	tools, err := p.src.Probe(probeCtx, s)
+	if err != nil {
+		h.OK = false
+		h.Err = err.Error()
+	} else {
+		h.OK = true
+		h.Tools = tools
+		h.ToolCount = len(tools)
+	}
+	p.mu.Lock()
+	p.cache[s.Name+"/"+s.Scope] = h
+	p.mu.Unlock()
 }
 
 // StatusFor returns cached health for every configured server applicable to
