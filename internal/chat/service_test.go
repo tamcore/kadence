@@ -1490,6 +1490,82 @@ func TestStreamTruncatesTitleMultibyte(t *testing.T) {
 	}
 }
 
+// TestStreamBoundsHistoryToContextBudget verifies Stream trims the loaded
+// conversation history to the configured ContextBudgetTokens before sending
+// it to the provider: the first user message is always present, an
+// oldest-middle turn is dropped, and the newest turn (plus the live user
+// text) still reaches the provider.
+func TestStreamBoundsHistoryToContextBudget(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	msgs := &fakeMsgs{}
+	// Seed 3 turns (~500 chars each side => ~250 tokens/turn, dwarfing the
+	// fixed system-prompt/live-user-text overhead) directly into the fake
+	// store, bypassing Stream's own Add, so ListByConversation returns them
+	// as prior history.
+	for i := range 3 {
+		msgs.added = append(msgs.added,
+			model.Message{Role: model.MsgRoleUser, Content: strings.Repeat("u", 500) + strconv.Itoa(i)},
+			model.Message{Role: model.MsgRoleAssistant, Content: strings.Repeat("a", 500) + strconv.Itoa(i)},
+		)
+	}
+	firstUserContent := msgs.added[0].Content
+	newestTurnUserContent := msgs.added[4].Content
+
+	captP := &capturingProvider{reply: "ok"}
+	// Budget fits the system prompt + live user text + the first turn
+	// (~334 tokens) + the newest turn (250 more, ~584 total), but not also
+	// the middle turn (would need ~834), so the middle turn must be dropped.
+	svc := chat.NewService(captP,
+		chat.ServiceConfig{Model: "m", MaxTokens: 32, SystemPrompt: "sp", ContextBudgetTokens: 600},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", testConvID, "new question", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	contents := make([]string, 0, len(captP.gotMessages))
+	for _, m := range captP.gotMessages {
+		contents = append(contents, m.Content)
+	}
+	full := strings.Join(contents, "\n")
+	if !strings.Contains(full, firstUserContent) {
+		t.Fatalf("expected first user message retained, got messages: %+v", captP.gotMessages)
+	}
+	if !strings.Contains(full, newestTurnUserContent) {
+		t.Fatalf("expected newest turn retained, got messages: %+v", captP.gotMessages)
+	}
+	if !strings.Contains(full, "new question") {
+		t.Fatalf("expected live user text present, got messages: %+v", captP.gotMessages)
+	}
+	// 6 history messages total (3 turns); with the tiny budget one middle
+	// turn (2 messages) must have been dropped, so fewer than all 6 (+
+	// system + live user) should reach the provider.
+	if len(captP.gotMessages) >= 2+6+1 {
+		t.Fatalf("got %d provider messages, want fewer than the full (untrimmed) history+system+live count", len(captP.gotMessages))
+	}
+}
+
+// TestStreamSmallHistoryUntouchedByBudget verifies a small conversation
+// (well within the default budget) is passed through unchanged.
+func TestStreamSmallHistoryUntouchedByBudget(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	msgs := &fakeMsgs{added: []model.Message{
+		{Role: model.MsgRoleUser, Content: "hi"},
+		{Role: model.MsgRoleAssistant, Content: "hiya"},
+	}}
+	captP := &capturingProvider{reply: "ok"}
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs})
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", testConvID, "how are you", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	// system + 2 history messages + live user = 4.
+	if len(captP.gotMessages) != 4 {
+		t.Fatalf("len(gotMessages) = %d, want 4 (untouched small history)", len(captP.gotMessages))
+	}
+}
+
 func TestStreamKeepsTitleUnchangedWhenShort(t *testing.T) {
 	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}

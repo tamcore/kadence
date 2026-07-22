@@ -107,6 +107,36 @@ func TestLLMDefaults(t *testing.T) {
 	}
 }
 
+func TestLLMContextBudgetDefault(t *testing.T) {
+	t.Setenv("KADENCE_LLM_CONTEXT_BUDGET", "")
+	if cfg := Load(); cfg.LLMContextBudgetTokens != 32000 {
+		t.Fatalf("LLMContextBudgetTokens default = %d, want 32000", cfg.LLMContextBudgetTokens)
+	}
+}
+
+func TestLLMContextBudgetOverride(t *testing.T) {
+	t.Setenv("KADENCE_LLM_CONTEXT_BUDGET", "8000")
+	if cfg := Load(); cfg.LLMContextBudgetTokens != 8000 {
+		t.Fatalf("LLMContextBudgetTokens = %d, want 8000", cfg.LLMContextBudgetTokens)
+	}
+}
+
+func TestValidateRejectsNonPositiveContextBudget(t *testing.T) {
+	for _, v := range []int{0, -1} {
+		cfg := Config{DatabaseURL: testDatabaseURL, LLMContextBudgetTokens: v}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Validate() = nil for LLMContextBudgetTokens=%d, want error", v)
+		}
+	}
+}
+
+func TestValidateAllowsPositiveContextBudget(t *testing.T) {
+	cfg := Config{DatabaseURL: testDatabaseURL, LLMContextBudgetTokens: 32000}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for positive LLMContextBudgetTokens", err)
+	}
+}
+
 func TestGuardrailDefaults(t *testing.T) {
 	t.Setenv("KADENCE_GUARDRAIL_ENABLED", "")
 	cfg := Load()
@@ -431,7 +461,7 @@ func TestValidateRejectsNegativeRateLimits(t *testing.T) {
 }
 
 func TestValidateAllowsZeroRateLimits(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, RateLimitGlobal: 0, RateLimitAuth: 0}
+	cfg := Config{DatabaseURL: testDatabaseURL, RateLimitGlobal: 0, RateLimitAuth: 0, LLMContextBudgetTokens: 32000}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (0 disables rate limiting)", err)
 	}
@@ -465,7 +495,7 @@ func TestValidateRejectsNegativeEmbedDimensions(t *testing.T) {
 }
 
 func TestValidateAllowsZeroEmbedDimensions(t *testing.T) {
-	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: 0}
+	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: 0, LLMContextBudgetTokens: 32000}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (0 disables dimension pinning)", err)
 	}
