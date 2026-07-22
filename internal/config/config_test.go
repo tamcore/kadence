@@ -690,6 +690,34 @@ func TestValidateAllowsZeroEmbedDimensions(t *testing.T) {
 	}
 }
 
+func TestUserMCPMaxServersDefault(t *testing.T) {
+	t.Setenv("KADENCE_USER_MCP_MAX_SERVERS", "")
+
+	cfg := Load()
+
+	if cfg.UserMCPMaxServers != 10 {
+		t.Fatalf("UserMCPMaxServers = %d, want 10", cfg.UserMCPMaxServers)
+	}
+}
+
+func TestUserMCPMaxServersOverride(t *testing.T) {
+	t.Setenv("KADENCE_USER_MCP_MAX_SERVERS", "3")
+
+	cfg := Load()
+
+	if cfg.UserMCPMaxServers != 3 {
+		t.Fatalf("UserMCPMaxServers = %d, want 3", cfg.UserMCPMaxServers)
+	}
+}
+
+func TestValidateRejectsNegativeUserMCPMaxServers(t *testing.T) {
+	cfg := validConfig()
+	cfg.UserMCPMaxServers = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_USER_MCP_MAX_SERVERS") {
+		t.Fatalf("Validate() = %v, want error mentioning KADENCE_USER_MCP_MAX_SERVERS", err)
+	}
+}
+
 func TestSlogLevelMapping(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug": slog.LevelDebug,

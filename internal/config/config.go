@@ -121,6 +121,9 @@ type Config struct {
 	// comma-split, trimmed) that user-defined MCP server URLs must match.
 	EncryptionKey       []byte
 	UserMCPAllowedHosts []string
+	// UserMCPMaxServers caps how many user-defined MCP servers a single owner
+	// may register (KADENCE_USER_MCP_MAX_SERVERS), enforced at Create time.
+	UserMCPMaxServers int
 	// encryptionKeyErr carries a non-nil error from Load() when
 	// KADENCE_ENCRYPTION_KEY was set but failed to decode (bad base64, or
 	// the wrong byte length), so Validate() can fail fast on a typo instead
@@ -218,6 +221,7 @@ func Load() Config {
 	cfg.EncryptionKey = key
 	cfg.encryptionKeyErr = keyErr
 	cfg.UserMCPAllowedHosts = splitCSV(os.Getenv("KADENCE_USER_MCP_ALLOWED_HOSTS"))
+	cfg.UserMCPMaxServers = envIntOr("KADENCE_USER_MCP_MAX_SERVERS", 10)
 
 	cfg.RateLimitGlobal = envIntOr("KADENCE_RATE_LIMIT_GLOBAL", 300)
 	cfg.RateLimitAuth = envIntOr("KADENCE_RATE_LIMIT_AUTH", 10)
@@ -318,6 +322,9 @@ func (c Config) Validate() error {
 	}
 	if c.EmbedDimensions < 0 {
 		return errors.New("KADENCE_EMBED_DIMENSIONS must be a non-negative integer")
+	}
+	if c.UserMCPMaxServers < 0 {
+		return errors.New("KADENCE_USER_MCP_MAX_SERVERS must be a non-negative integer")
 	}
 	if c.LLMContextBudgetTokens <= 0 {
 		return errors.New("KADENCE_LLM_CONTEXT_BUDGET must be a positive integer")
