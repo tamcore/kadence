@@ -90,7 +90,11 @@ func (p *OpenAICompat) StreamChatWithTools(ctx context.Context, req ChatRequest,
 		})
 	}
 
-	return StreamResult{Content: msg.Content, ToolCalls: toolCalls}, nil
+	return StreamResult{
+		Content:      msg.Content,
+		ToolCalls:    toolCalls,
+		FinishReason: acc.Choices[0].FinishReason,
+	}, nil
 }
 
 // buildMessages converts provider messages into openai-go message params,
