@@ -7,19 +7,29 @@
 # passes.
 #
 # Known findings as of 2026-07-22 (`helm template` against default values,
-# values-dev.yaml.example, and the example MCP server combo — see
+# values-dev.yaml.example, and an mcp+markitdown+cloakbrowser combo — see
 # chart.yaml's lint-and-template job for the exact commands):
 #   - pdb-unhealthy-pod-eviction-policy: PDB doesn't set unhealthyPodEvictionPolicy
 #   - no-anti-affinity: app Deployment (2 replicas) has no inter-pod anti-affinity
-#   - no-read-only-root-fs / run-as-non-root / unset-cpu-requirements /
-#     unset-memory-requirements: postgres StatefulSet and MCP sidecar
-#     Deployments (mcp + nginx containers) don't yet set a hardened
-#     securityContext or resource requests/limits
-#   - latest-tag: the example MCP server manifest in values-dev.yaml.example
-#     intentionally uses "example/garmin-mcp:latest" as a placeholder
+#   - no-read-only-root-fs: the mcp/markitdown containers run 3rd-party images
+#     that write to their own filesystem (garmin token cache, markitdown temp
+#     files); left read-write on purpose (the nginx sidecar in the same pod
+#     IS read-only-root-fs)
+#   - unset-memory-requirements: mcp/markitdown containers set a default
+#     memory *request* (mcp.resources / markitdown.resources) but no limit —
+#     3rd-party images with unpredictable memory ceilings (Chromium etc.);
+#     the nginx sidecar DOES set a limit (mcp.nginx.resources /
+#     markitdown.nginx.resources)
+#   - latest-tag: the example/test MCP server manifests intentionally use
+#     "example/garmin-mcp:latest" (values-dev.yaml.example placeholder) and
+#     the public "mcp/markitdown:latest" default (pin a digest in prod)
 #
-# The mcp/postgres securityContext + resource hardening is tracked for
-# Wave 2; flip this job from advisory (continue-on-error) to blocking once
-# those land and the findings above are gone.
+# run-as-non-root and unset-cpu-requirements on the mcp/nginx containers are
+# FIXED (Wave 2, issue 15): both containers now get a pod-level
+# securityContext (runAsNonRoot/runAsUser/runAsGroup/fsGroup 65532 +
+# seccompProfile RuntimeDefault, override via per-server `securityContext`)
+# and default resource requests (mcp.resources, mcp.nginx.resources,
+# markitdown.nginx.resources). Verified non-root (2026-07-22, remote docker
+# `--user 65532:65532`) for garmin-mcp, cloakbrowser-mcp, and markitdown.
 checks:
   doNotAutoAddDefaults: false
