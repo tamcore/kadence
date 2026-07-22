@@ -80,6 +80,16 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_RAG_TOP_K` | `5` | Number of chunks retrieved per query. |
 | `KADENCE_EMBED_DIMENSIONS` | `1024` | Pins the embedding vector length so it fits a fixed-width `vector(1024)` column with an HNSW index. Sent as the OpenAI-compat `dimensions` request field; if the provider ignores it, the client truncates to N dims and L2-renormalizes (valid for Matryoshka/MRL-trained models). `0` only stops the client from sending the `dimensions` field and disables client-side truncation; after migration 00011 the DB column stays `vector(1024)`, so 0 must not be used unless the provider natively returns 1024-dim vectors — otherwise inserts/searches fail with a Postgres "different vector dimensions" error. Only changing KADENCE_EMBED_MODEL (not dimensions) triggers a background re-index. |
 
+> **Operator warning (migration 00011):** upgrading to this release runs a one-time migration
+> that pins `chunks.embedding` to `vector(1024)`. Any pre-existing row wider than 1024 dims is
+> converted in place (truncated to the first 1024 dims and L2-renormalized — the same MRL
+> truncation the client applies to its own output); this is a lossy but content-preserving
+> conversion. Any pre-existing row narrower than 1024 dims is **deleted** — it cannot be widened
+> without re-embedding, and that content's searchability is lost permanently (re-ingest the
+> source document/message to restore it). This only affects rows already narrower than 1024 dims
+> before the upgrade, which requires `KADENCE_EMBED_DIMENSIONS` to have previously been set below
+> 1024.
+
 ## Ingestion
 
 | Variable | Default | Purpose |
