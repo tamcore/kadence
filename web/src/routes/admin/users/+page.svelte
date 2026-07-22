@@ -23,8 +23,8 @@
 		error = '';
 		try {
 			users = await api.listUsers();
-		} catch {
-			error = 'Could not load users';
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not load users';
 		} finally {
 			loading = false;
 		}
@@ -54,8 +54,8 @@
 		try {
 			await api.deleteUser(id);
 			await load();
-		} catch {
-			error = 'Could not delete user';
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not delete user';
 		}
 	}
 

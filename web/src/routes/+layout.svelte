@@ -22,6 +22,8 @@
 	let mcp = $state({ unhealthy: 0, total: 0 });
 	let reindexTimer: ReturnType<typeof setInterval> | undefined;
 	let mcpTimer: ReturnType<typeof setInterval> | undefined;
+	let warnedReindex = false;
+	let warnedMcp = false;
 
 	function isPublic(path: string): boolean {
 		return path === '/login';
@@ -50,8 +52,13 @@
 			const overview = await getOverview();
 			reindex = overview.reindex;
 			if (reindex.stale === 0) stopReindexPoll();
-		} catch {
-			// leave the strip hidden on failure
+		} catch (err) {
+			// Leave the strip hidden on failure (it's a non-critical background
+			// poll), but warn once so a silently-broken poll isn't invisible.
+			if (!warnedReindex) {
+				warnedReindex = true;
+				console.warn('reindex status poll failed', err);
+			}
 		}
 	}
 
@@ -62,8 +69,13 @@
 				unhealthy: servers.filter((s) => s.state === 'unhealthy').length,
 				total: servers.length
 			};
-		} catch {
-			// leave the strip hidden on failure
+		} catch (err) {
+			// Leave the strip hidden on failure (it's a non-critical background
+			// poll), but warn once so a silently-broken poll isn't invisible.
+			if (!warnedMcp) {
+				warnedMcp = true;
+				console.warn('mcp status poll failed', err);
+			}
 		}
 	}
 
