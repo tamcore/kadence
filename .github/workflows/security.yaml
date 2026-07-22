@@ -101,3 +101,73 @@ jobs:
           --metrics=off
           --error
           --exclude-rule go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        # BLOCKING. Runs the gitleaks CLI directly via its pinned Docker image
+        # rather than the official gitleaks-action, which requires a license
+        # key (GITLEAKS_LICENSE) for use on organization-owned repositories.
+        # The CLI itself has no license/token requirement. .gitleaks.toml
+        # allowlists a handful of known-fake test fixtures (see that file for
+        # details) — it never disables a rule wholesale.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            detect --source=. --config=.gitleaks.toml --redact -v
+
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build image for scanning
+        # Scans the Dockerfile.dev image (the same one the e2e-kind smoke test
+        # in e2e.yaml already builds), not the goreleaser-built prod image:
+        # ./Dockerfile expects pre-built per-platform binaries from goreleaser
+        # and isn't standalone-buildable in a plain CI job. Both share the
+        # same distroless-nonroot runtime base and entrypoint.
+        run: docker build -f Dockerfile.dev -t kadence:scan .
+      - name: Run trivy (advisory)
+        # ADVISORY: exit-code 0 + continue-on-error mean this never fails the
+        # workflow, even on findings. Flip to blocking (drop both) once
+        # .trivyignore has stayed clean in CI for a while.
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: kadence:scan
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          trivyignores: .trivyignore
+          output: trivy-report.txt
+      - name: Add trivy report to job summary
+        if: always()
+        run: |
+          {
+            echo "### Trivy image scan (advisory, HIGH/CRITICAL)"
+            echo '```'
+            cat trivy-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: npm audit (advisory)
+        # ADVISORY: 0 known high/critical runtime vulns as of 2026-07-22.
+        # Flip to blocking (remove continue-on-error) once that's held for a
+        # few CI runs.
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high

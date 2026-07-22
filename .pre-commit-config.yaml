@@ -8,6 +8,14 @@ repos:
         exclude: ^charts/.*/templates/
       - id: check-added-large-files
 
+  # Same gitleaks version + .gitleaks.toml allowlist as the CI gitleaks job
+  # (.github/workflows/security.yaml) — catches secrets before they're
+  # committed, rather than only at push/PR time.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
   - repo: local
     hooks:
       - id: go-test
