@@ -937,6 +937,12 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 	if sink.events[len(sink.events)-1].Type != chat.EventDone {
 		t.Fatalf("expected stream to finish with done event even after exhausting iterations, got: %+v", sink.events[len(sink.events)-1])
 	}
+	// SnapshotFor resolves the applicable MCP servers (env + per-user DB
+	// query) once per turn; it must not be re-invoked on every iteration of
+	// the tool loop.
+	if mcp.snapshotCalls != 1 {
+		t.Fatalf("SnapshotFor called %d times across the tool loop, want exactly 1", mcp.snapshotCalls)
+	}
 }
 
 // countingMCP records how many times Call is invoked and returns canned

@@ -223,10 +223,27 @@ func (h *MCP) Update(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if err := mcp.ValidateServerName(in.Name); err != nil {
-		RespondError(w, http.StatusBadRequest, err.Error())
+	// Name-format validation was introduced after servers could already be
+	// created with looser names (e.g. mixed case). Grandfather those in:
+	// only enforce the current format when the submitted name actually
+	// changes the stored one, so the frontend's "resubmit unchanged fields"
+	// update flow doesn't 400 a legacy server that isn't being renamed.
+	existing, err := h.existingForOwner(r.Context(), u.ID, id)
+	if err != nil {
+		slog.Error("list user mcp servers", "err", err)
+		RespondError(w, http.StatusInternalServerError, "could not update server")
 		return
 	}
+	if existing == nil || existing.Name != in.Name {
+		if err := mcp.ValidateServerName(in.Name); err != nil {
+			RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	// Transport values have been DB-constrained to the fixed set since the
+	// user_mcp_servers table was introduced (CHECK constraint), so no
+	// pre-validation server can hold a value outside it — validation stays
+	// unconditional here.
 	if err := mcp.ValidateTransport(in.Transport); err != nil {
 		RespondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -280,6 +297,24 @@ func (h *MCP) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// existingForOwner returns the owner's currently-stored record for id, or nil
+// if no such record exists for this owner (e.g. it was deleted, or belongs to
+// someone else — the subsequent Update call will surface that as
+// ErrNotFound). Used by Update to grandfather a legacy (pre-validation) name
+// when it isn't being changed.
+func (h *MCP) existingForOwner(ctx context.Context, ownerUserID, id int64) (*store.UserMCPRecord, error) {
+	recs, err := h.store.ListForOwner(ctx, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range recs {
+		if rec.ID == id {
+			return &rec, nil
+		}
+	}
+	return nil, nil
 }
 
 func scopeLabel(scope string) string {
