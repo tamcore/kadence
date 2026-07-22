@@ -20,4 +20,29 @@ describe('renderMarkdown', () => {
 		expect(html).toContain('table-scroll');
 		expect(html).toContain('<table');
 	});
+
+	it('forces target="_blank" and rel="noopener noreferrer" on anchors', () => {
+		const html = renderMarkdown('[legit](https://example.com)');
+		expect(html).toContain('target="_blank"');
+		expect(html).toContain('rel="noopener noreferrer"');
+	});
+
+	it('strips a javascript: href while still hardening the anchor', () => {
+		const html = renderMarkdown('[bad](javascript:alert(1))');
+		expect(html.toLowerCase()).not.toContain('javascript:');
+	});
+
+	it('strips a data: href while still hardening the anchor', () => {
+		const html = renderMarkdown(
+			'[bad](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'
+		);
+		expect(html.toLowerCase()).not.toContain('data:text/html');
+	});
+
+	it('forces target/rel on a raw <a> payload embedded in the message', () => {
+		const html = renderMarkdown('<a href="https://example.com" onclick="alert(1)">x</a>');
+		expect(html).not.toContain('onclick');
+		expect(html).toContain('target="_blank"');
+		expect(html).toContain('rel="noopener noreferrer"');
+	});
 });

@@ -37,12 +37,12 @@ describe('MarkdownMessage', () => {
 		expect(link?.getAttribute('onclick')).toBeNull();
 	});
 
-	it('keeps a safe https href but does not add target/rel attributes', () => {
+	it('keeps a safe https href and forces target/rel hardening', () => {
 		const { container } = render(MarkdownMessage, { content: '[legit](https://example.com)' });
 		const link = container.querySelector('a');
 		expect(link?.getAttribute('href')).toBe('https://example.com');
-		expect(link?.getAttribute('target')).toBeNull();
-		expect(link?.getAttribute('rel')).toBeNull();
+		expect(link?.getAttribute('target')).toBe('_blank');
+		expect(link?.getAttribute('rel')).toBe('noopener noreferrer');
 	});
 
 	it('strips a script tag embedded in the message', () => {

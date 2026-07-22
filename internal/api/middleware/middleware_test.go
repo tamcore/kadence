@@ -6,24 +6,9 @@ import (
 	"testing"
 )
 
-func TestSecurityHeadersSetsHeaders(t *testing.T) {
-	h := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
-	}
-	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
-		t.Fatalf("X-Frame-Options = %q, want DENY", got)
-	}
-	if got := rec.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
-		t.Fatalf("Referrer-Policy = %q, want strict-origin-when-cross-origin", got)
-	}
-}
+// TestSecurityHeadersSetsHeaders was superseded by securityheaders_test.go
+// (SecurityHeaders is now a factory: SecurityHeaders(isProd, scriptHashes)),
+// which covers the baseline headers plus the new CSP/HSTS behavior.
 
 func TestAccessLogPassesThroughAndPreservesStatus(t *testing.T) {
 	h := AccessLog(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
