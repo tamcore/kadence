@@ -1,9 +1,11 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const updateProfileMock = vi.fn();
+const changePasswordMock = vi.fn();
 vi.mock('$lib/api/profile', () => ({
-	updateProfile: vi.fn(),
-	changePassword: vi.fn()
+	updateProfile: (...a: unknown[]) => updateProfileMock(...a),
+	changePassword: (...a: unknown[]) => changePasswordMock(...a)
 }));
 
 const listSessionsMock = vi.fn().mockResolvedValue([]);
@@ -103,5 +105,139 @@ describe('/profile', () => {
 		const dialog2 = await screen.findByRole('dialog', { name: 'Sign out other devices' });
 		await fireEvent.click(within(dialog2).getByRole('button', { name: 'Sign out others' }));
 		await waitFor(() => expect(revokeOtherSessionsMock).toHaveBeenCalled());
+	});
+
+	it('lists sessions and revokes a single non-current session', async () => {
+		listSessionsMock
+			.mockResolvedValueOnce([
+				{
+					publicId: 'pub-1',
+					device: 'Chrome on macOS',
+					ip: '203.0.113.10',
+					createdAt: '2026-07-01T12:00:00Z',
+					lastSeenAt: '2026-07-21T09:00:00Z',
+					current: true
+				},
+				{
+					publicId: 'pub-2',
+					device: 'Safari on iOS',
+					ip: '203.0.113.20',
+					createdAt: '2026-06-15T08:00:00Z',
+					lastSeenAt: '2026-07-20T18:30:00Z',
+					current: false
+				}
+			])
+			.mockResolvedValueOnce([
+				{
+					publicId: 'pub-1',
+					device: 'Chrome on macOS',
+					ip: '203.0.113.10',
+					createdAt: '2026-07-01T12:00:00Z',
+					lastSeenAt: '2026-07-21T09:00:00Z',
+					current: true
+				}
+			]);
+		revokeSessionMock.mockResolvedValue(undefined);
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('Safari on iOS')).toBeInTheDocument());
+		expect(screen.getByText('This device')).toBeInTheDocument();
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+
+		await waitFor(() => expect(revokeSessionMock).toHaveBeenCalledWith('pub-2'));
+		await waitFor(() => expect(screen.queryByText('Safari on iOS')).not.toBeInTheDocument());
+	});
+
+	it('surfaces an error message when revoking a session fails', async () => {
+		listSessionsMock.mockResolvedValue([
+			{
+				publicId: 'pub-2',
+				device: 'Safari on iOS',
+				ip: '203.0.113.20',
+				createdAt: '2026-06-15T08:00:00Z',
+				lastSeenAt: '2026-07-20T18:30:00Z',
+				current: false
+			}
+		]);
+		revokeSessionMock.mockRejectedValueOnce(new Error('revoke failed on server'));
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('Safari on iOS')).toBeInTheDocument());
+		await fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+
+		expect(await screen.findByRole('alert')).toHaveTextContent('revoke failed on server');
+	});
+
+	it('changes the password, clears the form, and shows a success message', async () => {
+		listSessionsMock.mockResolvedValue([]);
+		listPasskeysMock.mockResolvedValue([]);
+		changePasswordMock.mockResolvedValueOnce(undefined);
+		render(Page);
+
+		const currentPw = screen.getByLabelText('Current password') as HTMLInputElement;
+		const newPw = screen.getByLabelText('New password') as HTMLInputElement;
+		await fireEvent.input(currentPw, { target: { value: 'oldpass1' } });
+		await fireEvent.input(newPw, { target: { value: 'newpass1' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+
+		await waitFor(() =>
+			expect(changePasswordMock).toHaveBeenCalledWith({
+				currentPassword: 'oldpass1',
+				newPassword: 'newpass1',
+				logoutOthers: true
+			})
+		);
+		await waitFor(() => expect(screen.getByText('Password changed')).toBeInTheDocument());
+		expect(currentPw.value).toBe('');
+		expect(newPw.value).toBe('');
+	});
+
+	it('surfaces an error message when the password change fails', async () => {
+		listSessionsMock.mockResolvedValue([]);
+		listPasskeysMock.mockResolvedValue([]);
+		changePasswordMock.mockRejectedValueOnce(new Error('incorrect current password'));
+		render(Page);
+
+		await fireEvent.input(screen.getByLabelText('Current password'), { target: { value: 'wrong' } });
+		await fireEvent.input(screen.getByLabelText('New password'), { target: { value: 'newpass1' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+
+		expect(await screen.findByRole('alert')).toHaveTextContent('incorrect current password');
+	});
+
+	it('saves preferences (unit system) via the shared profile update path', async () => {
+		listSessionsMock.mockResolvedValue([]);
+		listPasskeysMock.mockResolvedValue([]);
+		updateProfileMock.mockResolvedValueOnce({
+			id: 1,
+			username: 'u',
+			displayName: 'u',
+			email: 'u@example.com',
+			role: 'user',
+			unitSystem: 'imperial'
+		});
+		render(Page);
+
+		await fireEvent.click(screen.getByRole('radio', { name: 'Imperial' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+
+		await waitFor(() =>
+			expect(updateProfileMock).toHaveBeenCalledWith(
+				expect.objectContaining({ unitSystem: 'imperial' })
+			)
+		);
+		await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
+	});
+
+	it('surfaces an error message when saving preferences fails', async () => {
+		listSessionsMock.mockResolvedValue([]);
+		listPasskeysMock.mockResolvedValue([]);
+		updateProfileMock.mockRejectedValueOnce(new Error('email already in use'));
+		render(Page);
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+
+		expect(await screen.findByRole('alert')).toHaveTextContent('email already in use');
 	});
 });
