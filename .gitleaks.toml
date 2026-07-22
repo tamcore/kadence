@@ -15,3 +15,8 @@ used outside test code or the disposable e2e-kind cluster.'''
 regexes = [
   '''0123456789abcdef0123456789abcdef''',
 ]
+paths = [
+  '''internal/config/config_test\.go''',
+  '''internal/api/router_integration_test\.go''',
+  '''charts/kadence/values-ci\.yaml''',
+]
