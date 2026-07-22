@@ -32,6 +32,13 @@ app_addr="127.0.0.1:8080"
 # origin checks that a plain-http localhost browser session cannot satisfy.
 admin_password="${E2E_ADMIN_PASSWORD:?E2E_ADMIN_PASSWORD is required (use a clearly-test value, e.g. e2e-admin-pw)}"
 
+# Test-only encryption key + host allowlist so e2e/mcp.spec.ts can exercise
+# the user-defined MCP server CRUD flow (KADENCE_USER_MCP_ALLOWED_HOSTS gates
+# it off by default). The allowlisted host never needs to actually
+# resolve/respond — creation only validates the URL, and the health poller
+# is allowed to report the server as unhealthy/checking.
+user_mcp_key="$(openssl rand -base64 32)"
+
 STUB_ADDR=":9099" "$stub_bin" &
 stub_pid=$!
 
@@ -46,6 +53,8 @@ KADENCE_ENV=dev \
 	KADENCE_ADMIN_USERNAME="admin" \
 	KADENCE_ADMIN_EMAIL="admin@example.com" \
 	KADENCE_ADMIN_PASSWORD="$admin_password" \
+	KADENCE_ENCRYPTION_KEY="$user_mcp_key" \
+	KADENCE_USER_MCP_ALLOWED_HOSTS="*.e2e.test" \
 	"$app_bin" &
 app_pid=$!
 
