@@ -69,3 +69,8 @@ externalDatabase:
 # markitdown:
 #   enabled: true
 #   image: mcp/markitdown:latest
+#   basicAuth:
+#     # Recommended under `helm template | kubectl apply` (this dev deploy path):
+#     # a fixed password keeps the app and markitdown sidecar in sync across
+#     # redeploys instead of regenerating (and briefly 401'ing) each time.
+#     password: "CHANGEME"

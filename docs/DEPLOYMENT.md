@@ -77,6 +77,10 @@ Set the `markitdown` block to deploy a `markitdown-mcp` sidecar (its own nginx
 basic-auth + NetworkPolicy + optional TLS) for rich PDF/image extraction. Without it,
 Kadence falls back to the pure-Go PDF text path.
 
+Like `mcp.basicAuth`, set `markitdown.basicAuth.password` to a stable value under
+`helm template | kubectl apply` — otherwise the password auto-generates on every
+deploy and the app and markitdown sidecar disagree on credentials until pods restart.
+
 ## Ingress & TLS
 
 The chart renders an nginx `Ingress` with cert-manager annotations (e.g.

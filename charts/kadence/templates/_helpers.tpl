@@ -107,11 +107,16 @@ Context: the root context (.).
 {{- end -}}
 
 {{/*
-Sticky markitdown basicAuth Secret name: <release>-markitdown-auth.
+Sticky markitdown basicAuth Secret name: the operator-supplied existingSecret
+when set, else <release>-markitdown-auth.
 Context: the root context (.).
 */}}
 {{- define "kadence.markitdown.authSecretName" -}}
+{{- if and .Values.markitdown.basicAuth .Values.markitdown.basicAuth.existingSecret -}}
+{{- .Values.markitdown.basicAuth.existingSecret -}}
+{{- else -}}
 {{- printf "%s-markitdown-auth" (include "kadence.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
