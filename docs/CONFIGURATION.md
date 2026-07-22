@@ -28,6 +28,23 @@ Values shown are the built-in defaults; `—` means unset/empty.
 | `KADENCE_ADMIN_EMAIL` | — | First-run admin email. |
 | `KADENCE_ADMIN_PASSWORD` | — | First-run admin password (bcrypt-hashed at insert). |
 
+## Rate limiting
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_RATE_LIMIT_GLOBAL` | `300` | Per-IP requests/minute across all `/api` routes (`/api/healthz` and the static frontend are exempt). `0` disables. |
+| `KADENCE_RATE_LIMIT_AUTH` | `10` | Per-IP requests/minute on auth-sensitive endpoints: `POST /api/session`, `POST /api/webauthn/login/begin`, `POST /api/webauthn/login/finish`, `POST /api/credentials/{requestId}`. `0` disables. |
+
+Both limiters key on the request's resolved client IP (in-memory sliding window,
+via `go-chi/httprate`), which chi's `RealIP` middleware derives from
+`X-Forwarded-For`/`X-Real-IP`. **This assumes a trusted reverse-proxy chain**
+(e.g. ingress-nginx) that sets those headers from the real client address and
+strips any client-supplied values before they reach Kadence. If Kadence is
+ever exposed directly to untrusted clients, it must not forward
+client-supplied `X-Forwarded-For`/`X-Real-IP` — otherwise a client can spoof
+its rate-limit bucket. Full trusted-proxy allowlisting (verifying the
+immediate peer is actually the proxy) is not yet implemented.
+
 ## LLM provider
 
 | Variable | Default | Purpose |
@@ -119,6 +136,7 @@ In a Helm deployment these are rendered for you from `mcp.servers[]` — see
 2. `KADENCE_ENV` is prod/production but `KADENCE_CSRF_SECRET` is empty.
 3. `KADENCE_USER_MCP_ALLOWED_HOSTS` is set but `KADENCE_ENCRYPTION_KEY` is not a valid
    32-byte key.
+4. `KADENCE_RATE_LIMIT_GLOBAL` or `KADENCE_RATE_LIMIT_AUTH` is negative.
 
 Passkeys additionally require `KADENCE_WEBAUTHN_RP_ID` **and** `KADENCE_TRUSTED_ORIGINS`
 **and** a valid 32-byte `KADENCE_ENCRYPTION_KEY`; if the RP ID is set without the

@@ -94,6 +94,12 @@ type Config struct {
 	// comma-split, trimmed) that user-defined MCP server URLs must match.
 	EncryptionKey       []byte
 	UserMCPAllowedHosts []string
+
+	// Rate limiting (per-IP, sliding window). 0 disables the respective limiter.
+	// RateLimitGlobal caps all /api requests; RateLimitAuth caps the
+	// auth-sensitive endpoints (login, passkey login, credential submission).
+	RateLimitGlobal int
+	RateLimitAuth   int
 }
 
 const (
@@ -162,6 +168,9 @@ func Load() Config {
 	cfg.EncryptionKey = decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
 	cfg.UserMCPAllowedHosts = splitCSV(os.Getenv("KADENCE_USER_MCP_ALLOWED_HOSTS"))
 
+	cfg.RateLimitGlobal = envIntOr("KADENCE_RATE_LIMIT_GLOBAL", 300)
+	cfg.RateLimitAuth = envIntOr("KADENCE_RATE_LIMIT_AUTH", 10)
+
 	return cfg
 }
 
@@ -212,6 +221,12 @@ func (c Config) Validate() error {
 	}
 	if c.IsProd() && len(c.UserMCPAllowedHosts) > 0 && len(c.EncryptionKey) != 32 {
 		return errors.New("KADENCE_ENCRYPTION_KEY must be a base64-encoded 32-byte key when KADENCE_USER_MCP_ALLOWED_HOSTS is set")
+	}
+	if c.RateLimitGlobal < 0 {
+		return errors.New("KADENCE_RATE_LIMIT_GLOBAL must be a non-negative integer")
+	}
+	if c.RateLimitAuth < 0 {
+		return errors.New("KADENCE_RATE_LIMIT_AUTH must be a non-negative integer")
 	}
 	return nil
 }
