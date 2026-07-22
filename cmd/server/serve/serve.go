@@ -77,6 +77,11 @@ func Run() error {
 	var waSvc *webauthn.Service
 	var waCipher *crypto.Cipher
 	if cfg.WebAuthnEnabled() {
+		// cfg.Validate() (called above) already fails fast on the same
+		// preconditions (TrustedOrigins set, valid 32-byte EncryptionKey) as
+		// a config-level error; the branches below only fire for a
+		// downstream construction failure Validate() can't anticipate (e.g.
+		// go-webauthn itself rejecting a malformed RPID).
 		s, wErr := webauthn.NewService(cfg)
 		if wErr != nil {
 			return fmt.Errorf(
