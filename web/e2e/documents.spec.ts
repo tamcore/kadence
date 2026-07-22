@@ -19,6 +19,8 @@ test('uploading a document shows it in the list, then deleting removes it', asyn
 	const row = page.getByRole('row', { name: /sample\.pdf/i });
 	await expect(row).toBeVisible();
 
+	// Delete requires confirmation via the ConfirmDialog.
 	await row.getByRole('button', { name: /delete/i }).click();
+	await page.getByRole('dialog', { name: 'Delete document' }).getByRole('button', { name: 'Delete' }).click();
 	await expect(row).toHaveCount(0);
 });
