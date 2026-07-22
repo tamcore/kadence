@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import Page from './+page.svelte';
 import * as mcpApi from '$lib/api/mcp';
 import type { McpServer } from '$lib/api/mcp';
@@ -79,7 +79,22 @@ describe('/mcp', () => {
 		expect(screen.queryByRole('button', { name: 'Add MCP server' })).toBeNull();
 	});
 
-	it('deletes an editable server and reloads the list', async () => {
+	it('asks for confirmation before deleting, and cancel keeps the server', async () => {
+		vi.spyOn(mcpApi, 'listMcp').mockResolvedValue({ servers: [ownServer], canAdd: true });
+		const deleteSpy = vi.spyOn(mcpApi, 'deleteMcp').mockResolvedValue(undefined);
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('my-server')).toBeInTheDocument());
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+		const dialog = await screen.findByRole('dialog', { name: 'Delete MCP server' });
+		expect(within(dialog).getByText(/my-server/)).toBeInTheDocument();
+
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+		expect(deleteSpy).not.toHaveBeenCalled();
+		expect(screen.getByText('my-server')).toBeInTheDocument();
+	});
+
+	it('deletes an editable server and reloads the list once confirmed', async () => {
 		const listSpy = vi
 			.spyOn(mcpApi, 'listMcp')
 			.mockResolvedValueOnce({ servers: [ownServer], canAdd: true })
@@ -89,6 +104,8 @@ describe('/mcp', () => {
 
 		await waitFor(() => expect(screen.getByText('my-server')).toBeInTheDocument());
 		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+		const dialog = await screen.findByRole('dialog', { name: 'Delete MCP server' });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
 		await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith(7));
 		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));

@@ -13,6 +13,8 @@
 	} from '$lib/api/webauthn';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let form = $state({
 		displayName: $currentUser?.displayName ?? '',
@@ -78,6 +80,13 @@
 		}
 	}
 
+	let confirmSignOutOthers = $state(false);
+
+	async function confirmSignOutOthersAction(): Promise<void> {
+		confirmSignOutOthers = false;
+		await signOutOthers();
+	}
+
 	const SECONDS_PER_MINUTE = 60;
 	const SECONDS_PER_HOUR = 3600;
 	const SECONDS_PER_DAY = 86400;
@@ -103,9 +112,7 @@
 		}
 	}
 
-	async function addPasskey(): Promise<void> {
-		const name = (prompt('Name this passkey', 'My device') ?? '').trim();
-		if (!name) return;
+	async function addPasskey(name: string): Promise<void> {
 		err = null;
 		msg = null;
 		try {
@@ -120,9 +127,7 @@
 		}
 	}
 
-	async function renamePk(publicId: string): Promise<void> {
-		const name = (prompt('New name') ?? '').trim();
-		if (!name) return;
+	async function renamePk(publicId: string, name: string): Promise<void> {
 		try {
 			await renamePasskey(publicId, name);
 			await loadPasskeys();
@@ -138,6 +143,46 @@
 		} catch (e) {
 			err = e instanceof Error ? e.message : 'Delete failed';
 		}
+	}
+
+	type PasskeyNameModal = { mode: 'add' } | { mode: 'rename'; publicId: string };
+	let passkeyNameModal = $state<PasskeyNameModal | null>(null);
+	let passkeyNameValue = $state('');
+
+	function openAddPasskeyModal(): void {
+		passkeyNameValue = 'My device';
+		passkeyNameModal = { mode: 'add' };
+	}
+
+	function openRenamePasskeyModal(p: Passkey): void {
+		passkeyNameValue = p.name;
+		passkeyNameModal = { mode: 'rename', publicId: p.publicId };
+	}
+
+	function closePasskeyNameModal(): void {
+		passkeyNameModal = null;
+	}
+
+	async function submitPasskeyName(e: SubmitEvent): Promise<void> {
+		e.preventDefault();
+		const name = passkeyNameValue.trim();
+		if (!name) return;
+		const modal = passkeyNameModal;
+		closePasskeyNameModal();
+		if (!modal) return;
+		if (modal.mode === 'add') {
+			await addPasskey(name);
+		} else {
+			await renamePk(modal.publicId, name);
+		}
+	}
+
+	let deletePasskeyTarget = $state<Passkey | null>(null);
+
+	async function confirmDeletePasskey(): Promise<void> {
+		const p = deletePasskeyTarget;
+		deletePasskeyTarget = null;
+		if (p) await deletePk(p.publicId);
 	}
 
 	onMount(() => {
@@ -206,7 +251,7 @@
 
 	<section class="sessions-section">
 		<h2>Active sessions</h2>
-		<Button variant="ghost" onclick={signOutOthers}>Sign out other devices</Button>
+		<Button variant="ghost" onclick={() => (confirmSignOutOthers = true)}>Sign out other devices</Button>
 		<ul class="sessions">
 			{#each sessions as s (s.publicId)}
 				<li>
@@ -231,7 +276,7 @@
 	{#if passkeysEnabled}
 		<section class="passkeys-section">
 			<h2>Passkeys</h2>
-			<Button variant="ghost" onclick={addPasskey}>Add a passkey</Button>
+			<Button variant="ghost" onclick={openAddPasskeyModal}>Add a passkey</Button>
 			<ul class="passkeys">
 				{#each passkeys as p (p.publicId)}
 					<li>
@@ -244,8 +289,8 @@
 							>
 						</div>
 						<div class="passkey-actions">
-							<Button variant="ghost" onclick={() => renamePk(p.publicId)}>Rename</Button>
-							<Button variant="ghost" onclick={() => deletePk(p.publicId)}>Delete</Button>
+							<Button variant="ghost" onclick={() => openRenamePasskeyModal(p)}>Rename</Button>
+							<Button variant="ghost" onclick={() => (deletePasskeyTarget = p)}>Delete</Button>
 						</div>
 					</li>
 				{/each}
@@ -256,6 +301,37 @@
 		</section>
 	{/if}
 </div>
+
+<Modal
+	open={passkeyNameModal !== null}
+	title={passkeyNameModal?.mode === 'rename' ? 'Rename passkey' : 'Name this passkey'}
+	onClose={closePasskeyNameModal}
+>
+	<form class="form" onsubmit={submitPasskeyName}>
+		<Input label="Name" name="passkeyName" required bind:value={passkeyNameValue} />
+		<div class="modal-actions">
+			<Button type="button" variant="ghost" onclick={closePasskeyNameModal}>Cancel</Button>
+			<Button type="submit" variant="primary">Save</Button>
+		</div>
+	</form>
+</Modal>
+
+<ConfirmDialog
+	open={deletePasskeyTarget !== null}
+	title="Delete passkey"
+	message={`Delete "${deletePasskeyTarget?.name}"? You won't be able to sign in with it anymore.`}
+	onConfirm={confirmDeletePasskey}
+	onCancel={() => (deletePasskeyTarget = null)}
+/>
+
+<ConfirmDialog
+	open={confirmSignOutOthers}
+	title="Sign out other devices"
+	message="This will end all sessions except this one."
+	confirmLabel="Sign out others"
+	onConfirm={confirmSignOutOthersAction}
+	onCancel={() => (confirmSignOutOthers = false)}
+/>
 
 <style>
 	.error {
@@ -276,6 +352,11 @@
 	}
 	.form {
 		display: grid;
+		gap: 8px;
+	}
+	.modal-actions {
+		display: flex;
+		justify-content: flex-end;
 		gap: 8px;
 	}
 	.units {

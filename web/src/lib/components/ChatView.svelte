@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { activeId, chatError, credentialRequest, messages, sendMessage, sending } from '$lib/stores/chat';
+	import {
+		activeId,
+		chatError,
+		credentialRequest,
+		messages,
+		sendMessage,
+		sending,
+		stopGeneration
+	} from '$lib/stores/chat';
 	import type { MessagePart } from '$lib/types';
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Composer from '$lib/components/Composer.svelte';
@@ -75,6 +83,9 @@
 						{:else}
 							<MarkdownMessage content={m.content} />
 						{/if}
+						{#if m.stopped}
+							<span class="stopped-marker">Stopped</span>
+						{/if}
 					{:else}
 						<p>{m.content}</p>
 					{/if}
@@ -87,6 +98,9 @@
 	<div class="composer-area">
 		{#if $credentialRequest}
 			<CredentialPrompt request={$credentialRequest} />
+		{/if}
+		{#if $sending}
+			<button class="stop-btn" type="button" onclick={stopGeneration}>Stop generating</button>
 		{/if}
 		<Composer disabled={$sending} onSubmit={(t) => submit(t)} />
 	</div>
@@ -124,6 +138,26 @@
 		border-radius: var(--radius); overflow-x: auto; white-space: pre-wrap; word-break: break-word;
 	}
 	.error { color: var(--danger); }
+	.stopped-marker {
+		align-self: flex-start;
+		font-size: 0.75rem;
+		color: var(--text-muted);
+		font-style: italic;
+	}
+	.stop-btn {
+		align-self: center;
+		max-width: 760px;
+		width: 100%;
+		box-sizing: border-box;
+		padding: 8px 14px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
+		font: inherit;
+	}
+	.stop-btn:hover { background: var(--bg); }
 	.composer-area {
 		flex: none;
 		border-top: 1px solid var(--border);

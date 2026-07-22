@@ -97,6 +97,20 @@ describe('Sidebar', () => {
 		expect(newChatMock).toHaveBeenCalled();
 	});
 
+	it('asks for confirmation before deleting, and cancel keeps the conversation', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+		]);
+		render(Sidebar, { props: {} });
+		await fireEvent.click(screen.getByRole('button', { name: /delete conversation/i }));
+		expect(await screen.findByRole('dialog', { name: 'Delete conversation' })).toBeInTheDocument();
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+		expect(removeConversationMock).not.toHaveBeenCalled();
+		expect(screen.getByText('First chat')).toBeInTheDocument();
+	});
+
 	it('navigates home and closes the drawer when deleting the active conversation', async () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		removeConversationMock.mockResolvedValueOnce(undefined);
@@ -109,6 +123,7 @@ describe('Sidebar', () => {
 		});
 		render(Sidebar, { props: {} });
 		await fireEvent.click(screen.getByRole('button', { name: /delete conversation/i }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
 		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
 		expect(gotoMock).toHaveBeenCalledWith('/');
@@ -129,6 +144,7 @@ describe('Sidebar', () => {
 		render(Sidebar, { props: {} });
 		const deleteButtons = screen.getAllByRole('button', { name: /delete conversation/i });
 		await fireEvent.click(deleteButtons[0]);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
 		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
 		expect(gotoMock).not.toHaveBeenCalled();

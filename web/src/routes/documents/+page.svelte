@@ -4,10 +4,12 @@
 	import type { Document } from '$lib/types';
 	import DocumentUpload from '$lib/components/DocumentUpload.svelte';
 	import DocumentList from '$lib/components/DocumentList.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let documents = $state<Document[]>([]);
 	let error = $state('');
 	let loading = $state(true);
+	let deleteTarget = $state<Document | null>(null);
 
 	async function load() {
 		loading = true;
@@ -30,6 +32,16 @@
 		}
 	}
 
+	function requestDelete(id: number): void {
+		deleteTarget = documents.find((d) => d.id === id) ?? null;
+	}
+
+	async function confirmDelete(): Promise<void> {
+		const target = deleteTarget;
+		deleteTarget = null;
+		if (target) await handleDelete(target.id);
+	}
+
 	onMount(load);
 </script>
 
@@ -43,9 +55,17 @@
 	{#if loading}
 		<p class="muted">Loading…</p>
 	{:else}
-		<DocumentList {documents} ondelete={handleDelete} />
+		<DocumentList {documents} ondelete={requestDelete} />
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Delete document"
+	message={`Delete "${deleteTarget?.filename}"? This cannot be undone.`}
+	onConfirm={confirmDelete}
+	onCancel={() => (deleteTarget = null)}
+/>
 
 <style>
 	.muted { color: var(--text-muted); margin-bottom: 16px; }

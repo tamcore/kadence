@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { readable } from 'svelte/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -60,5 +60,33 @@ describe('admin users page', () => {
 				expect.objectContaining({ username: 'bob', email: 'b@x.io', role: 'user' })
 			)
 		);
+	});
+
+	it('asks for confirmation before deleting a user, and cancel keeps them', async () => {
+		listMock.mockResolvedValue([{ id: 2, username: 'bob', email: 'b@x.io', role: 'user' }]);
+		render(Users);
+		await waitFor(() => expect(screen.getByText('bob')).toBeInTheDocument());
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+		const dialog = await screen.findByRole('dialog', { name: 'Delete user' });
+		expect(within(dialog).getByText(/delete bob/i)).toBeInTheDocument();
+
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+		expect(deleteMock).not.toHaveBeenCalled();
+		expect(screen.getByText('bob')).toBeInTheDocument();
+	});
+
+	it('deletes the user once the confirm dialog is confirmed', async () => {
+		listMock.mockResolvedValueOnce([{ id: 2, username: 'bob', email: 'b@x.io', role: 'user' }]);
+		listMock.mockResolvedValueOnce([]);
+		deleteMock.mockResolvedValue(undefined);
+		render(Users);
+		await waitFor(() => expect(screen.getByText('bob')).toBeInTheDocument());
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+		const dialog = await screen.findByRole('dialog', { name: 'Delete user' });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith(2));
 	});
 });

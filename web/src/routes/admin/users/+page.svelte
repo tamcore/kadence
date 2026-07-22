@@ -7,6 +7,7 @@
 	import type { User } from '$lib/types';
 	import Button from '$lib/components/Button.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import UserForm from '$lib/components/UserForm.svelte';
 
 	let users = $state<User[]>([]);
@@ -15,6 +16,7 @@
 
 	let modalMode = $state<'create' | 'edit' | null>(null);
 	let editing = $state<User | undefined>(undefined);
+	let deleteTarget = $state<User | null>(null);
 
 	async function load() {
 		loading = true;
@@ -57,6 +59,16 @@
 		}
 	}
 
+	function requestDelete(u: User): void {
+		deleteTarget = u;
+	}
+
+	async function confirmDelete(): Promise<void> {
+		const u = deleteTarget;
+		deleteTarget = null;
+		if (u) await handleDelete(u.id);
+	}
+
 	onMount(() => {
 		if (!get(isAdmin)) {
 			goto('/');
@@ -87,7 +99,7 @@
 						<td>{u.role}</td>
 						<td class="row-actions">
 							<Button variant="ghost" onclick={() => openEdit(u)}>Edit</Button>
-							<Button variant="danger" onclick={() => handleDelete(u.id)}>Delete</Button>
+							<Button variant="danger" onclick={() => requestDelete(u)}>Delete</Button>
 						</td>
 					</tr>
 				{/each}
@@ -107,6 +119,14 @@
 		{/key}
 	{/if}
 </Modal>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Delete user"
+	message={`Delete ${deleteTarget?.username}? This cannot be undone.`}
+	onConfirm={confirmDelete}
+	onCancel={() => (deleteTarget = null)}
+/>
 
 <style>
 	.header {
