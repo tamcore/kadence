@@ -9,6 +9,7 @@ spec:
   selector:
     matchLabels:
       {{- include "kadence.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
   strategy:
     type: RollingUpdate
     rollingUpdate:
