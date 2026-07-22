@@ -15,9 +15,11 @@ test('user can add, edit, and delete their own MCP server', async ({ page }) => 
 
 	const serverName = `e2e-mcp-${Date.now()}`;
 
+	// Add form: scoped to add-section to disambiguate from edit forms
 	await page.getByRole('button', { name: /add mcp server/i }).click();
-	await page.getByLabel('Name').fill(serverName);
-	await page.getByLabel('URL').fill(`https://${serverName}.e2e.test/mcp`);
+	const addForm = page.locator('.add-section form');
+	await addForm.getByLabel('Name', { exact: true }).fill(serverName);
+	await addForm.getByLabel('URL', { exact: true }).fill(`https://${serverName}.e2e.test/mcp`);
 	await page.getByRole('button', { name: /add server/i }).click();
 
 	const link = page.getByRole('link', { name: new RegExp(serverName) });
@@ -27,7 +29,8 @@ test('user can add, edit, and delete their own MCP server', async ({ page }) => 
 	const card = page.locator('li', { has: link });
 	await card.getByRole('button', { name: /edit/i }).click();
 	const newUrl = `https://${serverName}-edited.e2e.test/mcp`;
-	await page.getByLabel('URL').fill(newUrl);
+	// Scope to the card's form to avoid matching add-section form
+	await card.locator('form').getByLabel('URL', { exact: true }).fill(newUrl);
 	await page.getByRole('button', { name: 'Save' }).click();
 	await expect(link).toBeVisible();
 
