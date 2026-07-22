@@ -284,6 +284,40 @@ func TestMCP_Update_RejectsInvalidTransportAndName(t *testing.T) {
 	}
 }
 
+func TestMCP_Update_GrandfathersLegacyNameWhenUnchanged(t *testing.T) {
+	// A server created before name-format validation existed may have a
+	// legacy name (e.g. uppercase) that would now fail ValidateServerName.
+	// Resubmitting the update with that same name (the frontend's normal
+	// "unchanged fields" flow) must not 400.
+	us := &fakeUserStore{listRecs: []store.UserMCPRecord{{ID: 1, Name: "Legacy_Name"}}}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true, 10)
+
+	body := `{"name":"Legacy_Name","url":"https://` + allowedTestHost + `/mcp","transport":"sse"}`
+	res := doAuthedPutParam(t, h.Update, "1", body)
+	if res.Code != 200 {
+		t.Fatalf("grandfathered legacy-name update code=%d want 200, body=%s", res.Code, res.Body)
+	}
+	if !us.updated {
+		t.Fatal("store.Update should be called when the legacy name is unchanged")
+	}
+}
+
+func TestMCP_Update_RenamingLegacyNameStillValidatesFormat(t *testing.T) {
+	// Renaming a legacy server to a *different* but still-invalid name must
+	// still 400 — grandfathering only covers the unchanged-name case.
+	us := &fakeUserStore{listRecs: []store.UserMCPRecord{{ID: 1, Name: "Legacy_Name"}}}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true, 10)
+
+	body := `{"name":"Still_Invalid","url":"https://` + allowedTestHost + `/mcp","transport":"sse"}`
+	res := doAuthedPutParam(t, h.Update, "1", body)
+	if res.Code != 400 {
+		t.Fatalf("rename to another invalid name code=%d want 400, body=%s", res.Code, res.Body)
+	}
+	if us.updated {
+		t.Fatal("store.Update should not be called for a rename to an invalid name")
+	}
+}
+
 func TestMCP_Update_DisabledForbidden(t *testing.T) {
 	us := &fakeUserStore{}
 	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, false, 10)
