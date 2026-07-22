@@ -119,3 +119,33 @@ func TestConversationScopedToOwner(t *testing.T) {
 		t.Fatalf("cross-user GetByID err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestConversationUpdateTitle(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	ctx := context.Background()
+
+	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
+	other, _ := users.Create(ctx, model.User{Username: "other", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
+	c, _ := convs.Create(ctx, owner.ID, "old title")
+
+	updated, err := convs.UpdateTitle(ctx, c.ID, owner.ID, "new title")
+	if err != nil || updated.Title != "new title" {
+		t.Fatalf("update title: %v %+v", err, updated)
+	}
+
+	got, err := convs.GetByID(ctx, c.ID, owner.ID)
+	if err != nil || got.Title != "new title" {
+		t.Fatalf("get after update: %v %+v", err, got)
+	}
+
+	if _, err := convs.UpdateTitle(ctx, c.ID, other.ID, "hijacked"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-user UpdateTitle err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := convs.UpdateTitle(ctx, "00000000-0000-0000-0000-000000000000", owner.ID, "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing id UpdateTitle err = %v, want ErrNotFound", err)
+	}
+}

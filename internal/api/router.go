@@ -108,6 +108,7 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Post("/api/chat", deps.Chat.Send)
 			r.Get("/api/conversations", deps.Chat.ListConversations)
 			r.Get("/api/conversations/{id}/messages", deps.Chat.Messages)
+			r.Patch("/api/conversations/{id}", deps.Chat.PatchConversation)
 			r.Delete("/api/conversations/{id}", deps.Chat.DeleteConversation)
 		}
 

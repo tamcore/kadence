@@ -8,6 +8,10 @@ export const activeId = writable<string | null>(null);
 export const sending = writable(false);
 export const chatError = writable<string | null>(null);
 export const credentialRequest = writable<CredentialRequest | null>(null);
+// conversationsRefreshError is set when a background/foreground refresh of the
+// conversation list fails, so the sidebar can show an unobtrusive hint instead
+// of silently leaving the list stale/empty.
+export const conversationsRefreshError = writable(false);
 
 let abort: AbortController | null = null;
 
@@ -31,8 +35,11 @@ export function stopGeneration(): void {
 export async function refreshConversations(): Promise<void> {
 	try {
 		conversations.set(await chatApi.listConversations());
+		conversationsRefreshError.set(false);
 	} catch {
-		/* non-fatal */
+		// Non-fatal: keep whatever list is already shown, but let the sidebar
+		// surface a hint rather than failing silently.
+		conversationsRefreshError.set(true);
 	}
 }
 
@@ -52,6 +59,11 @@ export async function loadConversation(id: string): Promise<void> {
 export async function removeConversation(id: string): Promise<void> {
 	await chatApi.deleteConversation(id);
 	if (get(activeId) === id) newChat();
+	await refreshConversations();
+}
+
+export async function renameConversation(id: string, title: string): Promise<void> {
+	await chatApi.renameConversation(id, title);
 	await refreshConversations();
 }
 

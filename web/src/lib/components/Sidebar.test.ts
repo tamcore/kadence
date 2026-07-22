@@ -1,8 +1,9 @@
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const newChatMock = vi.fn();
 const removeConversationMock = vi.fn();
+const renameConversationMock = vi.fn();
 const gotoMock = vi.fn();
 const closeSidebarMock = vi.fn();
 
@@ -21,9 +22,11 @@ vi.mock('$lib/stores/chat', async () => {
 	const { writable } = await import('svelte/store');
 	return {
 		conversations: writable([]),
+		conversationsRefreshError: writable(false),
 		newChat: (...a: unknown[]) => newChatMock(...a),
 		refreshConversations: vi.fn().mockResolvedValue(undefined),
-		removeConversation: (...a: unknown[]) => removeConversationMock(...a)
+		removeConversation: (...a: unknown[]) => removeConversationMock(...a),
+		renameConversation: (...a: unknown[]) => renameConversationMock(...a)
 	};
 });
 
@@ -46,12 +49,13 @@ vi.mock('$lib/api/client', () => ({
 }));
 
 import Sidebar from './Sidebar.svelte';
-import { conversations } from '$lib/stores/chat';
+import { conversations, conversationsRefreshError } from '$lib/stores/chat';
 import { page } from '$app/stores';
 
 afterEach(() => {
 	vi.clearAllMocks();
 	(conversations as unknown as { set: (v: unknown[]) => void }).set([]);
+	(conversationsRefreshError as unknown as { set: (v: boolean) => void }).set(false);
 	(page as unknown as { set: (v: unknown) => void }).set({
 		params: { id: undefined },
 		url: { pathname: '/chat' }
@@ -148,5 +152,47 @@ describe('Sidebar', () => {
 
 		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
 		expect(gotoMock).not.toHaveBeenCalled();
+	});
+
+	it('shows an unobtrusive hint when the conversation list failed to refresh', () => {
+		(conversationsRefreshError as unknown as { set: (v: boolean) => void }).set(true);
+		render(Sidebar, { props: {} });
+		expect(screen.getByText(/couldn't refresh conversations/i)).toBeInTheDocument();
+	});
+
+	it('opens a rename modal prefilled with the current title and saves on submit', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		renameConversationMock.mockResolvedValueOnce(undefined);
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+		]);
+		render(Sidebar, { props: {} });
+		await fireEvent.click(screen.getByRole('button', { name: /rename conversation/i }));
+
+		const dialog = await screen.findByRole('dialog', { name: 'Rename conversation' });
+		const input = screen.getByLabelText('Title') as HTMLInputElement;
+		expect(input.value).toBe('First chat');
+
+		await fireEvent.input(input, { target: { value: 'Renamed chat' } });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+		expect(renameConversationMock).toHaveBeenCalledWith(
+			'11111111-1111-1111-1111-111111111111',
+			'Renamed chat'
+		);
+	});
+
+	it('surfaces the rename error message instead of failing silently', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		renameConversationMock.mockRejectedValueOnce(new Error('title too long'));
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+		]);
+		render(Sidebar, { props: {} });
+		await fireEvent.click(screen.getByRole('button', { name: /rename conversation/i }));
+		const dialog = await screen.findByRole('dialog', { name: 'Rename conversation' });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+		expect(await screen.findByText('title too long')).toBeInTheDocument();
 	});
 });

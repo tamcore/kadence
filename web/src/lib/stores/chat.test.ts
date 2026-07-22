@@ -2,19 +2,25 @@ import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const streamChatMock = vi.fn();
+const listConversationsMock = vi.fn().mockResolvedValue([]);
+const renameConversationMock = vi.fn().mockResolvedValue({ id: '1', title: 'renamed' });
 vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
-	listConversations: vi.fn().mockResolvedValue([]),
+	listConversations: (...a: unknown[]) => listConversationsMock(...a),
 	getMessages: vi.fn().mockResolvedValue([]),
+	renameConversation: (...a: unknown[]) => renameConversationMock(...a),
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
 import {
 	activeId,
 	chatError,
+	conversationsRefreshError,
 	credentialRequest,
 	messages,
 	newChat,
+	refreshConversations,
+	renameConversation,
 	sendMessage,
 	sending,
 	stopGeneration
@@ -27,6 +33,8 @@ async function* events(evs: unknown[]) {
 beforeEach(() => {
 	newChat();
 	streamChatMock.mockReset();
+	listConversationsMock.mockReset().mockResolvedValue([]);
+	renameConversationMock.mockReset().mockResolvedValue({ id: '1', title: 'renamed' });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -190,5 +198,28 @@ describe('chat store', () => {
 		await sendMessage('go');
 
 		expect(get(credentialRequest)).toBeNull();
+	});
+
+	it('refreshConversations clears the refresh-error flag on success', async () => {
+		listConversationsMock.mockResolvedValueOnce([{ id: '1', title: 'a' }]);
+		await refreshConversations();
+		expect(get(conversationsRefreshError)).toBe(false);
+	});
+
+	it('refreshConversations sets the refresh-error flag on failure', async () => {
+		listConversationsMock.mockRejectedValueOnce(new Error('network down'));
+		await refreshConversations();
+		expect(get(conversationsRefreshError)).toBe(true);
+	});
+
+	it('renameConversation calls the API and refreshes the list', async () => {
+		await renameConversation('1', 'New title');
+		expect(renameConversationMock).toHaveBeenCalledWith('1', 'New title');
+		expect(listConversationsMock).toHaveBeenCalled();
+	});
+
+	it('renameConversation propagates the API error without swallowing it', async () => {
+		renameConversationMock.mockRejectedValueOnce(new Error('title too long'));
+		await expect(renameConversation('1', 'x'.repeat(100))).rejects.toThrow('title too long');
 	});
 });

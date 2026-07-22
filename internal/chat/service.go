@@ -109,7 +109,9 @@ const defaultSystemPrompt = "You are Kadence, a knowledgeable and encouraging en
 	"Domain skills may be available to you: call the load_skill tool to load one when relevant, and when a " +
 	"tool call returns skill guidance instead of running, follow it and re-issue the call correctly before proceeding."
 
-const titleMaxLen = 60
+// TitleMaxLen is the maximum rune length for a conversation title, whether
+// auto-derived from the first user message or set explicitly via rename.
+const TitleMaxLen = 60
 
 // turnRedactor accumulates every secret value that has been active at any
 // point during a single Stream turn, so redaction stays effective even after
@@ -237,8 +239,8 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 	if conversationID == "" {
 		title := userText
 		runes := []rune(title)
-		if len(runes) > titleMaxLen {
-			title = string(runes[:titleMaxLen])
+		if len(runes) > TitleMaxLen {
+			title = string(runes[:TitleMaxLen])
 		}
 		c, err := s.convs.Create(ctx, userID, title)
 		if err != nil {
