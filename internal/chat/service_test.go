@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/chat/skill"
@@ -1425,5 +1426,90 @@ func TestRequestCredentialsToolNotOfferedWhenSecretsNil(t *testing.T) {
 	}
 	if !mcp.callInvoked {
 		t.Fatal("expected normal MCP dispatch to still work when Secrets is nil")
+	}
+}
+
+func TestStreamTruncatesTitleASCII(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	// ASCII string with 70 characters → should be truncated to 60 runes.
+	longASCII := strings.Repeat("a", 70)
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "", longASCII, sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if convs.created == nil {
+		t.Fatal("expected a conversation to be created")
+	}
+	if len(convs.created.Title) != 60 {
+		t.Fatalf("title length = %d, want 60 (runes)", len(convs.created.Title))
+	}
+	if convs.created.Title != strings.Repeat("a", 60) {
+		t.Fatalf("title = %q, want 60 'a' characters", convs.created.Title)
+	}
+}
+
+func TestStreamTruncatesTitleMultibyte(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	// String with emoji (multi-byte in UTF-8).
+	// Create a string with 70 runes (all emoji) → should be truncated to 60 runes.
+	longMultibyte := strings.Repeat("🎯", 70) // Fire emoji, 4 bytes each
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "", longMultibyte, sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if convs.created == nil {
+		t.Fatal("expected a conversation to be created")
+	}
+
+	// Verify it's valid UTF-8
+	if !utf8.ValidString(convs.created.Title) {
+		t.Fatalf("title is not valid UTF-8: %q", convs.created.Title)
+	}
+
+	// Verify it's 60 runes (not bytes)
+	runes := []rune(convs.created.Title)
+	if len(runes) != 60 {
+		t.Fatalf("title has %d runes, want 60", len(runes))
+	}
+
+	// Verify it's the correct content (60 fire emojis)
+	if convs.created.Title != strings.Repeat("🎯", 60) {
+		t.Fatalf("title = %q, want 60 fire emojis", convs.created.Title)
+	}
+}
+
+func TestStreamKeepsTitleUnchangedWhenShort(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	// Short string with mixed ASCII and emoji.
+	shortTitle := "Hello 👋 World"
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "", shortTitle, sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if convs.created == nil {
+		t.Fatal("expected a conversation to be created")
+	}
+
+	// Short strings should be unchanged.
+	if convs.created.Title != shortTitle {
+		t.Fatalf("title = %q, want %q", convs.created.Title, shortTitle)
 	}
 }

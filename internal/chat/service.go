@@ -217,8 +217,9 @@ func (s *Service) systemPrompt(unitSystem string) string {
 func (s *Service) Stream(ctx context.Context, userID int64, username string, unitSystem string, conversationID string, userText string, sink EventSink) error {
 	if conversationID == "" {
 		title := userText
-		if len(title) > titleMaxLen {
-			title = title[:titleMaxLen]
+		runes := []rune(title)
+		if len(runes) > titleMaxLen {
+			title = string(runes[:titleMaxLen])
 		}
 		c, err := s.convs.Create(ctx, userID, title)
 		if err != nil {
