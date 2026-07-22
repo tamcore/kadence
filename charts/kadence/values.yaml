@@ -145,3 +145,11 @@ markitdown:
     requests:
       cpu: 50m
       memory: 128Mi
+  basicAuth:
+    existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated)
+    # Optional: bring your own basicAuth password (stable across renders).
+    # RECOMMENDED when deploying via `helm template | kubectl apply` — there the
+    # auto-generation's lookup-based stickiness does not work and the password
+    # would be regenerated every deploy, breaking markitdown sidecar auth until
+    # pods restart. Set a fixed value here to avoid that. Empty = auto-generate.
+    password: ""

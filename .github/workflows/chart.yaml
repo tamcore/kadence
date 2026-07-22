@@ -30,3 +30,19 @@ jobs:
               exit 1
             fi
           done
+      - name: assert markitdown basicAuth password is sticky across renders
+        run: |
+          # With markitdown enabled and a fixed basicAuth.password, two consecutive
+          # `helm template` runs must render the same password (the regression fixed
+          # by operator-supplied password precedence in markitdown/auth-secret.yaml).
+          # The htpasswd field is expected to differ every render (bcrypt salt), so
+          # only the password key is asserted on.
+          set_args=(--set markitdown.enabled=true --set markitdown.basicAuth.password=fixed-test-password-0123456789)
+          helm template kadence ./charts/kadence "${set_args[@]}" > /tmp/rendered-1.yaml
+          helm template kadence ./charts/kadence "${set_args[@]}" > /tmp/rendered-2.yaml
+          pass1=$(yq eval 'select(.kind == "Secret" and .metadata.name == "kadence-markitdown-auth") | .stringData.password' /tmp/rendered-1.yaml)
+          pass2=$(yq eval 'select(.kind == "Secret" and .metadata.name == "kadence-markitdown-auth") | .stringData.password' /tmp/rendered-2.yaml)
+          if [ -z "$pass1" ] || [ "$pass1" != "$pass2" ]; then
+            echo "expected identical markitdown basicAuth password across renders, got '$pass1' vs '$pass2'"
+            exit 1
+          fi
