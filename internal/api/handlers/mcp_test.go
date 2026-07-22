@@ -197,29 +197,6 @@ func TestMCP_Tools_404ForNonApplicable(t *testing.T) {
 	}
 }
 
-func TestMCP_List_RequiresUser(t *testing.T) {
-	h := handlers.NewMCP(&fakeMcpHealth{}, nil, nil, false)
-	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
-	rec := httptest.NewRecorder()
-	h.List(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
-	}
-}
-
-func TestMCP_Tools_RequiresUser(t *testing.T) {
-	h := handlers.NewMCP(&fakeMcpHealth{}, nil, nil, false)
-	req := httptest.NewRequest(http.MethodGet, "/api/mcp/garmin/tools", nil)
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("name", "garmin")
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	rec := httptest.NewRecorder()
-	h.Tools(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", rec.Code)
-	}
-}
-
 func TestMCP_Create_AllowlistAndDisabled(t *testing.T) {
 	us := &fakeUserStore{}
 	hDisabled := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, false)

@@ -81,10 +81,6 @@ func (h *WebAuthn) RegisterBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	waUser, err := h.userAdapter(r.Context(), *u)
 	if err != nil {
 		slog.Error("webauthn: load credentials", "err", err)
@@ -113,10 +109,6 @@ func (h *WebAuthn) RegisterFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	sess, err := webauthn.ReadCeremony(r, h.cipher)
 	if err != nil {
 		RespondError(w, http.StatusBadRequest, "ceremony expired or invalid")
@@ -231,10 +223,6 @@ func (h *WebAuthn) ListCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	list, err := h.creds.ListByUser(r.Context(), u.ID)
 	if err != nil {
 		slog.Error("webauthn: list credentials", "err", err)
@@ -259,10 +247,6 @@ func (h *WebAuthn) RenameCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -293,10 +277,6 @@ func (h *WebAuthn) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	publicID := chi.URLParam(r, "publicId")
 	if err := h.creds.DeleteByPublicIDForUser(r.Context(), publicID, u.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

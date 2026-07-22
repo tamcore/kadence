@@ -115,10 +115,6 @@ func (d *Documents) readUploadedFile(w http.ResponseWriter, r *http.Request) (da
 // Upload handles POST /api/documents (private, owned by the caller).
 func (d *Documents) Upload(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	d.upload(w, r, &u.ID, model.ScopePrivate)
 }
 
@@ -154,10 +150,6 @@ func (d *Documents) upload(w http.ResponseWriter, r *http.Request, ownerUserID *
 // List handles GET /api/documents (the caller's own documents).
 func (d *Documents) List(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	list, err := d.repo.ListByOwner(r.Context(), u.ID)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not list documents")
@@ -179,10 +171,6 @@ func (d *Documents) ListPublic(w http.ResponseWriter, r *http.Request) {
 // Delete handles DELETE /api/documents/{id} (must be owned by the caller).
 func (d *Documents) Delete(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		RespondError(w, http.StatusBadRequest, "invalid document id")

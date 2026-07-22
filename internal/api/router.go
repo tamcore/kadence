@@ -84,9 +84,13 @@ func mountAuth(r chi.Router, deps Deps) {
 		r.Get("/api/webauthn/enabled", deps.WebAuthn.Enabled)
 	}
 
-	// All other auth/admin routes: LoadUser + CSRF protection.
+	// All other auth/admin routes: LoadUser + RequireAuth + CSRF protection.
+	// RequireAuth runs before CSRF so an anonymous request always gets a
+	// uniform 401, regardless of HTTP method; CSRF then guards authenticated
+	// unsafe-method requests that are missing a valid token.
 	r.Group(func(r chi.Router) {
 		r.Use(loadUser)
+		r.Use(middleware.RequireAuth)
 		if !deps.Config.IsProd() {
 			// gorilla/csrf enforces a same-origin Referer check on unsafe methods
 			// and rejects cleartext HTTP referers unless the request is marked

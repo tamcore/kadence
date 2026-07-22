@@ -46,10 +46,6 @@ func NewProfile(users profileUsers, sessions profileSessions, cfg config.Config)
 // accounts.
 func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	var in struct {
 		DisplayName string `json:"displayName"`
@@ -93,10 +89,6 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 // optionally revoked while the current session is preserved.
 func (h *Profile) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	var in struct {
 		CurrentPassword string `json:"currentPassword"`

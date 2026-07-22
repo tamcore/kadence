@@ -85,16 +85,6 @@ func TestSessions_List_MarksCurrent_NoRawID(t *testing.T) {
 	assertNotContains(t, body, "SECRET-CURRENT", "SECRET-OTHER")
 }
 
-func TestSessions_List_RequiresAuth(t *testing.T) {
-	h := handlers.NewSessions(&fakeSessionStore{})
-	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
-	rec := httptest.NewRecorder()
-	h.List(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d want 401", rec.Code)
-	}
-}
-
 func TestSessions_Revoke_OwnerScoped(t *testing.T) {
 	store := &fakeSessionStore{deleteErr: storepkg.ErrNotFound}
 	h := handlers.NewSessions(store)
@@ -119,15 +109,5 @@ func TestSessions_RevokeOthers(t *testing.T) {
 	_ = doAuthedPostRevokeOthersWithCookie(t, handlers.NewSessions(store).RevokeOthers, "SECRET-CURRENT")
 	if store.othersExcept != "SECRET-CURRENT" {
 		t.Fatalf("revoke-others exceptID=%q", store.othersExcept)
-	}
-}
-
-func TestSessions_RevokeOthers_RequiresAuth(t *testing.T) {
-	h := handlers.NewSessions(&fakeSessionStore{})
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/revoke-others", nil)
-	rec := httptest.NewRecorder()
-	h.RevokeOthers(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d want 401", rec.Code)
 	}
 }

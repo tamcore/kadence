@@ -105,16 +105,6 @@ func TestProfile_Update_Success(t *testing.T) {
 	}
 }
 
-func TestProfile_Update_RequiresAuth(t *testing.T) {
-	h := handlers.NewProfile(&fakeProfileUsers{}, &fakeProfileSessions{}, config.Config{})
-	req := httptest.NewRequest(http.MethodPatch, "/api/profile", strings.NewReader(`{}`))
-	rec := httptest.NewRecorder()
-	h.Update(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d want 401", rec.Code)
-	}
-}
-
 func TestProfile_ChangePassword(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte("current-pw"), bcrypt.DefaultCost)
 	if err != nil {
@@ -224,16 +214,6 @@ func TestProfile_ChangePassword_LogoutOthers_NoCookie_SkipsRevoke(t *testing.T) 
 	}
 	if sessions.deleteOthersCalled {
 		t.Fatalf("did not expect DeleteOthersByUser without a session cookie; sessions=%+v", sessions)
-	}
-}
-
-func TestProfile_ChangePassword_RequiresAuth(t *testing.T) {
-	h := handlers.NewProfile(&fakeProfileUsers{}, &fakeProfileSessions{}, config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/profile/password", strings.NewReader(`{}`))
-	rec := httptest.NewRecorder()
-	h.ChangePassword(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d want 401", rec.Code)
 	}
 }
 

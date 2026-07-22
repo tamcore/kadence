@@ -32,11 +32,9 @@ func (f *fakeSubmitter) Submit(userID int64, requestID string, values map[string
 	return f.err
 }
 
-func newSubmitRequest(userID int64, requestID, body string) *http.Request {
+func newSubmitRequest(requestID, body string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/api/credentials/"+requestID, strings.NewReader(body))
-	if userID != 0 {
-		r = withUser(r, userID)
-	}
+	r = withUser(r, credsUserID)
 	return withChiParam(r, "requestId", requestID)
 }
 
@@ -44,7 +42,7 @@ func TestCredentialsSubmitSuccess(t *testing.T) {
 	// Arrange
 	fs := &fakeSubmitter{}
 	h := handlers.NewCredentials(fs)
-	req := newSubmitRequest(credsUserID, "req-1", `{"values":{"apiKey":"secretvalue"}}`)
+	req := newSubmitRequest("req-1", `{"values":{"apiKey":"secretvalue"}}`)
 	rec := httptest.NewRecorder()
 
 	// Act
@@ -65,30 +63,11 @@ func TestCredentialsSubmitSuccess(t *testing.T) {
 	}
 }
 
-func TestCredentialsSubmitUnauthenticated(t *testing.T) {
-	// Arrange
-	fs := &fakeSubmitter{}
-	h := handlers.NewCredentials(fs)
-	req := newSubmitRequest(0, "req-1", `{"values":{"apiKey":"x"}}`)
-	rec := httptest.NewRecorder()
-
-	// Act
-	h.Submit(rec, req)
-
-	// Assert
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-	if fs.wasCalled {
-		t.Fatal("expected broker.Submit not to be called")
-	}
-}
-
 func TestCredentialsSubmitEmptyRequestID(t *testing.T) {
 	// Arrange
 	fs := &fakeSubmitter{}
 	h := handlers.NewCredentials(fs)
-	req := newSubmitRequest(credsUserID, "", `{"values":{"apiKey":"x"}}`)
+	req := newSubmitRequest("", `{"values":{"apiKey":"x"}}`)
 	rec := httptest.NewRecorder()
 
 	// Act
@@ -107,7 +86,7 @@ func TestCredentialsSubmitMalformedJSON(t *testing.T) {
 	// Arrange
 	fs := &fakeSubmitter{}
 	h := handlers.NewCredentials(fs)
-	req := newSubmitRequest(credsUserID, "req-1", `{not valid json`)
+	req := newSubmitRequest("req-1", `{not valid json`)
 	rec := httptest.NewRecorder()
 
 	// Act
@@ -140,7 +119,7 @@ func TestCredentialsSubmitErrorMapping(t *testing.T) {
 			// Arrange
 			fs := &fakeSubmitter{err: tc.err}
 			h := handlers.NewCredentials(fs)
-			req := newSubmitRequest(credsUserID, "req-1", `{"values":{"apiKey":"x"}}`)
+			req := newSubmitRequest("req-1", `{"values":{"apiKey":"x"}}`)
 			rec := httptest.NewRecorder()
 
 			// Act

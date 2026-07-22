@@ -87,10 +87,6 @@ type mcpUpsertRequest struct {
 // List handles GET /api/mcp.
 func (h *MCP) List(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	admin := u.IsAdmin()
 	statuses := h.health.StatusFor(u.Username)
 
@@ -138,10 +134,6 @@ func (h *MCP) List(w http.ResponseWriter, r *http.Request) {
 // Tools handles GET /api/mcp/{name}/tools.
 func (h *MCP) Tools(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	name := chi.URLParam(r, "name")
 	tools, ok := h.health.ToolsFor(u.Username, name)
 	if !ok {
@@ -158,10 +150,6 @@ func (h *MCP) Tools(w http.ResponseWriter, r *http.Request) {
 // Create handles POST /api/mcp.
 func (h *MCP) Create(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	if !h.enabled || h.store == nil {
 		RespondError(w, http.StatusForbidden, "user MCP servers are not enabled")
 		return
@@ -199,10 +187,6 @@ func (h *MCP) Create(w http.ResponseWriter, r *http.Request) {
 // Update handles PUT /api/mcp/{id}.
 func (h *MCP) Update(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	if !h.enabled || h.store == nil {
 		RespondError(w, http.StatusForbidden, "user MCP servers are not enabled")
 		return
@@ -247,10 +231,6 @@ func (h *MCP) Update(w http.ResponseWriter, r *http.Request) {
 // Delete handles DELETE /api/mcp/{id}.
 func (h *MCP) Delete(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	if u == nil {
-		RespondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 	if !h.enabled || h.store == nil {
 		RespondError(w, http.StatusForbidden, "user MCP servers are not enabled")
 		return
