@@ -61,12 +61,12 @@ func TestDocumentDeleteCascadesChunks(t *testing.T) {
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: "a@x.io", PasswordHash: "h", Role: model.RoleUser})
 	d, _ := docs.Create(ctx, model.Document{OwnerUserID: &u.ID, Scope: model.ScopePrivate, Filename: testFilenamePriv, Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "x"})
 
-	_ = chunks.Insert(ctx, model.Chunk{UserID: &u.ID, DocumentID: &d.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "doc chunk"}, []float32{1, 0, 0})
+	_ = chunks.Insert(ctx, model.Chunk{UserID: &u.ID, DocumentID: &d.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "doc chunk"}, vec1024(1, 0, 0))
 
 	if err := docs.Delete(ctx, d.ID, u.ID); err != nil {
 		t.Fatalf("delete doc: %v", err)
 	}
-	got, _ := chunks.SearchTopK(ctx, u.ID, []float32{1, 0, 0}, 10)
+	got, _ := chunks.SearchTopK(ctx, u.ID, vec1024(1, 0, 0), 10)
 	if len(got) != 0 {
 		t.Fatalf("chunks should be gone after document delete: %+v", got)
 	}
@@ -82,10 +82,10 @@ func TestPublicDocumentChunkOwnerlessRetrievable(t *testing.T) {
 	reader, _ := users.Create(ctx, model.User{Username: "r", Email: "r@x.io", PasswordHash: "h", Role: model.RoleUser})
 	d, _ := docs.Create(ctx, model.Document{OwnerUserID: nil, Scope: model.ScopePublic, Filename: testFilenamePublic, Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "x"})
 
-	if err := chunks.Insert(ctx, model.Chunk{UserID: nil, DocumentID: &d.ID, Scope: model.ScopePublic, SourceKind: model.ChunkSourceDocument, Content: "shared knowledge"}, []float32{1, 0, 0}); err != nil {
+	if err := chunks.Insert(ctx, model.Chunk{UserID: nil, DocumentID: &d.ID, Scope: model.ScopePublic, SourceKind: model.ChunkSourceDocument, Content: "shared knowledge"}, vec1024(1, 0, 0)); err != nil {
 		t.Fatalf("insert ownerless public chunk: %v", err)
 	}
-	got, _ := chunks.SearchTopK(ctx, reader.ID, []float32{1, 0, 0}, 10)
+	got, _ := chunks.SearchTopK(ctx, reader.ID, vec1024(1, 0, 0), 10)
 	if len(got) != 1 || got[0].Content != "shared knowledge" {
 		t.Fatalf("public chunk should be retrievable by any user: %+v", got)
 	}

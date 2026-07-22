@@ -63,6 +63,11 @@ type Config struct {
 	EmbedAPIKey  string
 	EmbedModel   string
 	RAGTopK      int
+	// EmbedDimensions pins the embedding vector length (KADENCE_EMBED_DIMENSIONS,
+	// default 1024) so it can be stored in a fixed-width pgvector column with an
+	// HNSW index. 0 disables pinning (provider default dimensionality, no
+	// truncation, and no index contract).
+	EmbedDimensions int
 
 	// Ingestion.
 	UploadMaxBytes   int
@@ -152,6 +157,7 @@ func Load() Config {
 	cfg.EmbedAPIKey = os.Getenv("KADENCE_EMBED_API_KEY")
 	cfg.EmbedModel = envOr("KADENCE_EMBED_MODEL", "text-embedding-3-small")
 	cfg.RAGTopK = envIntOr("KADENCE_RAG_TOP_K", 5)
+	cfg.EmbedDimensions = envIntOr("KADENCE_EMBED_DIMENSIONS", 1024)
 
 	cfg.UploadMaxBytes = envIntOr("KADENCE_UPLOAD_MAX_BYTES", 10485760)
 	cfg.IngestChunkChars = envIntOr("KADENCE_INGEST_CHUNK_CHARS", 1000)
@@ -227,6 +233,9 @@ func (c Config) Validate() error {
 	}
 	if c.RateLimitAuth < 0 {
 		return errors.New("KADENCE_RATE_LIMIT_AUTH must be a non-negative integer")
+	}
+	if c.EmbedDimensions < 0 {
+		return errors.New("KADENCE_EMBED_DIMENSIONS must be a non-negative integer")
 	}
 	return nil
 }

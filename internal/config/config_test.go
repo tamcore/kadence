@@ -437,6 +437,40 @@ func TestValidateAllowsZeroRateLimits(t *testing.T) {
 	}
 }
 
+func TestEmbedDimensionsDefault(t *testing.T) {
+	t.Setenv("KADENCE_EMBED_DIMENSIONS", "")
+
+	cfg := Load()
+
+	if cfg.EmbedDimensions != 1024 {
+		t.Fatalf("EmbedDimensions = %d, want 1024", cfg.EmbedDimensions)
+	}
+}
+
+func TestEmbedDimensionsOverride(t *testing.T) {
+	t.Setenv("KADENCE_EMBED_DIMENSIONS", "768")
+
+	cfg := Load()
+
+	if cfg.EmbedDimensions != 768 {
+		t.Fatalf("EmbedDimensions = %d, want 768", cfg.EmbedDimensions)
+	}
+}
+
+func TestValidateRejectsNegativeEmbedDimensions(t *testing.T) {
+	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: -1}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for negative EmbedDimensions")
+	}
+}
+
+func TestValidateAllowsZeroEmbedDimensions(t *testing.T) {
+	cfg := Config{DatabaseURL: testDatabaseURL, EmbedDimensions: 0}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (0 disables dimension pinning)", err)
+	}
+}
+
 func TestSlogLevelMapping(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug": slog.LevelDebug,
