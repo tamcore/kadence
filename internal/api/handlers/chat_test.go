@@ -12,6 +12,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 )
 
 type fakeStreamer struct{ gotText string }
@@ -25,9 +26,11 @@ func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ string, _ string, _ 
 }
 
 type fakeConvLister struct {
-	list         []model.Conversation
-	getByIDError error
-	deleteError  error
+	list            []model.Conversation
+	getByIDError    error
+	deleteError     error
+	updateTitleErr  error
+	updateTitleResp model.Conversation
 }
 
 func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation, error) {
@@ -40,6 +43,15 @@ func (f fakeConvLister) GetByID(_ context.Context, id string, userID int64) (mod
 	return model.Conversation{ID: id, UserID: userID}, nil
 }
 func (f fakeConvLister) Delete(context.Context, string, int64) error { return f.deleteError }
+func (f fakeConvLister) UpdateTitle(_ context.Context, id string, userID int64, title string) (model.Conversation, error) {
+	if f.updateTitleErr != nil {
+		return model.Conversation{}, f.updateTitleErr
+	}
+	if f.updateTitleResp.ID != "" {
+		return f.updateTitleResp, nil
+	}
+	return model.Conversation{ID: id, UserID: userID, Title: title}, nil
+}
 
 type fakeMsgLister struct{ msgs []model.Message }
 
@@ -177,5 +189,85 @@ func TestDeleteConversationMissingUser(t *testing.T) {
 	h.DeleteConversation(rec, httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+}
+
+func patchReq(t *testing.T, body string) *http.Request { //nolint:unparam
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPatch, "/api/conversations/1", strings.NewReader(body))
+	return withChiParam(withUser(req, 7), "id", "1")
+}
+
+func TestPatchConversationSuccess(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"title":"  New title  "}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"New title"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchConversationMissingUser(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	req := withChiParam(httptest.NewRequest(http.MethodPatch, "/api/conversations/1", strings.NewReader(`{"title":"x"}`)), "id", "1")
+	h.PatchConversation(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", rec.Code)
+	}
+}
+
+func TestPatchConversationEmptyID(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, withChiParam(withUser(httptest.NewRequest(http.MethodPatch, "/api/conversations/", strings.NewReader(`{"title":"x"}`)), 7), "id", ""))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestPatchConversationBlankTitle(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"title":"   "}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestPatchConversationTitleTooLong(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	longTitle := strings.Repeat("x", 61)
+	h.PatchConversation(rec, patchReq(t, `{"title":"`+longTitle+`"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestPatchConversationInvalidBody(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `not json`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestPatchConversationNotFound(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{updateTitleErr: store.ErrNotFound}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"title":"new"}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", rec.Code)
+	}
+}
+
+func TestPatchConversationRepoError(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{updateTitleErr: &convNotFoundErr{}}, fakeMsgLister{})
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"title":"new"}`))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500 for a generic repo error", rec.Code)
 	}
 }

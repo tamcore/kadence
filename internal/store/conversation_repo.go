@@ -66,6 +66,23 @@ func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) (
 	return out, rows.Err()
 }
 
+// UpdateTitle sets the title of a conversation owned by userID, or returns
+// ErrNotFound if no row matched (wrong id or not the owner).
+func (r *ConversationRepository) UpdateTitle(ctx context.Context, id string, userID int64, title string) (model.Conversation, error) {
+	var c model.Conversation
+	err := r.pool.QueryRow(ctx,
+		`UPDATE conversations SET title = $1 WHERE id = $2::uuid AND user_id = $3
+		 RETURNING id::text, user_id, title, created_at`, title, id, userID).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Conversation{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Conversation{}, fmt.Errorf("update conversation title: %w", err)
+	}
+	return c, nil
+}
+
 // Delete removes a conversation owned by userID (cascades to messages).
 func (r *ConversationRepository) Delete(ctx context.Context, id string, userID int64) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID)

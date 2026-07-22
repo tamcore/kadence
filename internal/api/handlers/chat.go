@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 )
 
 // sseKeepaliveInterval is how often an SSE comment line is written to keep
@@ -25,10 +28,11 @@ type ChatStreamer interface {
 	Stream(ctx context.Context, userID int64, username string, unitSystem string, conversationID string, text string, sink chat.EventSink) error
 }
 
-// ConvLister lists/gets/deletes conversations for a user.
+// ConvLister lists/gets/renames/deletes conversations for a user.
 type ConvLister interface {
 	ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error)
 	GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error)
+	UpdateTitle(ctx context.Context, id string, userID int64, title string) (model.Conversation, error)
 	Delete(ctx context.Context, id string, userID int64) error
 }
 
@@ -188,6 +192,52 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		out = append(out, messageDTO{Role: m.Role, Content: m.Content})
 	}
 	RespondJSON(w, http.StatusOK, out)
+}
+
+// PatchConversation handles PATCH /api/conversations/{id}, currently supporting
+// only a title rename. Reuses chat.TitleMaxLen so explicit user renames are
+// bound by the same limit as auto-derived titles.
+func (h *Chat) PatchConversation(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromContext(r.Context())
+	if u == nil {
+		RespondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		RespondError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		RespondError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if len([]rune(title)) > chat.TitleMaxLen {
+		RespondError(w, http.StatusBadRequest, fmt.Sprintf("title must be %d characters or fewer", chat.TitleMaxLen))
+		return
+	}
+
+	updated, err := h.convs.UpdateTitle(r.Context(), id, u.ID, title)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+		RespondError(w, http.StatusInternalServerError, "could not rename conversation")
+		return
+	}
+	RespondJSON(w, http.StatusOK, conversationDTO{
+		ID: updated.ID, Title: updated.Title,
+		CreatedAt: updated.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
 }
 
 // DeleteConversation handles DELETE /api/conversations/{id}.

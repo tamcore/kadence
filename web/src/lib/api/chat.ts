@@ -63,4 +63,6 @@ export async function* streamChat(
 
 export const listConversations = () => api.get<Conversation[]>('/conversations');
 export const getMessages = (id: string) => api.get<ChatMessage[]>(`/conversations/${id}/messages`);
+export const renameConversation = (id: string, title: string) =>
+	api.patch<Conversation>(`/conversations/${id}`, { title });
 export const deleteConversation = (id: string) => api.del<{ ok: boolean }>(`/conversations/${id}`);

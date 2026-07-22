@@ -2,17 +2,30 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
-	import { conversations, newChat, refreshConversations, removeConversation } from '$lib/stores/chat';
+	import {
+		conversations,
+		conversationsRefreshError,
+		newChat,
+		refreshConversations,
+		removeConversation,
+		renameConversation
+	} from '$lib/stores/chat';
 	import { clearAuth, currentUser, isAdmin } from '$lib/stores/auth';
 	import { closeSidebar } from '$lib/stores/ui';
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+	import Input from '$lib/components/Input.svelte';
+	import Button from '$lib/components/Button.svelte';
 
 	// The sidebar is global, so load history on every shell route (incl. home)
 	// — the start page greets with the conversation history.
 	onMount(refreshConversations);
 
 	let deleteTargetId = $state<string | null>(null);
+	let renameTargetId = $state<string | null>(null);
+	let renameValue = $state('');
+	let renameError = $state('');
 
 	function startNew(): void {
 		newChat();
@@ -38,6 +51,33 @@
 		}
 	}
 
+	function requestRename(id: string, currentTitle: string, e: Event): void {
+		e.preventDefault();
+		e.stopPropagation();
+		renameTargetId = id;
+		renameValue = currentTitle;
+		renameError = '';
+	}
+
+	function closeRename(): void {
+		renameTargetId = null;
+		renameError = '';
+	}
+
+	async function confirmRename(e: SubmitEvent): Promise<void> {
+		e.preventDefault();
+		const id = renameTargetId;
+		if (!id) return;
+		const title = renameValue.trim();
+		if (!title) return;
+		try {
+			await renameConversation(id, title);
+			closeRename();
+		} catch (err) {
+			renameError = err instanceof Error ? err.message : 'Could not rename conversation';
+		}
+	}
+
 	async function handleLogout(): Promise<void> {
 		try {
 			await api.logout();
@@ -56,6 +96,9 @@
 
 	<div class="history">
 		<h2 class="heading">History</h2>
+		{#if $conversationsRefreshError}
+			<p class="refresh-hint">Couldn't refresh conversations</p>
+		{/if}
 		{#if $conversations.length}
 			<ul>
 				{#each $conversations as c (c.id)}
@@ -67,6 +110,13 @@
 						>
 							{c.title || 'Untitled'}
 						</a>
+						<button
+							class="rename"
+							aria-label="Rename conversation"
+							onclick={(e) => requestRename(c.id, c.title, e)}
+						>
+							✎
+						</button>
 						<button class="del" aria-label="Delete conversation" onclick={(e) => requestDelete(c.id, e)}>×</button>
 					</li>
 				{/each}
@@ -100,6 +150,17 @@
 	onConfirm={confirmDelete}
 	onCancel={() => (deleteTargetId = null)}
 />
+
+<Modal open={renameTargetId !== null} title="Rename conversation" onClose={closeRename}>
+	<form class="rename-form" onsubmit={confirmRename}>
+		{#if renameError}<div class="error" role="alert">{renameError}</div>{/if}
+		<Input label="Title" name="title" required bind:value={renameValue} />
+		<div class="rename-actions">
+			<Button type="button" variant="ghost" onclick={closeRename}>Cancel</Button>
+			<Button type="submit" variant="primary">Save</Button>
+		</div>
+	</form>
+</Modal>
 
 <style>
 	.sidebar-inner {
@@ -165,6 +226,14 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	.rename {
+		border: none;
+		background: none;
+		cursor: pointer;
+		color: var(--text-muted);
+		font-size: 0.95rem;
+		padding: 0 6px;
+	}
 	.del {
 		border: none;
 		background: none;
@@ -172,6 +241,26 @@
 		color: var(--text-muted);
 		font-size: 1.1rem;
 		padding: 0 8px;
+	}
+	.refresh-hint {
+		color: var(--text-muted);
+		font-size: 0.8rem;
+		padding: 0 4px 6px;
+		margin: 0;
+	}
+	.rename-form {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.rename-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+	.error {
+		color: var(--danger);
+		font-size: 0.85rem;
 	}
 	.links {
 		display: flex;
