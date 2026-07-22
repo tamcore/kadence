@@ -63,6 +63,15 @@ config:
   KADENCE_EMBED_MODEL: ""
   KADENCE_ADMIN_USERNAME: ""
   KADENCE_ADMIN_EMAIL: ""
+  # KADENCE_TRUSTED_ORIGINS: "" # e.g. "https://kadence.example.com"
+  #   Required (together with KADENCE_WEBAUTHN_RP_ID below and a valid
+  #   secrets.KADENCE_ENCRYPTION_KEY) to enable passkeys. Without it, passkey
+  #   login/registration silently stays unavailable — no error, the feature
+  #   just doesn't appear.
+  # KADENCE_WEBAUTHN_RP_ID: "" # e.g. "kadence.example.com" (the site's effective domain)
+  #   Required (together with KADENCE_TRUSTED_ORIGINS above and
+  #   secrets.KADENCE_ENCRYPTION_KEY) to enable passkeys. Without it, passkey
+  #   login/registration silently stays unavailable.
 
 # Secret app config (rendered into a Secret -> envFrom). Empty here; set in values-dev.yaml.
 secrets:
@@ -70,6 +79,12 @@ secrets:
   KADENCE_LLM_API_KEY: ""
   KADENCE_EMBED_API_KEY: ""
   KADENCE_ADMIN_PASSWORD: ""
+  # KADENCE_ENCRYPTION_KEY: "" # base64-encoded 32-byte key; generate with:
+  #   openssl rand -base64 32
+  #   Required for passkeys (with config.KADENCE_WEBAUTHN_RP_ID +
+  #   config.KADENCE_TRUSTED_ORIGINS above) and for user-defined MCP servers
+  #   (with config.KADENCE_USER_MCP_ALLOWED_HOSTS). Without it, both features
+  #   silently stay unavailable — no error, no crash, just missing functionality.
 
 # Bundled Postgres (pgvector). When enabled, the chart runs its own
 # StatefulSet + Service and wires KADENCE_DATABASE_URL to it.

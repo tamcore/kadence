@@ -108,9 +108,31 @@ above the upload cap. Set your host and issuer in `ingress:`.
 - Main Deployment: distroless/nonroot, `runAsNonRoot: true`, read-only root filesystem,
   `seccompProfile: RuntimeDefault`.
 - `PodDisruptionBudget` with `minAvailable: 1`.
-- Every MCP/markitdown sidecar is basic-auth protected and network-isolated to the
-  main app.
+- Every MCP/markitdown sidecar's **nginx** basic-auth container runs
+  `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, drops all
+  capabilities, and uses `seccompProfile: RuntimeDefault`.
+- Each MCP/markitdown workload is basic-auth protected in front of nginx, and its
+  `NetworkPolicy` restricts **ingress** to the main app pod only.
 - `KADENCE_CSRF_SECRET` must be shared across replicas (set it explicitly in prod).
+
+### Known gaps in MCP/markitdown sidecar hardening (current state)
+
+The MCP server / markitdown **workload container** (as opposed to its nginx sidecar,
+which is fully hardened per above) does not yet have:
+
+- `runAsNonRoot` / a pinned `runAsUser` — it drops Linux capabilities and disables
+  privilege escalation, but runs as whatever user the upstream image defaults to.
+- Liveness/readiness probes on either the workload or nginx containers.
+- Default CPU/memory **limits** — `mcp.servers[].resources` and
+  `markitdown.resources` accept `requests`/`limits`, but nothing is set unless you
+  provide them; an unbounded workload can consume node resources.
+- **Egress** restriction — the rendered `NetworkPolicy` only sets
+  `policyTypes: [Ingress]`, so outbound traffic from MCP/markitdown pods is not
+  restricted by the chart; a compromised MCP image could still reach arbitrary
+  network destinations.
+
+These are tracked as follow-up (wave-2) hardening work; this section will be
+updated once they land.
 
 ## Local / cluster dev deploy
 
