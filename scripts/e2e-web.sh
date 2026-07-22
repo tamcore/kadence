@@ -39,6 +39,12 @@ admin_password="${E2E_ADMIN_PASSWORD:?E2E_ADMIN_PASSWORD is required (use a clea
 # is allowed to report the server as unhealthy/checking.
 user_mcp_key="$(openssl rand -base64 32)"
 
+# The e2e suite logs in ~14 times across parallel Playwright workers that all
+# share the same client address (127.0.0.1), and the default auth rate limit
+# (10/min) is scoped per-client-address — not per-user — so a real limit would
+# make the suite flaky under parallel workers. Disable both limits for this
+# harness only; production defaults are untouched.
+
 STUB_ADDR=":9099" "$stub_bin" &
 stub_pid=$!
 
@@ -55,6 +61,8 @@ KADENCE_ENV=dev \
 	KADENCE_ADMIN_PASSWORD="$admin_password" \
 	KADENCE_ENCRYPTION_KEY="$user_mcp_key" \
 	KADENCE_USER_MCP_ALLOWED_HOSTS="*.e2e.test" \
+	KADENCE_RATE_LIMIT_AUTH=0 \
+	KADENCE_RATE_LIMIT_GLOBAL=0 \
 	"$app_bin" &
 app_pid=$!
 

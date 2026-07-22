@@ -13,7 +13,16 @@ test('context explorer shows a term from a recent chat and drills down into a sn
 }) => {
 	await login(page, USERNAME, PASSWORD);
 
-	const marker = `kadenceexplorertoken${Date.now()}`;
+	// The context explorer term index tokenizes on letter runs only (digits are
+	// treated as separators and dropped — see internal/knowledge/tfidf.go), so a
+	// marker with a numeric suffix would never match as a single term. Map
+	// Date.now()'s digits to letters (0-9 -> a-j) to keep the marker unique
+	// while staying letters-only.
+	const uniqueSuffix = String(Date.now())
+		.split('')
+		.map((digit) => String.fromCharCode('a'.charCodeAt(0) + Number(digit)))
+		.join('');
+	const marker = `kadenceexplorertoken${uniqueSuffix}`;
 	await page.goto('/chat');
 	const composer = page.getByLabel('Message');
 	await composer.fill(`Please remember this unique word: ${marker}`);

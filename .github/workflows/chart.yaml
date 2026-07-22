@@ -65,16 +65,28 @@ jobs:
         # and those findings clear.
         continue-on-error: true
         run: |
+          # set -o pipefail so `| tee` doesn't swallow kube-linter's exit code;
+          # this step's own continue-on-error is what keeps the job advisory
+          # today, so once that's dropped this pipefail is what makes the
+          # blocking flip actually work.
+          set -o pipefail
           docker run --rm -v "$PWD:/repo" -w /repo \
             stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f916643f54ca291ac38cf7d01ef591ff3f9 \
             lint --config=.kube-linter.yaml rendered-default.yaml rendered-example.yaml rendered-mcp.yaml \
             | tee kube-linter-report.txt
       - name: Add kube-linter report to job summary
+        # Guarded with [ -f ... ] so this never fails the job even if the lint
+        # step above died before writing kube-linter-report.txt (e.g. the
+        # docker pull failing) — this step is purely informational.
         if: always()
         run: |
           {
             echo "### kube-linter (advisory)"
             echo '```'
-            cat kube-linter-report.txt
+            if [ -f kube-linter-report.txt ]; then
+              cat kube-linter-report.txt
+            else
+              echo "report not generated"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

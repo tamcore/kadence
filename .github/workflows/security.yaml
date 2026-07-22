@@ -145,12 +145,19 @@ jobs:
           trivyignores: .trivyignore
           output: trivy-report.txt
       - name: Add trivy report to job summary
+        # Guarded with [ -f ... ] so this never fails the job even if the scan
+        # step above died before writing trivy-report.txt (e.g. infra failure
+        # pulling the image) — this step is purely informational.
         if: always()
         run: |
           {
             echo "### Trivy image scan (advisory, HIGH/CRITICAL)"
             echo '```'
-            cat trivy-report.txt
+            if [ -f trivy-report.txt ]; then
+              cat trivy-report.txt
+            else
+              echo "report not generated"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -27,8 +27,9 @@ test('admin can create, edit, and delete a user', async ({ page }) => {
 	await page.getByRole('button', { name: /save changes/i }).click();
 	await expect(page.getByRole('row', { name: new RegExp(newEmail) })).toBeVisible();
 
-	// Delete it.
+	// Delete it. Delete requires confirmation via the ConfirmDialog.
 	const editedRow = page.getByRole('row', { name: new RegExp(newUsername) });
 	await editedRow.getByRole('button', { name: /delete/i }).click();
+	await page.getByRole('dialog', { name: 'Delete user' }).getByRole('button', { name: 'Delete' }).click();
 	await expect(editedRow).toHaveCount(0);
 });
