@@ -14,10 +14,10 @@ describe('/documents', () => {
 		await waitFor(() => expect(screen.getByText('plan.pdf')).toBeInTheDocument());
 	});
 
-	it('shows an error when loading fails', async () => {
+	it('shows the real error message when loading fails', async () => {
 		vi.spyOn(documentsApi, 'listDocuments').mockRejectedValue(new Error('boom'));
 		render(Page);
-		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not load/i));
+		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'));
 	});
 
 	it('asks for confirmation before deleting, and cancel keeps the document', async () => {

@@ -16,8 +16,8 @@
 		error = '';
 		try {
 			documents = await listDocuments();
-		} catch {
-			error = 'Could not load documents';
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not load documents';
 		} finally {
 			loading = false;
 		}
@@ -27,8 +27,8 @@
 		try {
 			await deleteDocument(id);
 			await load();
-		} catch {
-			error = 'Could not delete document';
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not delete document';
 		}
 	}
 
