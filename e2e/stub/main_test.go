@@ -108,8 +108,35 @@ func TestEmbeddingsReturnsFixedVector(t *testing.T) {
 	if body.Data[0].Index != 0 {
 		t.Fatalf("data[0].index = %d, want 0", body.Data[0].Index)
 	}
-	if len(body.Data[0].Embedding) != embeddingVectorLen {
-		t.Fatalf("data[0].embedding length = %d, want %d", len(body.Data[0].Embedding), embeddingVectorLen)
+	if len(body.Data[0].Embedding) != defaultEmbeddingVectorLen {
+		t.Fatalf("data[0].embedding length = %d, want %d", len(body.Data[0].Embedding), defaultEmbeddingVectorLen)
+	}
+}
+
+// TestEmbeddingsHonorsRequestedDimensions ensures the stub sizes its vectors
+// to whatever "dimensions" the caller requests (e.g. KADENCE_EMBED_DIMENSIONS
+// set to something other than the default), rather than a hardcoded length —
+// this is what makes the stub safe to use against fitDimensions validation.
+func TestEmbeddingsHonorsRequestedDimensions(t *testing.T) {
+	reqBody := `{"model":"stub","input":["hello"],"dimensions":256}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	handler().ServeHTTP(rec, req)
+
+	var body struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Data) != 1 {
+		t.Fatalf("data length = %d, want 1", len(body.Data))
+	}
+	if len(body.Data[0].Embedding) != 256 {
+		t.Fatalf("embedding length = %d, want 256", len(body.Data[0].Embedding))
 	}
 }
 
@@ -137,8 +164,8 @@ func TestEmbeddingsReturnsOnePerInput(t *testing.T) {
 		if d.Index != i {
 			t.Fatalf("data[%d].index = %d, want %d", i, d.Index, i)
 		}
-		if len(d.Embedding) != embeddingVectorLen {
-			t.Fatalf("data[%d].embedding length = %d, want %d", i, len(d.Embedding), embeddingVectorLen)
+		if len(d.Embedding) != defaultEmbeddingVectorLen {
+			t.Fatalf("data[%d].embedding length = %d, want %d", i, len(d.Embedding), defaultEmbeddingVectorLen)
 		}
 	}
 }
