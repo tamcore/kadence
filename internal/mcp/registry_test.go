@@ -1,12 +1,16 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -427,5 +431,202 @@ func TestRegistry_MergesUserServers(t *testing.T) {
 	}
 	if len(r.Servers()) != 1 {
 		t.Fatalf("Servers()=%d want 1", len(r.Servers()))
+	}
+}
+
+// newHangingThenWorkingServer stands up a real MCP server (like
+// newFakeGarminServer) but gates its very first HTTP request: the handler
+// signals started (closed exactly once) and then blocks until release is
+// closed, before serving the request normally. This lets tests observe "a
+// dial is in flight but not yet complete" and then let it succeed on demand,
+// exercising the real network round trip (not an interface fake).
+func newHangingThenWorkingServer(t *testing.T) (ts *httptest.Server, started, release chan struct{}) {
+	t.Helper()
+
+	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
+	tool := mcpgo.NewTool("get_activities", mcpgo.WithDescription("Get activities."))
+	srv.AddTool(tool, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(anonymizedActivitiesFixture), nil
+	})
+	httpSrv := mcpserver.NewStreamableHTTPServer(srv)
+
+	started = make(chan struct{})
+	release = make(chan struct{})
+	var startOnce, gateOnce sync.Once
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gateOnce.Do(func() {
+			startOnce.Do(func() { close(started) })
+			<-release
+		})
+		httpSrv.ServeHTTP(w, r)
+	}))
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		ts.Close()
+	})
+	return ts, started, release
+}
+
+// newFakeGarminServerCountingInitializes is like newFakeGarminServer but also
+// counts how many "initialize" JSON-RPC requests actually reach the server —
+// i.e. how many real dials were performed — so tests can assert concurrent
+// callers for the same server shared a single dial instead of each dialing
+// independently.
+func newFakeGarminServerCountingInitializes(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+
+	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
+	tool := mcpgo.NewTool("get_activities", mcpgo.WithDescription("Get activities."))
+	srv.AddTool(tool, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(anonymizedActivitiesFixture), nil
+	})
+	httpSrv := mcpserver.NewStreamableHTTPServer(srv)
+
+	var initializes atomic.Int32
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if bytes.Contains(body, []byte(`"method":"initialize"`)) {
+			initializes.Add(1)
+		}
+		httpSrv.ServeHTTP(w, r)
+	})
+	ts := httptest.NewServer(wrapped)
+	t.Cleanup(ts.Close)
+	return ts, &initializes
+}
+
+// TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock verifies
+// that clientFor's dial for one server never holds the registry lock, so a
+// slow/hanging dial to one env server cannot block a concurrent clientFor
+// call for a DIFFERENT server (e.g. a cache-hit lookup, or another server's
+// own dial).
+func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing.T) {
+	fastTs := newFakeGarminServer(t)
+	slowTs, started, release := newHangingThenWorkingServer(t)
+
+	slowServer := Server{Name: "slow", Scope: scopeGlobal, URL: slowTs.URL, Transport: transportStreamableHTTP}
+	fastServer := Server{Name: testGarminName, Scope: scopeGlobal, URL: fastTs.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{slowServer, fastServer}, nil, nil)
+
+	slowDone := make(chan error, 1)
+	go func() {
+		_, err := reg.clientFor(context.Background(), slowServer)
+		slowDone <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow server's dial never reached the server")
+	}
+
+	// The slow dial is now blocked mid-handshake. A concurrent dial to a
+	// DIFFERENT server must complete promptly rather than queueing behind it.
+	fastDone := make(chan error, 1)
+	go func() {
+		_, err := reg.clientFor(context.Background(), fastServer)
+		fastDone <- err
+	}()
+
+	select {
+	case err := <-fastDone:
+		if err != nil {
+			t.Fatalf("fast server's dial: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fast server's dial was blocked behind the slow server's in-flight dial")
+	}
+
+	close(release)
+	if err := <-slowDone; err != nil {
+		t.Fatalf("slow server's dial (after release): %v", err)
+	}
+}
+
+// TestRegistry_ClientForDedupsConcurrentDialsToSameServer verifies that
+// concurrent clientFor calls racing on a cache miss for the SAME server
+// share a single in-flight dial: only one "initialize" handshake reaches the
+// server, every caller gets the same client instance, and exactly one entry
+// ends up cached.
+func TestRegistry_ClientForDedupsConcurrentDialsToSameServer(t *testing.T) {
+	ts, initializes := newFakeGarminServerCountingInitializes(t)
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{s}, nil, nil)
+
+	const n = 10
+	var wg sync.WaitGroup
+	clients := make([]mcpClient, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			clients[i], errs[i] = reg.clientFor(context.Background(), s)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("clientFor[%d]: %v", i, err)
+		}
+	}
+	for i, c := range clients {
+		if c != clients[0] {
+			t.Fatalf("clientFor[%d] returned a different client instance than [0]; want the one shared dial's result", i)
+		}
+	}
+	if got := initializes.Load(); got != 1 {
+		t.Fatalf("server saw %d initialize handshakes for %d concurrent dials to the same server, want exactly 1 (deduped)", got, n)
+	}
+	if n := len(reg.clients); n != 1 {
+		t.Fatalf("clients cached = %d, want 1", n)
+	}
+}
+
+// TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale defines
+// the eviction-during-inflight-dial behavior: evicting a server whose dial
+// is still in flight is a harmless no-op (there is nothing cached yet to
+// evict), it must not panic, and once the in-flight dial completes its
+// result is cached normally — the earlier eviction must not "stick" and
+// suppress caching a fresh, non-stale client.
+func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing.T) {
+	ts, started, release := newHangingThenWorkingServer(t)
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{s}, nil, nil)
+
+	dialDone := make(chan error, 1)
+	go func() {
+		_, err := reg.clientFor(context.Background(), s)
+		dialDone <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial never reached the server")
+	}
+
+	// Evict while the dial is still in flight: nothing is cached yet for
+	// this key, so this must be a no-op — not a panic.
+	reg.evictClient(s)
+	if got := len(reg.clients); got != 0 {
+		t.Fatalf("clients cached = %d, want 0 while the dial is still in flight", got)
+	}
+
+	close(release)
+	if err := <-dialDone; err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	// The dial's own (fresh, non-stale) result must land in the cache once
+	// it completes; the earlier no-op eviction must not have suppressed it.
+	if got := len(reg.clients); got != 1 {
+		t.Fatalf("clients cached = %d, want 1 after the dial completes", got)
 	}
 }
