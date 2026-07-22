@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -274,6 +276,137 @@ func (f *fakeUserSrc) AllServers(_ context.Context) ([]Server, error) {
 		all = append(all, s...)
 	}
 	return all, nil
+}
+
+// newFakeGarminServerToggleable is like newFakeGarminServer, but requests
+// can be made to fail (500) on demand via the returned *atomic.Bool, to
+// exercise client-eviction-on-failure without tearing down the server.
+func newFakeGarminServerToggleable(t *testing.T) (*httptest.Server, *atomic.Bool) {
+	t.Helper()
+
+	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
+	tool := mcpgo.NewTool("get_activities", mcpgo.WithDescription("Get activities."))
+	srv.AddTool(tool, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(anonymizedActivitiesFixture), nil
+	})
+	httpSrv := mcpserver.NewStreamableHTTPServer(srv)
+
+	var fail atomic.Bool
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		httpSrv.ServeHTTP(w, r)
+	})
+	ts := httptest.NewServer(wrapped)
+	t.Cleanup(ts.Close)
+	return ts, &fail
+}
+
+// TestRegistry_EvictsClientOnProbeFailure verifies that when a cached
+// env-server client's probe fails, the registry drops it from the client
+// cache so the next use redials instead of reusing the broken connection —
+// and that redial succeeds once the server recovers.
+func TestRegistry_EvictsClientOnProbeFailure(t *testing.T) {
+	ts, fail := newFakeGarminServerToggleable(t)
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	ctx := context.Background()
+
+	if _, err := reg.Probe(ctx, s); err != nil {
+		t.Fatalf("initial Probe: %v", err)
+	}
+	if n := len(reg.clients); n != 1 {
+		t.Fatalf("clients cached = %d, want 1 after a successful probe", n)
+	}
+
+	fail.Store(true)
+	if _, err := reg.Probe(ctx, s); err == nil {
+		t.Fatal("Probe over a broken connection must return an error")
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("clients cached = %d, want 0 (evicted) after a failed probe", n)
+	}
+
+	fail.Store(false)
+	tools, err := reg.Probe(ctx, s)
+	if err != nil {
+		t.Fatalf("Probe after recovery: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("Probe after recovery returned no tools, want the redialed client's tools")
+	}
+	if n := len(reg.clients); n != 1 {
+		t.Fatalf("clients cached = %d, want 1 after redial", n)
+	}
+}
+
+// TestRegistry_EvictsClientOnCallFailure mirrors
+// TestRegistry_EvictsClientOnProbeFailure for the Call path (a tool-call
+// failure, not just a health-probe failure, must also evict the client).
+func TestRegistry_EvictsClientOnCallFailure(t *testing.T) {
+	ts, fail := newFakeGarminServerToggleable(t)
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	ctx := context.Background()
+
+	if _, err := reg.Call(ctx, "anyuser", "garmin__get_activities", `{}`); err != nil {
+		t.Fatalf("initial Call: %v", err)
+	}
+	if n := len(reg.clients); n != 1 {
+		t.Fatalf("clients cached = %d, want 1 after a successful call", n)
+	}
+
+	fail.Store(true)
+	if _, err := reg.Call(ctx, "anyuser", "garmin__get_activities", `{}`); err == nil {
+		t.Fatal("Call over a broken connection must return an error")
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("clients cached = %d, want 0 (evicted) after a failed call", n)
+	}
+}
+
+// countingUserSrc wraps fakeUserSrc, counting ServersForUser calls so tests
+// can assert a chat turn resolves user servers exactly once (not once per
+// tool call), via Registry.SnapshotFor.
+type countingUserSrc struct {
+	fakeUserSrc
+	calls atomic.Int32
+}
+
+func (c *countingUserSrc) ServersForUser(ctx context.Context, u string) ([]Server, error) {
+	c.calls.Add(1)
+	return c.fakeUserSrc.ServersForUser(ctx, u)
+}
+
+// TestRegistry_SnapshotForResolvesUserServersOnce verifies a UserSnapshot
+// resolves the user's DB-backed servers exactly once at SnapshotFor time,
+// and that its ToolsFor/Call use that resolved slice — not a fresh
+// ServersForUser query — however many times they're called afterward.
+func TestRegistry_SnapshotForResolvesUserServersOnce(t *testing.T) {
+	ts := newFakeGarminServer(t)
+	userSrv := Server{Name: "mine", Scope: userScopePrefix + "alice", URL: ts.URL, Transport: transportStreamableHTTP}
+	src := &countingUserSrc{fakeUserSrc: fakeUserSrc{perUser: map[string][]Server{"alice": {userSrv}}}}
+	r := NewRegistry(nil, nil, src)
+
+	snap := r.SnapshotFor(context.Background(), "alice")
+	if got := src.calls.Load(); got != 1 {
+		t.Fatalf("ServersForUser calls after SnapshotFor = %d, want 1", got)
+	}
+
+	for i := range 3 {
+		if _, err := snap.ToolsFor(context.Background()); err != nil {
+			t.Fatalf("ToolsFor iteration %d: %v", i, err)
+		}
+		if _, err := snap.Call(context.Background(), "mine__get_activities", `{}`); err != nil {
+			t.Fatalf("Call iteration %d: %v", i, err)
+		}
+	}
+
+	if got := src.calls.Load(); got != 1 {
+		t.Fatalf("ServersForUser calls after 3 ToolsFor+Call rounds = %d, want still 1 (snapshot reused)", got)
+	}
 }
 
 func TestRegistry_MergesUserServers(t *testing.T) {
