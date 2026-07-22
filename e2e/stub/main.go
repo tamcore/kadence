@@ -13,18 +13,18 @@ import (
 )
 
 const (
-	defaultStubAddr    = ":9099"
-	embeddingVectorLen = 8
-	stubModelName      = "stub"
+	defaultStubAddr = ":9099"
+	// defaultEmbeddingVectorLen mirrors config.EmbedDimensions' own default
+	// (KADENCE_EMBED_DIMENSIONS=1024): used whenever a request omits
+	// "dimensions", so the stub's vectors fit the chunks.embedding
+	// vector(1024) column without the caller having to ask for it explicitly.
+	defaultEmbeddingVectorLen = 1024
+	stubModelName             = "stub"
 )
 
 // chatContentTokens are the deterministic content deltas streamed back for
 // every chat completion request, regardless of the request body.
 var chatContentTokens = []string{"This is ", "a test ", "coaching reply."}
-
-// fixedEmbedding is the deterministic embedding vector returned for every
-// input string.
-var fixedEmbedding = [embeddingVectorLen]float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
 
 // chatCompletionChunk mirrors the shape the openai-go/v3 stream decoder
 // consumes (see internal/provider/openaicompat_test.go): a "choices" array
@@ -42,9 +42,13 @@ type chatCompletionChunkDelta struct {
 }
 
 // embeddingsRequest is the subset of the OpenAI embeddings request body this
-// stub needs: the list of input strings to embed.
+// stub needs: the list of input strings to embed, and the optional
+// "dimensions" field (honored so callers that pin KADENCE_EMBED_DIMENSIONS
+// get vectors of the width they asked for, same as a real MRL-capable
+// provider would return).
 type embeddingsRequest struct {
-	Input []string `json:"input"`
+	Input      []string `json:"input"`
+	Dimensions int      `json:"dimensions"`
 }
 
 // embeddingsResponse mirrors the OpenAI embeddings response envelope.
@@ -124,8 +128,12 @@ func writeSSEChunk(w http.ResponseWriter, v any) error {
 	return nil
 }
 
-// handleEmbeddings returns the same fixed embedding vector for every input
-// string in the request, one datum per input (in order).
+// handleEmbeddings returns a deterministic, fixed-pattern embedding vector
+// for every input string in the request, one datum per input (in order). The
+// vector length honors the request's "dimensions" field when present,
+// falling back to defaultEmbeddingVectorLen otherwise — this keeps the stub
+// dumb (no real embedding math) while still matching the width the caller
+// (and the fixed-width chunks.embedding column) expects.
 func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	var req embeddingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -138,12 +146,18 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		inputCount = 1
 	}
 
+	dims := req.Dimensions
+	if dims <= 0 {
+		dims = defaultEmbeddingVectorLen
+	}
+	embedding := fixedEmbedding(dims)
+
 	data := make([]embeddingDatum, 0, inputCount)
 	for i := 0; i < inputCount; i++ {
 		data = append(data, embeddingDatum{
 			Object:    "embedding",
 			Index:     i,
-			Embedding: fixedEmbedding[:],
+			Embedding: embedding,
 		})
 	}
 
@@ -158,6 +172,21 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(res); err != nil {
 		slog.Error("write embeddings response", "error", err)
 	}
+}
+
+// fixedEmbeddingPattern repeats to fill vectors of any requested length; kept
+// short and deterministic rather than random so test assertions can rely on
+// exact values.
+var fixedEmbeddingPattern = []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+
+// fixedEmbedding returns a deterministic vector of exactly n dimensions by
+// tiling fixedEmbeddingPattern.
+func fixedEmbedding(n int) []float64 {
+	v := make([]float64, n)
+	for i := range v {
+		v[i] = fixedEmbeddingPattern[i%len(fixedEmbeddingPattern)]
+	}
+	return v
 }
 
 // stubAddr resolves the listen address from $STUB_ADDR, defaulting to
