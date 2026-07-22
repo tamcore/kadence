@@ -1463,7 +1463,7 @@ func TestStreamTruncatesTitleMultibyte(t *testing.T) {
 
 	// String with emoji (multi-byte in UTF-8).
 	// Create a string with 70 runes (all emoji) → should be truncated to 60 runes.
-	longMultibyte := strings.Repeat("🎯", 70) // Fire emoji, 4 bytes each
+	longMultibyte := strings.Repeat("🎯", 70) // Dart/target emoji, 4 bytes each
 	sink := &capturingSink{}
 	if err := svc.Stream(context.Background(), testUserID, testUsername, "", "", longMultibyte, sink); err != nil {
 		t.Fatalf("Stream: %v", err)

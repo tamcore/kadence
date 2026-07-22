@@ -29,6 +29,22 @@ Two options:
 
 Migrations (`goose`, embedded SQL) run automatically on startup — no separate job.
 
+## Upgrade notes
+
+**This release changes the app Deployment's selector** (it now includes
+`app.kubernetes.io/component: app`, scoping it to the app pod instead of every
+workload in the release). Kubernetes Deployment selectors are immutable, so
+`helm upgrade` against an existing install will fail with an "field is
+immutable" error. Before upgrading, delete the existing Deployment once:
+
+```bash
+kubectl delete deployment <release-name> -n kadence
+```
+
+then re-run `helm upgrade`/`helm apply`. This causes a brief outage (pods are
+recreated) but does not touch the Service or PodDisruptionBudget, and no data
+is lost — Postgres and any persistent volumes are unaffected.
+
 ## MCP servers
 
 Each entry under `mcp.servers[]` renders a full, isolated unit:
