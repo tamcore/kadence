@@ -45,7 +45,7 @@ func fullDeps() api.Deps {
 		Documents:   handlers.NewDocuments(nil, nil, 0),
 		Context:     handlers.NewContext(nil, nil),
 		Credentials: handlers.NewCredentials(nil),
-		MCP:         handlers.NewMCP(nil, nil, nil, false),
+		MCP:         handlers.NewMCP(nil, nil, nil, false, 10),
 		Profile:     handlers.NewProfile(nil, nil, cfg),
 		SessionsAPI: handlers.NewSessions(nil),
 		WebAuthn:    handlers.NewWebAuthn(nil, nil, nil, nil, nil, cfg),

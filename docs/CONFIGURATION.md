@@ -111,6 +111,7 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_MCP_MAX_TOOLS` | `100` | Cap on tool definitions injected per request. |
 | `KADENCE_MCP_CA_FILE` | — | PEM CA bundle for verifying MCP/markitdown TLS. Empty = system trust store. |
 | `KADENCE_USER_MCP_ALLOWED_HOSTS` | — | Comma-separated host allowlist for user-registered MCP servers. Enables the feature only when set together with `KADENCE_ENCRYPTION_KEY`. |
+| `KADENCE_USER_MCP_MAX_SERVERS` | `10` | Max user-defined MCP servers a single owner may register. `POST /api/mcp` returns 400 over the cap. |
 
 ### MCP server env contract
 

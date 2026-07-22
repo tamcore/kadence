@@ -167,9 +167,9 @@ func Run() error {
 			// a nil pointer (which would make h.store != nil checks pass
 			// incorrectly).
 			if userRepo != nil {
-				deps.MCP = handlers.NewMCP(poller, userRepo, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled())
+				deps.MCP = handlers.NewMCP(poller, userRepo, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled(), cfg.UserMCPMaxServers)
 			} else {
-				deps.MCP = handlers.NewMCP(poller, nil, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled())
+				deps.MCP = handlers.NewMCP(poller, nil, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled(), cfg.UserMCPMaxServers)
 			}
 		}
 		skills, err := skill.Load()

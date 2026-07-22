@@ -38,12 +38,14 @@ type MCP struct {
 	store        mcpUserStore
 	allowedHosts []string
 	enabled      bool
+	maxServers   int
 }
 
 // NewMCP constructs the MCP handler. store may be nil, in which case List
-// still works (canAdd=false) and the CRUD endpoints 403.
-func NewMCP(h mcpHealth, s mcpUserStore, allowedHosts []string, enabled bool) *MCP {
-	return &MCP{health: h, store: s, allowedHosts: allowedHosts, enabled: enabled}
+// still works (canAdd=false) and the CRUD endpoints 403. maxServers caps how
+// many servers a single owner may register via Create; <=0 disables the cap.
+func NewMCP(h mcpHealth, s mcpUserStore, allowedHosts []string, enabled bool, maxServers int) *MCP {
+	return &MCP{health: h, store: s, allowedHosts: allowedHosts, enabled: enabled, maxServers: maxServers}
 }
 
 type mcpServerDTO struct {
@@ -159,9 +161,29 @@ func (h *MCP) Create(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if err := mcp.ValidateServerName(in.Name); err != nil {
+		RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := mcp.ValidateTransport(in.Transport); err != nil {
+		RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := mcp.HostAllowed(in.URL, h.allowedHosts); err != nil {
 		RespondError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.maxServers > 0 {
+		existing, err := h.store.ListForOwner(r.Context(), u.ID)
+		if err != nil {
+			slog.Error("list user mcp servers", "err", err)
+			RespondError(w, http.StatusInternalServerError, "could not create server")
+			return
+		}
+		if len(existing) >= h.maxServers {
+			RespondError(w, http.StatusBadRequest, "user MCP server limit reached")
+			return
+		}
 	}
 	id, err := h.store.Create(r.Context(), u.ID, store.UserMCPInput{
 		Name:      in.Name,
@@ -199,6 +221,14 @@ func (h *MCP) Update(w http.ResponseWriter, r *http.Request) {
 	var in mcpUpsertRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		RespondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if err := mcp.ValidateServerName(in.Name); err != nil {
+		RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := mcp.ValidateTransport(in.Transport); err != nil {
+		RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := mcp.HostAllowed(in.URL, h.allowedHosts); err != nil {
