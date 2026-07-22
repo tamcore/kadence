@@ -112,7 +112,7 @@ func Run() error {
 		}
 		var rag *chat.RAG
 		if cfg.RAGEnabled() {
-			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel)
+			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
 			chunkRepo := store.NewChunkRepository(pool, cfg.EmbedModel)
 			rag = chat.NewRAG(embedder, chunkRepo, cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
