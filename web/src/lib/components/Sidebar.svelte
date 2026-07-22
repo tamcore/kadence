@@ -6,10 +6,13 @@
 	import { clearAuth, currentUser, isAdmin } from '$lib/stores/auth';
 	import { closeSidebar } from '$lib/stores/ui';
 	import { onMount } from 'svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	// The sidebar is global, so load history on every shell route (incl. home)
 	// — the start page greets with the conversation history.
 	onMount(refreshConversations);
+
+	let deleteTargetId = $state<string | null>(null);
 
 	function startNew(): void {
 		newChat();
@@ -17,9 +20,16 @@
 		closeSidebar();
 	}
 
-	async function del(id: string, e: Event): Promise<void> {
+	function requestDelete(id: string, e: Event): void {
 		e.preventDefault();
 		e.stopPropagation();
+		deleteTargetId = id;
+	}
+
+	async function confirmDelete(): Promise<void> {
+		const id = deleteTargetId;
+		deleteTargetId = null;
+		if (!id) return;
 		const wasActive = id === $page.params.id;
 		await removeConversation(id);
 		if (wasActive) {
@@ -57,7 +67,7 @@
 						>
 							{c.title || 'Untitled'}
 						</a>
-						<button class="del" aria-label="Delete conversation" onclick={(e) => del(c.id, e)}>×</button>
+						<button class="del" aria-label="Delete conversation" onclick={(e) => requestDelete(c.id, e)}>×</button>
 					</li>
 				{/each}
 			</ul>
@@ -82,6 +92,14 @@
 		<button class="logout" onclick={handleLogout}>Log out</button>
 	</div>
 </div>
+
+<ConfirmDialog
+	open={deleteTargetId !== null}
+	title="Delete conversation"
+	message="Delete this conversation? This cannot be undone."
+	onConfirm={confirmDelete}
+	onCancel={() => (deleteTargetId = null)}
+/>
 
 <style>
 	.sidebar-inner {

@@ -9,7 +9,16 @@ vi.mock('$lib/api/chat', () => ({
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
-import { activeId, chatError, credentialRequest, messages, newChat, sendMessage, sending } from './chat';
+import {
+	activeId,
+	chatError,
+	credentialRequest,
+	messages,
+	newChat,
+	sendMessage,
+	sending,
+	stopGeneration
+} from './chat';
 
 async function* events(evs: unknown[]) {
 	for (const e of evs) yield e;
@@ -75,6 +84,29 @@ describe('chat store', () => {
 		expect(get(chatError)).toBeNull();
 		// sending should be false
 		expect(get(sending)).toBe(false);
+	});
+
+	it('stopGeneration aborts the stream, keeps partial text, and marks the message stopped', async () => {
+		streamChatMock.mockImplementationOnce(async function* (_body: unknown, signal: AbortSignal) {
+			yield { type: 'meta', conversationId: '66666666-6666-6666-6666-666666666666' };
+			yield { type: 'token', delta: 'partial reply' };
+			await new Promise((_resolve, reject) => {
+				signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+			});
+		});
+
+		const sendPromise = sendMessage('hi');
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		stopGeneration();
+
+		await sendPromise;
+
+		expect(get(chatError)).toBeNull();
+		expect(get(sending)).toBe(false);
+		const assistant = get(messages)[1];
+		expect(assistant.content).toBe('partial reply');
+		expect(assistant.stopped).toBe(true);
 	});
 
 	it('transitions a running tool entry to done without duplicating it', async () => {

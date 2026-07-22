@@ -21,6 +21,13 @@ export function newChat(): void {
 	credentialRequest.set(null);
 }
 
+// stopGeneration aborts the in-flight stream, if any. The partial assistant
+// reply is kept and marked as stopped rather than discarded or surfaced as
+// an error (see the abort branch in sendMessage's catch).
+export function stopGeneration(): void {
+	abort?.abort();
+}
+
 export async function refreshConversations(): Promise<void> {
 	try {
 		conversations.set(await chatApi.listConversations());
@@ -139,9 +146,18 @@ export async function sendMessage(text: string): Promise<string | null> {
 			}
 		}
 	} catch {
-		// Intentional aborts should not surface as errors to the user
+		// Intentional aborts should not surface as errors to the user; mark the
+		// partial assistant reply as stopped instead so the UI can end cleanly.
 		if (!localAbort.signal.aborted) {
 			chatError.set('The chat stream was interrupted');
+		} else {
+			messages.update((m) => {
+				const copy = [...m];
+				const current = copy[assistantIdx];
+				if (current) copy[assistantIdx] = { ...current, stopped: true };
+				return copy;
+			});
+			credentialRequest.set(null);
 		}
 		return null;
 	} finally {

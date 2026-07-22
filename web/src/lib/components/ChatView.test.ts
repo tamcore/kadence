@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const sendMessageMock = vi.fn();
+const stopGenerationMock = vi.fn();
 
 vi.mock('$lib/stores/chat', async () => {
 	const { writable } = await import('svelte/store');
@@ -11,16 +12,18 @@ vi.mock('$lib/stores/chat', async () => {
 		chatError: writable(null),
 		activeId: writable(null),
 		credentialRequest: writable(null),
-		sendMessage: (...a: unknown[]) => sendMessageMock(...a)
+		sendMessage: (...a: unknown[]) => sendMessageMock(...a),
+		stopGeneration: (...a: unknown[]) => stopGenerationMock(...a)
 	};
 });
 
 import ChatView from './ChatView.svelte';
-import { messages } from '$lib/stores/chat';
+import { messages, sending } from '$lib/stores/chat';
 
 afterEach(() => {
 	vi.clearAllMocks();
 	(messages as unknown as { set: (v: unknown[]) => void }).set([{ role: 'assistant', content: '**hi**' }]);
+	(sending as unknown as { set: (v: boolean) => void }).set(false);
 });
 
 describe('ChatView', () => {
@@ -95,6 +98,27 @@ describe('ChatView', () => {
 		]);
 
 		await waitFor(() => expect(threadEl.scrollTop).toBe(500));
+	});
+
+	it('shows a stop button only while sending, and it calls stopGeneration', async () => {
+		(sending as unknown as { set: (v: boolean) => void }).set(true);
+		render(ChatView, { props: {} });
+		const stopButton = screen.getByRole('button', { name: /stop generating/i });
+		await fireEvent.click(stopButton);
+		expect(stopGenerationMock).toHaveBeenCalled();
+	});
+
+	it('does not show a stop button when not sending', () => {
+		render(ChatView, { props: {} });
+		expect(screen.queryByRole('button', { name: /stop generating/i })).not.toBeInTheDocument();
+	});
+
+	it('shows a stopped marker on an aborted assistant reply', () => {
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ role: 'assistant', content: 'partial reply', stopped: true }
+		]);
+		render(ChatView, { props: {} });
+		expect(screen.getByText('Stopped')).toBeInTheDocument();
 	});
 
 	it('renders tool parts before later text parts, in order', () => {

@@ -21,6 +21,7 @@ export interface ChatMessage {
 	role: 'user' | 'assistant';
 	content: string;
 	parts?: MessagePart[];
+	stopped?: boolean;
 }
 
 export interface CredentialField {

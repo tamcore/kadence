@@ -11,6 +11,7 @@
 	import { isAdmin } from '$lib/stores/auth';
 	import McpServerForm from '$lib/components/McpServerForm.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let servers = $state<McpServer[]>([]);
 	let canAdd = $state(false);
@@ -20,6 +21,7 @@
 	let showAddForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let formError = $state('');
+	let deleteTarget = $state<McpServer | null>(null);
 
 	async function reload(): Promise<void> {
 		const res = await listMcp();
@@ -67,6 +69,16 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Could not delete MCP server';
 		}
+	}
+
+	function requestDelete(s: McpServer): void {
+		deleteTarget = s;
+	}
+
+	async function confirmDelete(): Promise<void> {
+		const target = deleteTarget;
+		deleteTarget = null;
+		if (target?.id != null) await handleDelete(target.id);
 	}
 
 	function startEdit(s: McpServer): void {
@@ -125,7 +137,7 @@
 								{#if s.editable}
 									<div class="row-actions">
 										<Button variant="ghost" onclick={() => startEdit(s)}>Edit</Button>
-										<Button variant="danger" onclick={() => handleDelete(s.id!)}>Delete</Button>
+										<Button variant="danger" onclick={() => requestDelete(s)}>Delete</Button>
 									</div>
 								{/if}
 							</div>
@@ -146,6 +158,14 @@
 		{/if}
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Delete MCP server"
+	message={`Delete "${deleteTarget?.name}"? This cannot be undone.`}
+	onConfirm={confirmDelete}
+	onCancel={() => (deleteTarget = null)}
+/>
 
 <style>
 	.page {
