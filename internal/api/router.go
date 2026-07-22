@@ -17,6 +17,16 @@ import (
 	"github.com/tamcore/kadence/web"
 )
 
+const (
+	// documentsPath and adminDocumentsPath are the two document-upload
+	// routes: they carry a larger, handler-level body cap (cfg.UploadMaxBytes)
+	// and so are exempted from the global middleware.MaxBodyBytes cap (see
+	// isUploadRoute). Shared as constants between route registration and the
+	// exemption predicate so the two can't drift apart.
+	documentsPath      = "/api/documents"
+	adminDocumentsPath = "/api/admin/documents"
+)
+
 // Deps carries the dependencies the router needs.
 type Deps struct {
 	Users       *store.UserRepository
@@ -48,17 +58,33 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.Users != nil && deps.Sessions != nil {
 		// Global per-IP cap and body-size cap on all other /api routes;
 		// healthz and the static frontend are registered outside this group
-		// and stay unlimited. /api/documents overrides the body cap at the
-		// route level with the larger cfg.UploadMaxBytes (see documents.go).
+		// and stay unlimited. The document-upload routes are exempted from
+		// the body-size cap here (see isUploadRoute): they apply their own
+		// larger cfg.UploadMaxBytes cap at the handler level (documents.go),
+		// and nesting a second, smaller http.MaxBytesReader in front of that
+		// would silently override it, since the smaller of two nested caps
+		// always wins regardless of registration order.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(deps.Config.RateLimitGlobal))
-			r.Use(middleware.MaxBodyBytes(deps.Config.ResolvedMaxBodyBytes()))
+			r.Use(middleware.MaxBodyBytesExempt(deps.Config.ResolvedMaxBodyBytes(), isUploadRoute))
 			mountAuth(r, deps)
 		})
 	}
 
 	mountFrontend(r)
 	return r
+}
+
+// isUploadRoute reports whether r targets a document-upload endpoint, which
+// governs its own body size via cfg.UploadMaxBytes (see documents.go) rather
+// than the global body cap. Route registration (and therefore the
+// RequireAuth/CSRF chain each of these sits behind) is unaffected — this only
+// exempts the request from the outer middleware.MaxBodyBytes wrapping.
+func isUploadRoute(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	return r.URL.Path == documentsPath || r.URL.Path == adminDocumentsPath
 }
 
 func mountAuth(r chi.Router, deps Deps) {
@@ -133,8 +159,8 @@ func mountAuth(r chi.Router, deps Deps) {
 		}
 
 		if deps.Documents != nil {
-			r.Post("/api/documents", deps.Documents.Upload)
-			r.Get("/api/documents", deps.Documents.List)
+			r.Post(documentsPath, deps.Documents.Upload)
+			r.Get(documentsPath, deps.Documents.List)
 			r.Delete("/api/documents/{id}", deps.Documents.Delete)
 		}
 
@@ -170,8 +196,8 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Delete("/api/users/{id}", usersH.Delete)
 
 			if deps.Documents != nil {
-				r.Post("/api/admin/documents", deps.Documents.UploadPublic)
-				r.Get("/api/admin/documents", deps.Documents.ListPublic)
+				r.Post(adminDocumentsPath, deps.Documents.UploadPublic)
+				r.Get(adminDocumentsPath, deps.Documents.ListPublic)
 				r.Delete("/api/admin/documents/{id}", deps.Documents.DeletePublic)
 			}
 		})

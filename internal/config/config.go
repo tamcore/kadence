@@ -86,10 +86,13 @@ type Config struct {
 	IngestChunkChars int
 
 	// MaxBodyBytes caps the request body size for /api routes in general
-	// (KADENCE_MAX_BODY_BYTES, default 1 MiB). /api/documents overrides this
-	// with the larger UploadMaxBytes at the route level (documents.go wraps
-	// r.Body again with its own http.MaxBytesReader), so this global cap
-	// never blocks legitimate uploads.
+	// (KADENCE_MAX_BODY_BYTES, default 1 MiB). The document-upload routes
+	// (POST /api/documents, POST /api/admin/documents) are exempted from this
+	// cap at the router level (see isUploadRoute in internal/api/router.go)
+	// and instead governed solely by the larger UploadMaxBytes, applied by
+	// the Documents handler. The two caps are never nested: a smaller outer
+	// http.MaxBytesReader would silently win over a larger inner one and
+	// break uploads above MaxBodyBytes despite fitting under UploadMaxBytes.
 	MaxBodyBytes int
 
 	// Markitdown ingestion extractor (markitdown-mcp). Enabled iff
