@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
@@ -72,6 +73,35 @@ func TestLoginWrongPassword(t *testing.T) {
 	h.Login(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestLoginUnknownUserRunsDummyCompareAndMatchesWrongPasswordResponse(t *testing.T) {
+	h, _ := newAuth(t, "hunter2")
+
+	unknownBody := `{"username":"nope","password":"whatever","remember":false}`
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.Login(rec, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(unknownBody)))
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	// bcrypt.DefaultCost takes tens of milliseconds; a near-zero elapsed time
+	// means the unknown-user path short-circuited without running the dummy
+	// compare, which is exactly the timing oracle this test guards against.
+	if elapsed < 5*time.Millisecond {
+		t.Fatalf("unknown-user login returned in %s; want a bcrypt-comparable delay (dummy compare not executed?)", elapsed)
+	}
+
+	wrongBody := `{"username":"alice","password":"WRONG","remember":false}`
+	rec2 := httptest.NewRecorder()
+	h.Login(rec2, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(wrongBody)))
+
+	if rec.Body.String() != rec2.Body.String() {
+		t.Fatalf("unknown-user body %q != wrong-password body %q; response must not leak username validity",
+			rec.Body.String(), rec2.Body.String())
 	}
 }
 

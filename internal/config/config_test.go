@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+// testDatabaseURL is a placeholder DSN used across tests that only need
+// Validate() to see a non-empty DatabaseURL.
+const testDatabaseURL = "postgres://x"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("KADENCE_LISTEN_ADDR", "")
 	t.Setenv("KADENCE_ENV", "")
@@ -63,7 +67,7 @@ func TestValidateRequiresDatabaseURL(t *testing.T) {
 }
 
 func TestValidateRequiresCSRFSecretInProd(t *testing.T) {
-	cfg := Config{DatabaseURL: "postgres://x", Env: "prod"}
+	cfg := Config{DatabaseURL: testDatabaseURL, Env: "prod"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() = nil, want error for missing CSRF secret in prod")
 	}
@@ -295,7 +299,7 @@ func TestUserMCPDisabledWhenNoKey(t *testing.T) {
 }
 
 func TestValidateRequiresEncryptionKeyInProdWhenAllowlistSet(t *testing.T) {
-	t.Setenv("KADENCE_DATABASE_URL", "postgres://x")
+	t.Setenv("KADENCE_DATABASE_URL", testDatabaseURL)
 	t.Setenv("KADENCE_ENV", "prod")
 	t.Setenv("KADENCE_CSRF_SECRET", "0123456789abcdef0123456789abcdef")
 	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
@@ -314,7 +318,7 @@ func TestValidateRequiresEncryptionKeyInProdWhenAllowlistSet(t *testing.T) {
 }
 
 func TestValidatePassesInProdWithValidEncryptionKeyAndAllowlist(t *testing.T) {
-	t.Setenv("KADENCE_DATABASE_URL", "postgres://x")
+	t.Setenv("KADENCE_DATABASE_URL", testDatabaseURL)
 	t.Setenv("KADENCE_ENV", "prod")
 	t.Setenv("KADENCE_CSRF_SECRET", "0123456789abcdef0123456789abcdef")
 	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
@@ -328,7 +332,7 @@ func TestValidatePassesInProdWithValidEncryptionKeyAndAllowlist(t *testing.T) {
 }
 
 func TestValidateSkipsEncryptionKeyRuleOutsideProd(t *testing.T) {
-	t.Setenv("KADENCE_DATABASE_URL", "postgres://x")
+	t.Setenv("KADENCE_DATABASE_URL", testDatabaseURL)
 	t.Setenv("KADENCE_ENV", "")
 	t.Setenv("KADENCE_USER_MCP_ALLOWED_HOSTS", "a.example.io")
 	t.Setenv("KADENCE_ENCRYPTION_KEY", "")
@@ -379,6 +383,57 @@ func TestLoad_WebAuthnRPID(t *testing.T) {
 func TestWebAuthnEnabled_EmptyIsDisabled(t *testing.T) {
 	if (Config{}).WebAuthnEnabled() {
 		t.Fatal("empty RP ID must be disabled")
+	}
+}
+
+func TestRateLimitDefaults(t *testing.T) {
+	t.Setenv("KADENCE_RATE_LIMIT_GLOBAL", "")
+	t.Setenv("KADENCE_RATE_LIMIT_AUTH", "")
+
+	cfg := Load()
+
+	if cfg.RateLimitGlobal != 300 {
+		t.Fatalf("RateLimitGlobal = %d, want 300", cfg.RateLimitGlobal)
+	}
+	if cfg.RateLimitAuth != 10 {
+		t.Fatalf("RateLimitAuth = %d, want 10", cfg.RateLimitAuth)
+	}
+}
+
+func TestRateLimitOverrides(t *testing.T) {
+	t.Setenv("KADENCE_RATE_LIMIT_GLOBAL", "600")
+	t.Setenv("KADENCE_RATE_LIMIT_AUTH", "20")
+
+	cfg := Load()
+
+	if cfg.RateLimitGlobal != 600 {
+		t.Fatalf("RateLimitGlobal = %d, want 600", cfg.RateLimitGlobal)
+	}
+	if cfg.RateLimitAuth != 20 {
+		t.Fatalf("RateLimitAuth = %d, want 20", cfg.RateLimitAuth)
+	}
+}
+
+func TestValidateRejectsNegativeRateLimits(t *testing.T) {
+	base := Config{DatabaseURL: testDatabaseURL}
+
+	global := base
+	global.RateLimitGlobal = -1
+	if err := global.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for negative RateLimitGlobal")
+	}
+
+	authCfg := base
+	authCfg.RateLimitAuth = -1
+	if err := authCfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for negative RateLimitAuth")
+	}
+}
+
+func TestValidateAllowsZeroRateLimits(t *testing.T) {
+	cfg := Config{DatabaseURL: testDatabaseURL, RateLimitGlobal: 0, RateLimitAuth: 0}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (0 disables rate limiting)", err)
 	}
 }
 

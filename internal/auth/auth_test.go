@@ -24,6 +24,15 @@ func TestHashAndCheckPassword(t *testing.T) {
 	}
 }
 
+func TestCheckPasswordDummyAlwaysFalse(t *testing.T) {
+	if auth.CheckPasswordDummy("anything") {
+		t.Fatal("CheckPasswordDummy should always return false")
+	}
+	if auth.CheckPasswordDummy("") {
+		t.Fatal("CheckPasswordDummy should always return false, even for empty input")
+	}
+}
+
 func TestNewSessionIDIsUniqueHex(t *testing.T) {
 	a, err := auth.NewSessionID()
 	if err != nil {

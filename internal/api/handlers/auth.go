@@ -69,7 +69,15 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := h.users.GetByUsername(r.Context(), body.Username)
-	if err != nil || !auth.CheckPassword(u.PasswordHash, body.Password) {
+	if err != nil {
+		// Unknown username: still pay the bcrypt cost so this path takes the
+		// same time as a wrong-password attempt against a real account,
+		// closing the username-enumeration timing oracle.
+		auth.CheckPasswordDummy(body.Password)
+		RespondError(w, http.StatusUnauthorized, "invalid username or password")
+		return
+	}
+	if !auth.CheckPassword(u.PasswordHash, body.Password) {
 		RespondError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}

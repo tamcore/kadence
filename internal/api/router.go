@@ -46,7 +46,12 @@ func NewRouter(deps Deps) http.Handler {
 	r.Get("/api/healthz", healthz)
 
 	if deps.Users != nil && deps.Sessions != nil {
-		mountAuth(r, deps)
+		// Global per-IP cap on all other /api routes; healthz and the static
+		// frontend are registered outside this group and stay unlimited.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RateLimit(deps.Config.RateLimitGlobal))
+			mountAuth(r, deps)
+		})
 	}
 
 	mountFrontend(r)
@@ -63,15 +68,19 @@ func mountAuth(r chi.Router, deps Deps) {
 	}
 	csrfProtect := middleware.CSRF(secret, deps.Config.IsProd(), deps.Config.TrustedOrigins)
 	loadUser := middleware.LoadUser(deps.Sessions, deps.Users)
+	// Shared per-IP limiter for the auth-sensitive endpoints (login, passkey
+	// login, credential submission): brute-forcing credentials is the primary
+	// abuse case, so these get a stricter cap than the global one.
+	authLimit := middleware.RateLimit(deps.Config.RateLimitAuth)
 
 	// Login: reachable without a prior CSRF token (no session yet), but behind LoadUser.
-	r.With(loadUser).Post("/api/session", authH.Login)
+	r.With(loadUser, authLimit).Post("/api/session", authH.Login)
 
 	if deps.WebAuthn != nil {
 		// Passkey login: no prior session/CSRF token; the origin-bound WebAuthn
 		// assertion is the CSRF defense, mirroring password Login.
-		r.With(loadUser).Post("/api/webauthn/login/begin", deps.WebAuthn.LoginBegin)
-		r.With(loadUser).Post("/api/webauthn/login/finish", deps.WebAuthn.LoginFinish)
+		r.With(loadUser, authLimit).Post("/api/webauthn/login/begin", deps.WebAuthn.LoginBegin)
+		r.With(loadUser, authLimit).Post("/api/webauthn/login/finish", deps.WebAuthn.LoginFinish)
 		r.Get("/api/webauthn/enabled", deps.WebAuthn.Enabled)
 	}
 
@@ -122,7 +131,7 @@ func mountAuth(r chi.Router, deps Deps) {
 		}
 
 		if deps.Credentials != nil {
-			r.Post("/api/credentials/{requestId}", deps.Credentials.Submit)
+			r.With(authLimit).Post("/api/credentials/{requestId}", deps.Credentials.Submit)
 		}
 
 		if deps.Profile != nil {
