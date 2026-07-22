@@ -273,13 +273,43 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 	systemPrompt := s.systemPrompt(unitSystem)
 	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: systemPrompt})
 
+	streamCtx := ctx
+	if s.cfg.Timeout > 0 {
+		var cancel context.CancelFunc
+		streamCtx, cancel = context.WithTimeout(ctx, s.cfg.Timeout)
+		defer cancel()
+	}
+
+	if s.secrets != nil {
+		// Registered early so redaction (which reads still-live values) always
+		// runs before the purge that would erase them, regardless of which
+		// return path Stream takes below.
+		defer s.secrets.PurgeUser(userID)
+	}
+
+	// INVARIANT: the guardrail must run before any call that sends raw user
+	// content to an external service (RAG embedding, the main provider). A
+	// refused message must never leave the app. Build the classifier input
+	// directly from the raw history + live user text so this check has no
+	// dependency on RAG inserts or budget-bounded history below.
+	guardrailMsgs := make([]provider.Message, 0, len(history)+1)
+	for _, m := range history {
+		guardrailMsgs = append(guardrailMsgs, provider.Message{Role: m.Role, Content: m.Content})
+	}
+	guardrailMsgs = append(guardrailMsgs, provider.Message{Role: model.MsgRoleUser, Content: userText})
+
+	if refused, err := s.applyGuardrail(ctx, streamCtx, conversationID, guardrailMsgs, sink); refused {
+		return err
+	}
+
 	// Retrieve RAG context (and the skills it triggers) up front, before
 	// bounding history, so their size can be reserved against the token
 	// budget. They are inserted into req.Messages as mandatory system
-	// messages further down (after the guardrail check), but they must be
-	// sized here or the history bound below would let history fill the
-	// whole budget and the provider request could exceed ContextBudgetTokens
-	// whenever RAG hits or skills attach.
+	// messages further down, but they must be sized here or the history
+	// bound below would let history fill the whole budget and the provider
+	// request could exceed ContextBudgetTokens whenever RAG hits or skills
+	// attach. This runs after the guardrail check above, since it embeds the
+	// raw user message via an external embedding provider.
 	ragInserts, queryEmb, ragErr := s.assembleRAGInserts(ctx, conversationID, userID, userText)
 	reservedTokens := 0
 	for _, m := range ragInserts {
@@ -295,24 +325,6 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		req.Messages = append(req.Messages, provider.Message{Role: m.Role, Content: m.Content})
 	}
 	req.Messages = append(req.Messages, provider.Message{Role: "user", Content: userText})
-
-	streamCtx := ctx
-	if s.cfg.Timeout > 0 {
-		var cancel context.CancelFunc
-		streamCtx, cancel = context.WithTimeout(ctx, s.cfg.Timeout)
-		defer cancel()
-	}
-
-	if s.secrets != nil {
-		// Registered early so redaction (which reads still-live values) always
-		// runs before the purge that would erase them, regardless of which
-		// return path Stream takes below.
-		defer s.secrets.PurgeUser(userID)
-	}
-
-	if refused, err := s.applyGuardrail(ctx, streamCtx, conversationID, req.Messages, sink); refused {
-		return err
-	}
 
 	if s.rag != nil && ragErr == nil {
 		for _, m := range ragInserts {
