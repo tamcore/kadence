@@ -41,6 +41,33 @@ func (f fakeProvider) StreamChatWithTools(ctx context.Context, req provider.Chat
 	return provider.StreamResult{Content: content}, err
 }
 
+// scriptedProvider returns a pre-scripted StreamResult per call, streaming
+// each result's content through onToken, so tests can exercise multi-call
+// flows like truncation-continuation.
+type scriptedProvider struct {
+	results []provider.StreamResult
+	calls   int
+}
+
+func (p *scriptedProvider) StreamChat(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	r, err := p.StreamChatWithTools(ctx, req, onToken)
+	return r.Content, err
+}
+
+func (p *scriptedProvider) StreamChatWithTools(_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	if p.calls >= len(p.results) {
+		return provider.StreamResult{FinishReason: "stop"}, nil
+	}
+	r := p.results[p.calls]
+	p.calls++
+	if r.Content != "" {
+		if err := onToken(r.Content); err != nil {
+			return provider.StreamResult{}, err
+		}
+	}
+	return r, nil
+}
+
 type fakeConvs struct {
 	created *model.Conversation
 	byID    map[string]model.Conversation
@@ -210,6 +237,66 @@ func TestStreamProviderError(t *testing.T) {
 	}
 	if len(sink.events) == 0 || sink.events[len(sink.events)-1].Type != chat.EventError {
 		t.Fatalf("expected error event in sink, got: %v", sink.events)
+	}
+}
+
+func TestStreamContinuesTruncatedAnswer(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	msgs := &fakeMsgs{}
+	// First completion stops on "length" (hit the token cap); the second
+	// finishes normally. The service should stitch them into one answer.
+	p := &scriptedProvider{results: []provider.StreamResult{
+		{Content: "part one ", FinishReason: provider.FinishLength},
+		{Content: "part two.", FinishReason: "stop"},
+	}}
+	svc := chat.NewService(p,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", testConvID, "hi coach", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if p.calls != 2 {
+		t.Fatalf("provider calls = %d, want 2 (initial + one continuation)", p.calls)
+	}
+
+	const want = "part one part two."
+	var streamed strings.Builder
+	for _, e := range sink.events {
+		if e.Type == chat.EventToken {
+			streamed.WriteString(e.Delta)
+		}
+	}
+	if streamed.String() != want {
+		t.Fatalf("streamed = %q, want %q", streamed.String(), want)
+	}
+	assistant := msgs.added[len(msgs.added)-1]
+	if assistant.Role != model.MsgRoleAssistant || assistant.Content != want {
+		t.Fatalf("persisted assistant = %+v, want content %q", assistant, want)
+	}
+}
+
+func TestStreamStopsContinuingAtCap(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
+	msgs := &fakeMsgs{}
+	// Every completion reports "length": the service must not loop forever.
+	results := make([]provider.StreamResult, 10)
+	for i := range results {
+		results[i] = provider.StreamResult{Content: "x", FinishReason: provider.FinishLength}
+	}
+	p := &scriptedProvider{results: results}
+	svc := chat.NewService(p,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	if err := svc.Stream(context.Background(), testUserID, testUsername, "", testConvID, "hi coach", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	// initial call + maxContinuations (3) = 4, then it gives up.
+	if p.calls != 4 {
+		t.Fatalf("provider calls = %d, want 4 (initial + 3 continuations)", p.calls)
 	}
 }
 

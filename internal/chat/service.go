@@ -410,7 +410,7 @@ func (s *Service) runToolLoop(
 			return "", turnCalls, s.fail(sink, "the assistant could not complete the response")
 		}
 		if len(result.ToolCalls) == 0 {
-			return result.Content, turnCalls, nil
+			return s.completeIfTruncated(streamCtx, conversationID, req, result, onToken), turnCalls, nil
 		}
 
 		req.Messages = append(req.Messages, provider.Message{
@@ -437,7 +437,59 @@ func (s *Service) runToolLoop(
 		slog.Error("final answer stream failed", "err", streamErr, "conversation", conversationID)
 		return "", turnCalls, s.fail(sink, "the assistant could not complete the response")
 	}
-	return final.Content, turnCalls, nil
+	return s.completeIfTruncated(streamCtx, conversationID, req, final, onToken), turnCalls, nil
+}
+
+// maxContinuations bounds how many times a truncated (finish_reason=length)
+// answer is auto-continued before we give up, so a pathological model can't
+// loop forever. Each continuation is itself capped at the model's MaxTokens.
+const maxContinuations = 3
+
+// continuationPrompt nudges the model to resume a truncated answer without
+// repeating what it already produced.
+const continuationPrompt = "Continue your previous answer exactly where it was cut off. " +
+	"Do not repeat any text you already wrote; resume mid-sentence if needed."
+
+// completeIfTruncated returns first.Content, transparently continuing the
+// answer when the model stopped because it hit the token cap
+// (finish_reason=length). Continuation deltas stream through onToken just like
+// the initial answer, so the client sees one seamless reply. Continuations run
+// tool-free and are bounded by maxContinuations; a stream error mid-continuation
+// keeps whatever was produced rather than failing the whole turn.
+func (s *Service) completeIfTruncated(
+	streamCtx context.Context, conversationID string,
+	req provider.ChatRequest, first provider.StreamResult, onToken provider.TokenFunc,
+) string {
+	full := first.Content
+	finish := first.FinishReason
+	for cont := 0; finish == provider.FinishLength && cont < maxContinuations; cont++ {
+		slog.Warn("llm response truncated at token cap; continuing",
+			"conversation", conversationID, "continuation", cont+1)
+
+		contReq := req
+		contReq.Tools = nil // finishing text; no further tool calls
+		msgs := make([]provider.Message, 0, len(req.Messages)+2)
+		msgs = append(msgs, req.Messages...)
+		msgs = append(msgs,
+			provider.Message{Role: model.MsgRoleAssistant, Content: full},
+			provider.Message{Role: model.MsgRoleUser, Content: continuationPrompt},
+		)
+		contReq.Messages = msgs
+
+		next, err := s.provider.StreamChatWithTools(streamCtx, contReq, onToken)
+		full += next.Content
+		if err != nil {
+			slog.Error("continuation stream failed; keeping partial answer",
+				"err", err, "conversation", conversationID)
+			return full
+		}
+		finish = next.FinishReason
+	}
+	if finish == provider.FinishLength {
+		slog.Warn("llm response still truncated after continuation cap",
+			"conversation", conversationID, "cap", maxContinuations)
+	}
+	return full
 }
 
 // skillTool builds the built-in load_skill tool definition, listing available

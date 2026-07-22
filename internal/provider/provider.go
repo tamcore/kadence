@@ -21,11 +21,19 @@ type ToolCall struct {
 	Arguments string // JSON object
 }
 
+// FinishLength is the finish_reason the provider reports when a completion was
+// cut off because it reached the max-tokens cap (as opposed to stopping
+// naturally). Callers use it to detect and continue truncated answers.
+const FinishLength = "length"
+
 // StreamResult is the outcome of one streamed completion: assembled content
 // plus any tool calls the model requested.
 type StreamResult struct {
 	Content   string
 	ToolCalls []ToolCall
+	// FinishReason is the provider's finish_reason for the completion (e.g.
+	// "stop", "tool_calls", "length"). Empty if the provider did not report one.
+	FinishReason string
 }
 
 // Message is one chat message in a provider request.
