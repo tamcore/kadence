@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/tamcore/kadence/internal/provider"
 )
 
@@ -30,6 +32,14 @@ type Registry struct {
 
 	mu      sync.Mutex
 	clients map[string]mcpClient // keyed by Name+"/"+Scope; env servers only
+
+	// dial deduplicates concurrent first-time dials to the same env server:
+	// callers racing on a cache miss for the same key share one in-flight
+	// newClient call (and its result/error) instead of each dialing
+	// independently. Different keys dial fully in parallel — dialing never
+	// happens under mu, so a slow/hanging dial for one server can never block
+	// map lookups (cache hits) or dials to other servers.
+	dial singleflight.Group
 }
 
 // NewRegistry builds a Registry over the given servers. Clients are created
@@ -254,6 +264,18 @@ func findApplicableServerIn(servers []Server, username, serverName string) (Serv
 // a lazily-created, cached client (keyed by Name+Scope). User-defined (DB)
 // servers always get a fresh client — they're not cached, since their
 // credentials/URL can change or be revoked at any time.
+//
+// The network dial (newClient's Start+Initialize handshake) never runs while
+// holding r.mu: the mutex only ever guards the map get/set/delete, each held
+// for the duration of a lookup or insert, never across I/O. On a cache miss,
+// concurrent callers for the SAME key share one in-flight dial via
+// r.dial (a singleflight group) — its result (client or error) is fanned out
+// to every waiter — while callers for DIFFERENT keys dial fully in parallel.
+// One consequence of sharing a dial: if the caller whose context "wins" the
+// race has its context canceled, every waiter sharing that dial observes the
+// resulting error, even if their own context is still live. This is
+// singleflight's normal behavior and is judged an acceptable tradeoff against
+// serializing all dials behind the registry lock.
 func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 	if !r.isEnvServer(s) {
 		return newClient(ctx, s, r.httpClient)
@@ -261,19 +283,31 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 
 	key := s.Name + "/" + s.Scope
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if c, ok := r.clients[key]; ok {
+	if c, ok := r.cachedClient(key); ok {
 		return c, nil
 	}
 
-	c, err := newClient(ctx, s, r.httpClient)
+	v, err, _ := r.dial.Do(key, func() (any, error) {
+		return newClient(ctx, s, r.httpClient)
+	})
 	if err != nil {
 		return nil, err
 	}
+	c := v.(mcpClient) //nolint:forcetypeassert // dial's fn always returns mcpClient
+
+	r.mu.Lock()
 	r.clients[key] = c
+	r.mu.Unlock()
+
 	return c, nil
+}
+
+// cachedClient looks up key in the client cache under r.mu, without dialing.
+func (r *Registry) cachedClient(key string) (mcpClient, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.clients[key]
+	return c, ok
 }
 
 // evictClient drops s's cached client (if any) so the next clientFor call
