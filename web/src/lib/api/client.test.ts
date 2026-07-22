@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
+
+vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+
+import { goto } from '$app/navigation';
 import { api, APIError, getCsrfToken, setCsrfToken } from './client';
+import { isAuthenticated, setAuth } from '$lib/stores/auth';
 
 function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
 	return vi.fn().mockResolvedValue(
@@ -12,7 +18,9 @@ function mockFetch(status: number, body: unknown, headers: Record<string, string
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.clearAllMocks();
 	setCsrfToken(null);
+	window.history.pushState({}, '', '/');
 });
 
 describe('api client', () => {
@@ -47,6 +55,54 @@ describe('api client', () => {
 	it('throws APIError with the envelope error message on non-2xx', async () => {
 		vi.stubGlobal('fetch', mockFetch(401, { data: null, error: 'invalid username or password' }));
 		await expect(api.login('a', 'bad', false)).rejects.toThrow(APIError);
+	});
+});
+
+describe('central 401 handling', () => {
+	it('clears auth and redirects to /login with a returnTo on a 401', async () => {
+		window.history.pushState({}, '', '/conversations/123?foo=bar');
+		setAuth({
+			id: 1,
+			username: 'alice',
+			email: 'a@x.io',
+			role: 'user',
+			displayName: 'Alice',
+			unitSystem: 'metric'
+		});
+		vi.stubGlobal('fetch', mockFetch(401, { data: null, error: 'unauthorized' }));
+
+		await expect(api.get('/conversations')).rejects.toThrow(APIError);
+
+		expect(get(isAuthenticated)).toBe(false);
+		expect(goto).toHaveBeenCalledWith(
+			'/login?returnTo=' + encodeURIComponent('/conversations/123?foo=bar')
+		);
+	});
+
+	it('leaves auth/navigation untouched for non-401 errors', async () => {
+		setAuth({
+			id: 1,
+			username: 'alice',
+			email: 'a@x.io',
+			role: 'user',
+			displayName: 'Alice',
+			unitSystem: 'metric'
+		});
+		vi.stubGlobal('fetch', mockFetch(500, { data: null, error: 'boom' }));
+
+		await expect(api.get('/conversations')).rejects.toThrow(APIError);
+
+		expect(get(isAuthenticated)).toBe(true);
+		expect(goto).not.toHaveBeenCalled();
+	});
+
+	it('does not redirect again when the failing request originates from the login page', async () => {
+		window.history.pushState({}, '', '/login');
+		vi.stubGlobal('fetch', mockFetch(401, { data: null, error: 'invalid username or password' }));
+
+		await expect(api.login('a', 'bad', false)).rejects.toThrow(APIError);
+
+		expect(goto).not.toHaveBeenCalled();
 	});
 });
 

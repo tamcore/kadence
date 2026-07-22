@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+
+import { goto } from '$app/navigation';
 import { streamChat } from './chat';
 import { setCsrfToken } from './client';
 
@@ -13,7 +17,11 @@ function streamResponse(frames: string[]): Response {
 	return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.clearAllMocks();
+	window.history.pushState({}, '', '/');
+});
 
 describe('streamChat', () => {
 	it('parses SSE frames into ChatEvents (across chunk boundaries)', async () => {
@@ -55,5 +63,36 @@ describe('streamChat', () => {
 			message: 'yo'
 		});
 		expect(opts.headers).toHaveProperty('X-CSRF-Token');
+	});
+
+	it('handles a 401 via the central handler and yields a single error event with no dangling reader', async () => {
+		window.history.pushState({}, '', '/chat');
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(new Response(null, { status: 401 }))
+		);
+
+		const events = [];
+		for await (const e of streamChat({ message: 'hi' }, new AbortController().signal)) {
+			events.push(e);
+		}
+
+		expect(events).toEqual([{ type: 'error', message: 'unauthorized', code: 401 }]);
+		expect(goto).toHaveBeenCalledWith('/login?returnTo=' + encodeURIComponent('/chat'));
+	});
+
+	it('yields a generic error event for a non-401 failure without touching navigation', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(new Response(null, { status: 500 }))
+		);
+
+		const events = [];
+		for await (const e of streamChat({ message: 'hi' }, new AbortController().signal)) {
+			events.push(e);
+		}
+
+		expect(events).toEqual([{ type: 'error', message: 'chat request failed (500)' }]);
+		expect(goto).not.toHaveBeenCalled();
 	});
 });

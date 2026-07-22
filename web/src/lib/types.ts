@@ -41,7 +41,7 @@ export type ChatEvent =
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }
 	| { type: 'done' }
-	| { type: 'error'; message: string };
+	| { type: 'error'; message: string; code?: number };
 
 export interface Document {
 	id: number;

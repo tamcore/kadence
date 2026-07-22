@@ -1,4 +1,4 @@
-import { api, getCsrfToken, setCsrfToken } from '$lib/api/client';
+import { api, getCsrfToken, handleUnauthorized, setCsrfToken } from '$lib/api/client';
 import type { ChatEvent, Conversation, ChatMessage } from '$lib/types';
 
 export interface ChatRequestBody {
@@ -26,7 +26,12 @@ export async function* streamChat(
 	if (rotated) setCsrfToken(rotated);
 
 	if (!resp.ok || !resp.body) {
-		yield { type: 'error', message: `chat request failed (${resp.status})` };
+		if (resp.status === 401) {
+			handleUnauthorized();
+			yield { type: 'error', message: 'unauthorized', code: 401 };
+		} else {
+			yield { type: 'error', message: `chat request failed (${resp.status})` };
+		}
 		return;
 	}
 
