@@ -119,7 +119,12 @@ externalDatabase:
 #   tools       app-side glob allowlist, e.g. ["browser_*"]
 #   env         [{name, value}] passed to the MCP container
 #   existingSecret / persistence  (optional)
-#   resources   (optional) standard container resources; unset -> no limits
+#   resources   (optional) standard container resources; unset -> mcp.resources default
+#   securityContext (optional) pod-level securityContext override for images that
+#               cannot run as the default non-root uid (verify with
+#               `docker run --user 65532:65532` before relying on this — garmin-mcp,
+#               cloakbrowser-mcp, and markitdown all run fine non-root as-is and
+#               don't need it)
 #   shm         (optional) size string, e.g. "512Mi"; mounts a Memory-backed
 #               emptyDir at /dev/shm — required for Chromium-based servers
 #               (Playwright/cloakbrowser) which crash on the default 64Mi shm
@@ -136,6 +141,31 @@ mcp:
     password: ""
   tls:
     enabled: false # requires cert-manager on cluster; mints per-server certs and serves app<->MCP over HTTPS
+  # Pod-level securityContext applied to every MCP server pod. Verified
+  # (2026-07-22, remote docker `--user 65532:65532`) that garmin-mcp,
+  # cloakbrowser-mcp, and markitdown all start fine as this non-root uid with
+  # a writable $HOME; override per-server via the server's own
+  # `securityContext` key for an image that genuinely can't run non-root.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  # Default mcp container resources; a per-server `resources` key overrides this.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  nginx:
+    # nginx sidecar resources shared by every MCP server's proxy container.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 64Mi
 
 # Optional markitdown-mcp ingestion sidecar. When enabled, renders a fixed
 # Deployment (markitdown-mcp) + nginx basicAuth sidecar + Service +
@@ -160,6 +190,21 @@ markitdown:
     requests:
       cpu: 50m
       memory: 128Mi
+  # Pod-level securityContext, same treatment and verification as mcp.podSecurityContext.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  nginx:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 64Mi
   basicAuth:
     existingSecret: "" # optional: a Secret with username/password/htpasswd keys (else auto-generated)
     # Optional: bring your own basicAuth password (stable across renders).

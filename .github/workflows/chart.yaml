@@ -46,6 +46,24 @@ jobs:
             echo "expected identical markitdown basicAuth password across renders, got '$pass1' vs '$pass2'"
             exit 1
           fi
+      - name: assert mcp/markitdown pods are hardened non-root with probed nginx sidecar
+        run: |
+          # Wave 2 (issue 15) hardening: every mcp-server and the markitdown
+          # Deployment must run as the fixed non-root uid/gid by default, and
+          # the nginx sidecar must expose the unauthenticated /healthz probe
+          # (the mcp/markitdown container itself binds loopback-only, so the
+          # kubelet can never probe it directly).
+          set_args=(--set markitdown.enabled=true --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]')
+          helm template kadence ./charts/kadence "${set_args[@]}" > /tmp/rendered-hardening.yaml
+          for name in kadence-mcp-garmin kadence-markitdown; do
+            runAsNonRoot=$(yq eval "select(.kind == \"Deployment\" and .metadata.name == \"$name\") | .spec.template.spec.securityContext.runAsNonRoot" /tmp/rendered-hardening.yaml)
+            runAsUser=$(yq eval "select(.kind == \"Deployment\" and .metadata.name == \"$name\") | .spec.template.spec.securityContext.runAsUser" /tmp/rendered-hardening.yaml)
+            probePath=$(yq eval "select(.kind == \"Deployment\" and .metadata.name == \"$name\") | .spec.template.spec.containers[] | select(.name == \"nginx\") | .readinessProbe.httpGet.path" /tmp/rendered-hardening.yaml)
+            if [ "$runAsNonRoot" != "true" ] || [ "$runAsUser" != "65532" ] || [ "$probePath" != "/healthz" ]; then
+              echo "expected $name pod securityContext.runAsNonRoot=true, runAsUser=65532, nginx readinessProbe path=/healthz; got runAsNonRoot='$runAsNonRoot' runAsUser='$runAsUser' probePath='$probePath'"
+              exit 1
+            fi
+          done
 
   kube-linter:
     runs-on: ubuntu-latest
