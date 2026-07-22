@@ -63,11 +63,17 @@ externalDatabase:
 #       env:
 #         - name: GARMIN_MCP_TRANSPORT
 #           value: streamable-http
+#         # The pod now runs as the fixed non-root uid 65532 (mcp.podSecurityContext),
+#         # so $HOME can no longer be /root; point it at the writable, fsGroup-owned
+#         # persistent volume instead. garmin-mcp writes its session cache to
+#         # $HOME/.garminconnect, so this must line up with persistence.mountPath below.
+#         - name: HOME
+#           value: /data
 #       existingSecret: garmin-creds
 #       persistence:
 #         enabled: true
 #         size: 1Gi
-#         mountPath: /root/.garminconnect
+#         mountPath: /data/.garminconnect
 #       # tools: ["get_activity*", "*_workout", "*_workouts", "get_exercise_types", "get_workout*"]
 #       #   app-side allowlist of glob patterns (matched against the unprefixed tool
 #       #   name); unset = all tools. Lets you shorten the LLM tool list without the
