@@ -56,7 +56,7 @@ func TestLoginSuccessSetsCookie(t *testing.T) {
 	}
 	var setCookie string
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "session_id" {
+		if c.Name == testSessionCookieName {
 			setCookie = c.Value
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -26,11 +27,23 @@ type UsersRepo interface {
 	CountAdmins(ctx context.Context) (int, error)
 }
 
+// UsersSessions is the session revocation the admin handler needs when a
+// password reset should invalidate existing logins.
+type UsersSessions interface {
+	DeleteAllByUser(ctx context.Context, userID int64) error
+	DeleteOthersByUser(ctx context.Context, userID int64, exceptID string) error
+}
+
 // Users handles admin user management.
-type Users struct{ repo UsersRepo }
+type Users struct {
+	repo     UsersRepo
+	sessions UsersSessions
+}
 
 // NewUsers constructs the admin Users handler.
-func NewUsers(repo UsersRepo) *Users { return &Users{repo: repo} }
+func NewUsers(repo UsersRepo, sessions UsersSessions) *Users {
+	return &Users{repo: repo, sessions: sessions}
+}
 
 // List returns all users.
 func (h *Users) List(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +73,10 @@ func (h *Users) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Username == "" || body.Email == "" || body.Password == "" {
 		RespondError(w, http.StatusBadRequest, "username, email, and password are required")
+		return
+	}
+	if len(body.Password) < auth.MinPasswordLen {
+		RespondError(w, http.StatusBadRequest, "password is too short")
 		return
 	}
 	if body.Role != model.RoleAdmin && body.Role != model.RoleUser {
@@ -176,7 +193,7 @@ func (h *Users) Update(w http.ResponseWriter, r *http.Request) {
 	// an error response never leaves a silently-changed password behind.
 	var newHash string
 	if body.Password != "" {
-		if len(body.Password) < minPasswordLen {
+		if len(body.Password) < auth.MinPasswordLen {
 			RespondError(w, http.StatusBadRequest, "password is too short")
 			return
 		}
@@ -208,6 +225,37 @@ func (h *Users) Update(w http.ResponseWriter, r *http.Request) {
 			RespondError(w, http.StatusInternalServerError, "could not update password")
 			return
 		}
+		h.revokeAfterPasswordReset(r, id)
 	}
 	RespondJSON(w, http.StatusOK, toPublic(updated))
+}
+
+// revokeAfterPasswordReset invalidates existing logins for the target of an
+// admin password reset: a compromised account must not stay logged in past
+// the reset. When the acting admin resets their own password, their current
+// session is preserved (DeleteOthersByUser) so they are not logged out by
+// their own action, mirroring Profile.ChangePassword's logoutOthers
+// semantics; resetting anyone else's password revokes all of the target's
+// sessions (DeleteAllByUser). Failures are logged and swallowed: the
+// password change itself already succeeded, so a 500 here would be
+// misleading.
+func (h *Users) revokeAfterPasswordReset(r *http.Request, targetID int64) {
+	actor := auth.UserFromContext(r.Context())
+	if actor != nil && actor.ID == targetID {
+		c, err := r.Cookie(sessionCookie)
+		if err != nil || c.Value == "" {
+			slog.Warn("admin self password reset without a current session cookie; revoking all sessions", "user_id", targetID)
+			if err := h.sessions.DeleteAllByUser(r.Context(), targetID); err != nil {
+				slog.Error("revoke sessions after admin password reset", "user_id", targetID, "err", err)
+			}
+			return
+		}
+		if err := h.sessions.DeleteOthersByUser(r.Context(), targetID, c.Value); err != nil {
+			slog.Error("revoke other sessions after admin self password reset", "user_id", targetID, "err", err)
+		}
+		return
+	}
+	if err := h.sessions.DeleteAllByUser(r.Context(), targetID); err != nil {
+		slog.Error("revoke sessions after admin password reset", "user_id", targetID, "err", err)
+	}
 }

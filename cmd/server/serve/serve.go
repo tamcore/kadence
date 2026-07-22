@@ -67,6 +67,8 @@ func Run() error {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
 
+	go runSessionReaper(rootCtx, sessions, sessionReapInterval, slog.Default())
+
 	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
 	deps.Profile = handlers.NewProfile(users, sessions, cfg)
 	deps.SessionsAPI = handlers.NewSessions(sessions)

@@ -117,6 +117,17 @@ func (r *SessionRepository) DeleteAllByUser(ctx context.Context, userID int64) e
 	return nil
 }
 
+// DeleteExpired removes every session whose expiry has passed and returns how
+// many rows were deleted. Intended to be called periodically by a background
+// reaper; relies on idx_sessions_expires_at for the scan.
+func (r *SessionRepository) DeleteExpired(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= NOW()`)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeleteOthersByUser removes every session for userID except exceptID,
 // leaving the caller's current session untouched.
 func (r *SessionRepository) DeleteOthersByUser(ctx context.Context, userID int64, exceptID string) error {

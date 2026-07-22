@@ -60,7 +60,7 @@ func NewRouter(deps Deps) http.Handler {
 
 func mountAuth(r chi.Router, deps Deps) {
 	authH := handlers.NewAuth(deps.Config, deps.Users, deps.Sessions)
-	usersH := handlers.NewUsers(deps.Users)
+	usersH := handlers.NewUsers(deps.Users, deps.Sessions)
 
 	secret := []byte(deps.Config.CSRFSecret)
 	if len(secret) == 0 {

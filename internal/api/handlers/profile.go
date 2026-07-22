@@ -16,9 +16,6 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
-// minPasswordLen is the minimum acceptable length for a new account password.
-const minPasswordLen = 8
-
 // profileUsers is the user persistence the profile handler needs.
 type profileUsers interface {
 	GetByID(ctx context.Context, id int64) (model.User, error)
@@ -110,7 +107,7 @@ func (h *Profile) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if len(in.NewPassword) < minPasswordLen {
+	if len(in.NewPassword) < auth.MinPasswordLen {
 		RespondError(w, http.StatusBadRequest, "new password is too short")
 		return
 	}

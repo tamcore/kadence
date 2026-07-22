@@ -78,7 +78,7 @@ func doAuthedPostRaw(t *testing.T, fn http.HandlerFunc, body string) *httptest.R
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/profile/password", strings.NewReader(body))
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: testUsername}))
-	req.AddCookie(&http.Cookie{Name: "session_id", Value: "current-session-id"})
+	req.AddCookie(&http.Cookie{Name: testSessionCookieName, Value: testCurrentSessionCookie})
 	rec := httptest.NewRecorder()
 	fn(rec, req)
 	return rec
@@ -135,7 +135,7 @@ func TestProfile_ChangePassword(t *testing.T) {
 	if !users.passwordUpdated || !sessions.deleteOthersCalled {
 		t.Fatalf("expected pw update + revoke-others; users=%+v sessions=%+v", users, sessions)
 	}
-	if sessions.exceptID != "current-session-id" {
+	if sessions.exceptID != testCurrentSessionCookie {
 		t.Fatalf("expected DeleteOthersByUser to keep the caller's current session id, got %q", sessions.exceptID)
 	}
 	if strings.Contains(body, "longenough123") {
