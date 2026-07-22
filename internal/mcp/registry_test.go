@@ -630,3 +630,78 @@ func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing
 		t.Fatalf("clients cached = %d, want 1 after the dial completes", got)
 	}
 }
+
+// TestRegistry_FollowerSurvivesLeaderContextCancellation verifies the fix for
+// the shared-dial footgun: clientFor detaches the singleflight dial from
+// whichever caller's context happened to start it, bounding it by
+// dialTimeout instead. So when the "leader" caller (the one whose call
+// actually invoked newClient) has its context canceled mid-dial — e.g. an
+// aborted chat stream — a concurrent "follower" waiting on the same shared
+// dial must still get a usable client once the server responds, rather than
+// inheriting the leader's context.Canceled error.
+func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
+	ts, started, release := newHangingThenWorkingServer(t)
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	reg := NewRegistry([]Server{s}, nil, nil)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+
+	leaderDone := make(chan struct {
+		c   mcpClient
+		err error
+	}, 1)
+	go func() {
+		c, err := reg.clientFor(leaderCtx, s)
+		leaderDone <- struct {
+			c   mcpClient
+			err error
+		}{c, err}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader's dial never reached the server")
+	}
+
+	// A follower racing on the same key joins the in-flight dial.
+	followerDone := make(chan error, 1)
+	go func() {
+		_, err := reg.clientFor(context.Background(), s)
+		followerDone <- err
+	}()
+
+	// The leader aborts (e.g. its chat stream was canceled) while the dial
+	// is still in flight, blocked on the server. Before the fix, this would
+	// propagate context.Canceled to both the leader and the follower once
+	// the dial's ctx.Done() fired.
+	cancelLeader()
+
+	// Give the canceled leader ctx a moment to have taken effect, if it
+	// were (incorrectly) still wired into the dial.
+	time.Sleep(50 * time.Millisecond)
+
+	close(release)
+
+	select {
+	case res := <-leaderDone:
+		if res.err != nil {
+			t.Fatalf("leader clientFor: %v, want the detached dial to ignore the leader's canceled context", res.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader's clientFor never returned")
+	}
+
+	select {
+	case err := <-followerDone:
+		if err != nil {
+			t.Fatalf("follower clientFor: %v, want the follower to get a usable client despite the leader's canceled context", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("follower's clientFor never returned")
+	}
+
+	if n := len(reg.clients); n != 1 {
+		t.Fatalf("clients cached = %d, want 1", n)
+	}
+}

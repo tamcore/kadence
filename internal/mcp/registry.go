@@ -8,11 +8,22 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 
 	"github.com/tamcore/kadence/internal/provider"
 )
+
+// dialTimeout bounds a single shared dial (Start+Initialize handshake) kicked
+// off by clientFor's singleflight group. It is deliberately its own constant
+// rather than reusing defaultProbeTimeout (10s, health.go): a dial does more
+// work than a probe (transport Start, then the Initialize round trip), and it
+// runs detached from any caller's context (see clientFor), so it needs its
+// own bound to guarantee it can't hang forever once nothing is left to cancel
+// it. 15s gives that handshake headroom over a probe while still failing well
+// within any reasonable request timeout.
+const dialTimeout = 15 * time.Second
 
 // UserServerSource supplies per-user, DB-backed MCP servers (credentials
 // decrypted) to merge with the env-configured ones. Implemented by the store.
@@ -271,11 +282,11 @@ func findApplicableServerIn(servers []Server, username, serverName string) (Serv
 // concurrent callers for the SAME key share one in-flight dial via
 // r.dial (a singleflight group) — its result (client or error) is fanned out
 // to every waiter — while callers for DIFFERENT keys dial fully in parallel.
-// One consequence of sharing a dial: if the caller whose context "wins" the
-// race has its context canceled, every waiter sharing that dial observes the
-// resulting error, even if their own context is still live. This is
-// singleflight's normal behavior and is judged an acceptable tradeoff against
-// serializing all dials behind the registry lock.
+// The shared dial itself runs on a context detached from whichever caller's
+// call happened to start it (context.WithoutCancel), bounded instead by
+// dialTimeout: without this, canceling the "leader" caller's context (e.g. an
+// aborted chat stream) would abort the in-flight dial and hand every waiter
+// sharing it a context.Canceled error unrelated to their own request.
 func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 	if !r.isEnvServer(s) {
 		return newClient(ctx, s, r.httpClient)
@@ -288,7 +299,9 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 	}
 
 	v, err, _ := r.dial.Do(key, func() (any, error) {
-		return newClient(ctx, s, r.httpClient)
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dialTimeout)
+		defer cancel()
+		return newClient(dctx, s, r.httpClient)
 	})
 	if err != nil {
 		return nil, err
