@@ -22,6 +22,10 @@ config:
   KADENCE_EMBED_MODEL: "your-embedding-model"
   KADENCE_ADMIN_USERNAME: "admin"
   KADENCE_ADMIN_EMAIL: "admin@example.com"
+  # KADENCE_TRUSTED_ORIGINS: "https://kadence.example.com"
+  # KADENCE_WEBAUTHN_RP_ID: "kadence.example.com"
+  #   Uncomment both (and secrets.KADENCE_ENCRYPTION_KEY below) to enable passkeys.
+  #   Without all three, passkey login/registration silently stays unavailable.
 
 # Secret overrides. Replace CHANGEME with real secret values before deploying.
 secrets:
@@ -29,6 +33,12 @@ secrets:
   KADENCE_LLM_API_KEY: "CHANGEME"
   KADENCE_EMBED_API_KEY: "CHANGEME"
   KADENCE_ADMIN_PASSWORD: "CHANGEME"
+  # KADENCE_ENCRYPTION_KEY: "CHANGEME" # base64-encoded 32-byte key; generate with:
+  #   openssl rand -base64 32
+  #   Required for passkeys (with config.KADENCE_WEBAUTHN_RP_ID +
+  #   config.KADENCE_TRUSTED_ORIGINS above) and for user-defined MCP servers
+  #   (with config.KADENCE_USER_MCP_ALLOWED_HOSTS). Without it, both features
+  #   silently stay unavailable.
 
 # Bundled Postgres (pgvector). Set storageClass to your cluster's default
 # (or a specific pgvector-capable SSD class) if the empty default isn't suitable.
