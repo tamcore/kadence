@@ -20,6 +20,17 @@ jobs:
       - run: >
           helm template kadence ./charts/kadence
           --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]'
+      - name: template with networkPolicy.defaultDeny=true (wave 2, issue 14)
+        run: >
+          helm template kadence ./charts/kadence
+          --set postgres.enabled=true --set postgres.password=x
+          --set markitdown.enabled=true
+          --set networkPolicy.defaultDeny=true
+          --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]'
+      - name: template with networkPolicy.enabled=false
+        run: >
+          helm template kadence ./charts/kadence
+          --set networkPolicy.enabled=false
       - name: assert app Deployment + PDB selectors are component-scoped
         run: |
           helm template kadence ./charts/kadence > /tmp/rendered.yaml
@@ -64,6 +75,43 @@ jobs:
               exit 1
             fi
           done
+      - name: assert NetworkPolicy presence/count matches networkPolicy gates (wave 2, issue 14)
+        run: |
+          # combo: postgres+markitdown+2 mcp servers (garmin, cloakbrowser), defaultDeny=false
+          # -> expect exactly 5 NetworkPolicies (app, postgres, markitdown, mcp-garmin, mcp-cloakbrowser), no default-deny.
+          set_args=(--set postgres.enabled=true --set postgres.password=x --set markitdown.enabled=true
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]')
+          helm template kadence ./charts/kadence "${set_args[@]}" > /tmp/rendered-netpol.yaml
+          count=$(yq eval-all '[select(.kind == "NetworkPolicy")] | length' /tmp/rendered-netpol.yaml)
+          if [ "$count" != "5" ]; then
+            echo "expected 5 NetworkPolicies (app, postgres, markitdown, mcp-garmin, mcp-cloakbrowser), got $count"
+            exit 1
+          fi
+          has_default_deny=$(yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "kadence-default-deny")' /tmp/rendered-netpol.yaml)
+          if [ -n "$has_default_deny" ]; then
+            echo "expected no default-deny NetworkPolicy when networkPolicy.defaultDeny is unset, but found one"
+            exit 1
+          fi
+          cloakbrowser_egress_except=$(yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "kadence-mcp-cloakbrowser") | .spec.egress[] | select(.to[0].ipBlock.cidr == "0.0.0.0/0") | .to[0].ipBlock.except | length' /tmp/rendered-netpol.yaml)
+          if [ "$cloakbrowser_egress_except" != "4" ]; then
+            echo "expected cloakbrowser egress ipBlock.except to list 4 CIDRs (RFC1918 x3 + link-local), got '$cloakbrowser_egress_except'"
+            exit 1
+          fi
+
+          # same combo + defaultDeny=true -> expect 6 (the 5 above + the namespace-wide default-deny).
+          helm template kadence ./charts/kadence "${set_args[@]}" --set networkPolicy.defaultDeny=true > /tmp/rendered-netpol-deny.yaml
+          count_deny=$(yq eval-all '[select(.kind == "NetworkPolicy")] | length' /tmp/rendered-netpol-deny.yaml)
+          if [ "$count_deny" != "6" ]; then
+            echo "expected 6 NetworkPolicies with defaultDeny=true, got $count_deny"
+            exit 1
+          fi
+
+          # networkPolicy.enabled=false -> expect zero NetworkPolicies, regardless of defaultDeny.
+          count_disabled=$(helm template kadence ./charts/kadence "${set_args[@]}" --set networkPolicy.enabled=false | yq eval-all '[select(.kind == "NetworkPolicy")] | length')
+          if [ "$count_disabled" != "0" ]; then
+            echo "expected 0 NetworkPolicies with networkPolicy.enabled=false, got $count_disabled"
+            exit 1
+          fi
 
   kube-linter:
     runs-on: ubuntu-latest
@@ -76,6 +124,12 @@ jobs:
           helm template kadence ./charts/kadence -f ./charts/kadence/values-dev.yaml.example > rendered-example.yaml
           helm template kadence ./charts/kadence \
             --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]' > rendered-mcp.yaml
+          helm template kadence ./charts/kadence \
+            --set postgres.enabled=true --set postgres.password=x --set markitdown.enabled=true \
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]' > rendered-netpol.yaml
+          helm template kadence ./charts/kadence \
+            --set postgres.enabled=true --set postgres.password=x --set markitdown.enabled=true --set networkPolicy.defaultDeny=true \
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]' > rendered-netpol-deny.yaml
       - name: Run kube-linter (advisory)
         # ADVISORY: continue-on-error means findings never fail the workflow.
         # See .kube-linter.yaml for the documented current baseline. Flip to
@@ -90,7 +144,7 @@ jobs:
           set -o pipefail
           docker run --rm -v "$PWD:/repo" -w /repo \
             stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f916643f54ca291ac38cf7d01ef591ff3f9 \
-            lint --config=.kube-linter.yaml rendered-default.yaml rendered-example.yaml rendered-mcp.yaml \
+            lint --config=.kube-linter.yaml rendered-default.yaml rendered-example.yaml rendered-mcp.yaml rendered-netpol.yaml rendered-netpol-deny.yaml \
             | tee kube-linter-report.txt
       - name: Add kube-linter report to job summary
         # Guarded with [ -f ... ] so this never fails the job even if the lint

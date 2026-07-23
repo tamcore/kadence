@@ -6,9 +6,14 @@
 # needs suppressing — never a blanket disable of a check that otherwise
 # passes.
 #
-# Known findings as of 2026-07-22 (`helm template` against default values,
-# values-dev.yaml.example, and an mcp+markitdown+cloakbrowser combo — see
-# chart.yaml's lint-and-template job for the exact commands):
+# Known findings as of 2026-07-23 (`helm template` against default values,
+# values-dev.yaml.example, an mcp+markitdown combo (garmin), and a
+# postgres+markitdown+mcp(garmin,cloakbrowser) NetworkPolicy combo rendered
+# with networkPolicy.defaultDeny both false and true — see chart.yaml's
+# lint-and-template and kube-linter jobs for the exact commands). The
+# NetworkPolicy resources added in Wave 2 (issue 14) do not introduce any new
+# kube-linter finding category (kube-linter's default bundle has no
+# network-policy-specific check); findings below are unchanged by that work.
 #   - pdb-unhealthy-pod-eviction-policy: PDB doesn't set unhealthyPodEvictionPolicy
 #   - no-anti-affinity: app Deployment (2 replicas) has no inter-pod anti-affinity
 #   - no-read-only-root-fs: the mcp/markitdown containers run 3rd-party images
