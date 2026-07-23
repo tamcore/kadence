@@ -73,6 +73,9 @@ spec:
           httpGet:
             path: /healthz
             port: http
+            # nginx serves TLS on 8080 when mcp.tls is enabled; the kubelet
+            # skips certificate verification for HTTPS probes.
+            scheme: {{ ternary "HTTPS" "HTTP" .Values.mcp.tls.enabled }}
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 3
@@ -81,6 +84,9 @@ spec:
           httpGet:
             path: /healthz
             port: http
+            # nginx serves TLS on 8080 when mcp.tls is enabled; the kubelet
+            # skips certificate verification for HTTPS probes.
+            scheme: {{ ternary "HTTPS" "HTTP" .Values.mcp.tls.enabled }}
           initialDelaySeconds: 10
           periodSeconds: 10
           timeoutSeconds: 5
