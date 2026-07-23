@@ -1,0 +1,22 @@
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.defaultDeny }}
+# Namespace-wide default-deny-all (ingress + egress). Selects every pod in
+# the release namespace via an empty podSelector. This does NOT override the
+# explicit allow rules in the other NetworkPolicies in this chart (app,
+# postgres, mcp, markitdown) — Kubernetes NetworkPolicy semantics are
+# additive/OR across all policies selecting a pod, so those allow-lists keep
+# working; this policy only closes off everything NOT already allowed by
+# name (e.g. any 3rd-party controller/sidecar traffic this chart doesn't
+# know about, or an externalDatabase host that isn't the bundled-postgres
+# in-cluster allow rule above).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kadence.fullname" . }}-default-deny
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+{{- end }}
