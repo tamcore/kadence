@@ -196,7 +196,8 @@ func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	const globalCap = 32 // bytes: small enough that a normal profile PATCH still fits, but not a padded one.
+	// bytes: must fit the login POST (~60B) and a normal profile PATCH, but not a padded one.
+	const globalCap = 128
 	cfg := config.Config{
 		CSRFSecret:     testCSRFSecret,
 		MaxBodyBytes:   globalCap,
@@ -224,7 +225,7 @@ func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
 	_ = sresp.Body.Close()
 
 	// Oversized JSON body on an ordinary route: rejected by the global cap.
-	oversized := `{"displayName":"` + strings.Repeat("x", globalCap) + `","email":"a@x.io","unitSystem":"metric"}`
+	oversized := `{"displayName":"` + strings.Repeat("x", 2*globalCap) + `","email":"a@x.io","unitSystem":"metric"}`
 	oreq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/profile", strings.NewReader(oversized))
 	oreq.Header.Set("Content-Type", "application/json")
 	oreq.Header.Set("X-CSRF-Token", token)
