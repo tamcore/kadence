@@ -98,6 +98,25 @@ jobs:
             exit 1
           fi
 
+          # Content assertions (not just doc count): a gutted policy (egress rules
+          # silently dropped) would still pass the count check above, so assert on
+          # rule presence directly for the app policy and the cloakbrowser policy.
+          app_egress_len=$(yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "kadence") | .spec.egress | length' /tmp/rendered-netpol.yaml)
+          if [ "$app_egress_len" != "5" ]; then
+            echo "expected app NetworkPolicy to have 5 egress rules (postgres, mcp, markitdown, dns, https), got '$app_egress_len'"
+            exit 1
+          fi
+          app_egress_except=$(yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "kadence") | .spec.egress[] | select(.to[0].ipBlock.cidr == "0.0.0.0/0") | .to[0].ipBlock.except | length' /tmp/rendered-netpol.yaml)
+          if [ "$app_egress_except" != "4" ]; then
+            echo "expected app egress ipBlock.except to list 4 CIDRs (RFC1918 x3 + link-local), got '$app_egress_except'"
+            exit 1
+          fi
+          cloakbrowser_egress_len=$(yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "kadence-mcp-cloakbrowser") | .spec.egress | length' /tmp/rendered-netpol.yaml)
+          if [ "$cloakbrowser_egress_len" != "2" ]; then
+            echo "expected cloakbrowser NetworkPolicy to have 2 egress rules (dns, https), got '$cloakbrowser_egress_len'"
+            exit 1
+          fi
+
           # same combo + defaultDeny=true -> expect 6 (the 5 above + the namespace-wide default-deny).
           helm template kadence ./charts/kadence "${set_args[@]}" --set networkPolicy.defaultDeny=true > /tmp/rendered-netpol-deny.yaml
           count_deny=$(yq eval-all '[select(.kind == "NetworkPolicy")] | length' /tmp/rendered-netpol-deny.yaml)
