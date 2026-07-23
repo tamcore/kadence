@@ -86,6 +86,14 @@ spec:
         - name: {{ $prefix }}_TOOLS
           value: {{ join "," . | quote }}
         {{- end }}
+        {{- with $server.alias }}
+        - name: {{ $prefix }}_ALIAS
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with $server.hint }}
+        - name: {{ $prefix }}_HINT
+          value: {{ . | quote }}
+        {{- end }}
         {{- end }}
         {{- if .Values.markitdown.enabled }}
         {{- $mdSvc := include "kadence.markitdown.fullname" . }}

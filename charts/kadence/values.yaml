@@ -189,6 +189,15 @@ externalDatabase:
 #   scope       "global" (all users) or {user: <username>}
 #   image, pullPolicy, transport (streamable-http|sse), port, path
 #   tools       app-side glob allowlist, e.g. ["browser_*"]
+#   alias       (optional) short name replacing `name` as this server's tool-name
+#               prefix (e.g. alias "browser" -> tools appear as "browser__navigate"
+#               instead of "cloakbrowser__navigate"). Must match the same
+#               [a-z0-9][a-z0-9-]{0,31} format as `name`; on a collision with
+#               another visible server the app falls back to `name` and logs a
+#               warning instead of failing startup.
+#   hint        (optional) free-text "when to use this" line surfaced to the model
+#               in the chat system prompt, e.g. "a full live web browser — use for
+#               current info: weather, news, prices, or any URL the user mentions"
 #   env         [{name, value}] passed to the MCP container
 #   existingSecret / persistence  (optional)
 #   resources   (optional) standard container resources; unset -> mcp.resources default

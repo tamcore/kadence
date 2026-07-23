@@ -512,6 +512,67 @@ func TestDefaultSystemPromptIsSlimAndPointsToSkills(t *testing.T) {
 	}
 }
 
+func TestStreamSystemPromptIncludesMCPHintWhenSet(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	mcpTools := &fakeMCPTools{enabled: true, hints: []string{"Tool guide: browser: use for current info"}}
+	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcpTools})
+
+	if err := svc.Stream(context.Background(), 7, testUsername, "", "", "what's the weather", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var sys string
+	for _, m := range captP.gotMessages {
+		if m.Role == model.MsgRoleSystem {
+			sys = m.Content
+		}
+	}
+	if !strings.Contains(sys, "Tool guide: browser: use for current info") {
+		t.Fatalf("system prompt should include the MCP hint line; got: %s", sys)
+	}
+}
+
+func TestStreamSystemPromptOmitsHintLineWhenNoneSet(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	captP := &capturingProvider{reply: "ok"}
+	// A plain MCPTools (enabled, no hints) must produce a byte-identical
+	// system prompt to the no-MCP case — no "Tool guide:" line at all.
+	mcpTools := &fakeMCPTools{enabled: true}
+	svcWithMCP := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcpTools})
+	if err := svcWithMCP.Stream(context.Background(), 7, testUsername, "", "", "hi", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var sysWithMCP string
+	for _, m := range captP.gotMessages {
+		if m.Role == model.MsgRoleSystem {
+			sysWithMCP = m.Content
+		}
+	}
+	if strings.Contains(sysWithMCP, "Tool guide:") {
+		t.Fatalf("system prompt must not contain a hint line when no server has a hint; got: %s", sysWithMCP)
+	}
+
+	captP2 := &capturingProvider{reply: "ok"}
+	svcNoMCP := chat.NewService(captP2, chat.ServiceConfig{Model: "m", MaxTokens: 32},
+		chat.Deps{Convs: &fakeConvs{byID: map[string]model.Conversation{}}, Msgs: &fakeMsgs{}})
+	if err := svcNoMCP.Stream(context.Background(), 7, testUsername, "", "", "hi", &capturingSink{}); err != nil {
+		t.Fatalf("Stream (no MCP): %v", err)
+	}
+	var sysNoMCP string
+	for _, m := range captP2.gotMessages {
+		if m.Role == model.MsgRoleSystem {
+			sysNoMCP = m.Content
+		}
+	}
+	if sysWithMCP != sysNoMCP {
+		t.Fatalf("system prompt must be byte-identical whether or not MCP is wired, when no hints are set:\nwithMCP=%q\nnoMCP=%q", sysWithMCP, sysNoMCP)
+	}
+}
+
 func TestMemorySkillInjectedWithRAGNotes(t *testing.T) {
 	reg, _ := skill.Load()
 	convs := &fakeConvs{byID: map[string]model.Conversation{}}
@@ -656,6 +717,7 @@ func (p *alwaysToolProvider) StreamChatWithTools(_ context.Context, _ provider.C
 type fakeMCPTools struct {
 	enabled       bool
 	tools         []provider.ToolDefinition
+	hints         []string
 	callResult    string
 	callErr       error
 	gotUsername   string
@@ -687,6 +749,10 @@ func (s *fakeMCPSnapshot) Call(_ context.Context, toolName, argsJSON string) (st
 	s.parent.gotToolName = toolName
 	s.parent.gotArgsJSON = argsJSON
 	return s.parent.callResult, s.parent.callErr
+}
+
+func (s *fakeMCPSnapshot) ToolHints() []string {
+	return s.parent.hints
 }
 
 const (
@@ -973,6 +1039,10 @@ func (s *countingMCPSnapshot) Call(_ context.Context, toolName, _ string) (strin
 	s.parent.calls++
 	s.parent.lastTool = toolName
 	return "ok-result", nil
+}
+
+func (s *countingMCPSnapshot) ToolHints() []string {
+	return nil
 }
 
 func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {

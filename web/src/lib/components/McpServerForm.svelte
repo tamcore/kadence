@@ -21,13 +21,15 @@
 	let transport = $state(initial?.transport ?? 'streamable-http');
 	let authUser = $state(initial?.authUser ?? '');
 	let authPass = $state('');
+	let alias = $state(initial?.alias ?? '');
+	let hint = $state(initial?.hint ?? '');
 	let submitting = $state(false);
 
 	async function handleSubmit(e: Event): Promise<void> {
 		e.preventDefault();
 		submitting = true;
 		try {
-			await onSubmit({ name, url, transport, authUser, authPass });
+			await onSubmit({ name, url, transport, authUser, authPass, alias, hint });
 		} finally {
 			submitting = false;
 		}
@@ -57,6 +59,14 @@
 	<label class="field">
 		<span>Auth password{initial ? ' (leave blank to keep)' : ' (optional)'}</span>
 		<input type="password" bind:value={authPass} placeholder="auth password" autocomplete="off" />
+	</label>
+	<label class="field">
+		<span>Alias (optional)</span>
+		<input bind:value={alias} placeholder="short name used as the tool prefix" autocomplete="off" />
+	</label>
+	<label class="field">
+		<span>When should the assistant use this?</span>
+		<input bind:value={hint} placeholder="e.g. use for current info: weather, news, prices" autocomplete="off" />
 	</label>
 	{#if formError}<p class="error" role="alert">{formError}</p>{/if}
 	<div class="actions">

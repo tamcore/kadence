@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -58,6 +59,8 @@ type mcpServerDTO struct {
 	CheckedAt string `json:"checkedAt,omitempty"`
 	Error     string `json:"error,omitempty"` // admin only
 	URL       string `json:"url,omitempty"`   // admin only, or owner's own server
+	Alias     string `json:"alias,omitempty"`
+	Hint      string `json:"hint,omitempty"`
 	Editable  bool   `json:"editable"`
 }
 
@@ -84,6 +87,27 @@ type mcpUpsertRequest struct {
 	Transport string `json:"transport"`
 	AuthUser  string `json:"authUser"`
 	AuthPass  string `json:"authPass"`
+	// Alias and Hint are both optional. Alias, when set, must match the same
+	// name format as Name (mcp.ValidateServerName); Hint is capped at
+	// mcp.HintMaxLen characters. Neither is grandfathered — being new
+	// fields, no pre-existing server can already hold an invalid value.
+	Alias string `json:"alias"`
+	Hint  string `json:"hint"`
+}
+
+// validateAliasAndHint validates the optional Alias/Hint fields of an
+// upsert request, returning a user-facing error message if either is
+// invalid. Both fields are optional: an empty value is always valid.
+func validateAliasAndHint(alias, hint string) error {
+	if alias != "" {
+		if err := mcp.ValidateServerName(alias); err != nil {
+			return fmt.Errorf("alias: %w", err)
+		}
+	}
+	if err := mcp.ValidateHint(hint); err != nil {
+		return err
+	}
+	return nil
 }
 
 // List handles GET /api/mcp.
@@ -111,6 +135,8 @@ func (h *MCP) List(w http.ResponseWriter, r *http.Request) {
 			Scope:     scopeLabel(s.Scope),
 			State:     healthState(s),
 			ToolCount: s.ToolCount,
+			Alias:     s.Alias,
+			Hint:      s.Hint,
 		}
 		if !s.CheckedAt.IsZero() {
 			dto.CheckedAt = s.CheckedAt.Format("2006-01-02T15:04:05Z07:00")
@@ -173,6 +199,10 @@ func (h *MCP) Create(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateAliasAndHint(in.Alias, in.Hint); err != nil {
+		RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if h.maxServers > 0 {
 		existing, err := h.store.ListForOwner(r.Context(), u.ID)
 		if err != nil {
@@ -191,6 +221,8 @@ func (h *MCP) Create(w http.ResponseWriter, r *http.Request) {
 		Transport: in.Transport,
 		AuthUser:  in.AuthUser,
 		AuthPass:  in.AuthPass,
+		Alias:     in.Alias,
+		Hint:      in.Hint,
 	})
 	if errors.Is(err, store.ErrDuplicateName) {
 		RespondError(w, http.StatusConflict, "a server with that name already exists")
@@ -252,12 +284,18 @@ func (h *MCP) Update(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateAliasAndHint(in.Alias, in.Hint); err != nil {
+		RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	err = h.store.Update(r.Context(), u.ID, id, store.UserMCPInput{
 		Name:      in.Name,
 		URL:       in.URL,
 		Transport: in.Transport,
 		AuthUser:  in.AuthUser,
 		AuthPass:  in.AuthPass,
+		Alias:     in.Alias,
+		Hint:      in.Hint,
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		RespondError(w, http.StatusNotFound, "server not found")

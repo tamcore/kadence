@@ -24,7 +24,7 @@ func (f *fakeSource) Probe(_ context.Context, s Server) ([]ToolInfo, error) {
 func TestHealthPoller_ProbeAllAndStatusFor(t *testing.T) {
 	src := &fakeSource{
 		servers: []Server{
-			{Name: "garmin", Scope: scopeGlobal, Transport: "streamable-http", URL: "http://g"},
+			{Name: "garmin", Scope: scopeGlobal, Transport: "streamable-http", URL: "http://g", Alias: "g", Hint: "for garmin things"},
 			{Name: "priv", Scope: "USER_alice", Transport: "sse", URL: "http://p"},
 			{Name: "down", Scope: scopeGlobal, URL: "http://d"},
 		},
@@ -48,6 +48,9 @@ func TestHealthPoller_ProbeAllAndStatusFor(t *testing.T) {
 	}
 	if !byName["garmin"].OK || byName["garmin"].ToolCount != 2 {
 		t.Fatalf("garmin health = %#v, want OK w/ 2 tools", byName["garmin"])
+	}
+	if byName["garmin"].Alias != "g" || byName["garmin"].Hint != "for garmin things" {
+		t.Fatalf("garmin health alias/hint = %#v, want g/for garmin things", byName["garmin"])
 	}
 	if byName["down"].OK || byName["down"].Err == "" {
 		t.Fatalf("down health = %#v, want !OK w/ error", byName["down"])

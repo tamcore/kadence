@@ -66,9 +66,49 @@ describe('/mcp', () => {
 				url: 'https://new.test/mcp',
 				transport: 'streamable-http',
 				authUser: '',
-				authPass: ''
+				authPass: '',
+				alias: '',
+				hint: ''
 			})
 		);
+	});
+
+	it('submits the alias and hint fields when provided', async () => {
+		vi.spyOn(mcpApi, 'listMcp').mockResolvedValue({ servers: [], canAdd: true });
+		const createSpy = vi.spyOn(mcpApi, 'createMcp').mockResolvedValue(undefined);
+		render(Page);
+
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Add MCP server' })).toBeInTheDocument());
+		await fireEvent.click(screen.getByRole('button', { name: 'Add MCP server' }));
+
+		await fireEvent.input(screen.getByPlaceholderText('name'), { target: { value: 'new-one' } });
+		await fireEvent.input(screen.getByPlaceholderText('https://…'), {
+			target: { value: 'https://new.test/mcp' }
+		});
+		await fireEvent.input(screen.getByPlaceholderText('short name used as the tool prefix'), {
+			target: { value: 'browser' }
+		});
+		await fireEvent.input(screen.getByPlaceholderText('e.g. use for current info: weather, news, prices'), {
+			target: { value: 'use for current weather' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Add server' }));
+
+		await waitFor(() =>
+			expect(createSpy).toHaveBeenCalledWith(
+				expect.objectContaining({ alias: 'browser', hint: 'use for current weather' })
+			)
+		);
+	});
+
+	it('shows the alias badge on the list when set', async () => {
+		vi.spyOn(mcpApi, 'listMcp').mockResolvedValue({
+			servers: [{ ...globalServer, alias: 'browser' }],
+			canAdd: false
+		});
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('shared-server')).toBeInTheDocument());
+		expect(screen.getByText('browser')).toBeInTheDocument();
 	});
 
 	it('does not render the add form or button when canAdd is false', async () => {

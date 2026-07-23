@@ -119,7 +119,14 @@
 					<li>
 						{#if editingId === s.id}
 							<McpServerForm
-								initial={{ name: s.name, url: s.url ?? '', transport: s.transport, authUser: '' }}
+								initial={{
+									name: s.name,
+									url: s.url ?? '',
+									transport: s.transport,
+									authUser: '',
+									alias: s.alias ?? '',
+									hint: s.hint ?? ''
+								}}
 								submitLabel="Save"
 								{formError}
 								onSubmit={submitEdit}
@@ -127,9 +134,10 @@
 							/>
 						{:else}
 							<div class="card">
-								<a class="card-link" href="/mcp/{s.name}">
+								<a class="card-link" href="/mcp/{s.name}" title={s.hint ?? ''}>
 									<span class="dot {s.state}" title={s.state}></span>
 									<span class="name">{s.name}</span>
+									{#if s.alias}<span class="badge" title="tool prefix">{s.alias}</span>{/if}
 									<span class="badge">{s.scope === 'global' ? 'Global' : 'Yours'}</span>
 									<span class="muted">{s.transport} · {s.toolCount} tools</span>
 									{#if $isAdmin && s.url}<span class="url muted">{s.url}</span>{/if}

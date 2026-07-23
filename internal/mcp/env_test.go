@@ -2,6 +2,8 @@ package mcp
 
 import "testing"
 
+const testGarminGlobalURLEnv = "MCP_GARMIN_GLOBAL_URL=http://x/mcp"
+
 func TestServersFromEnv(t *testing.T) {
 	env := []string{
 		"MCP_GARMIN_GLOBAL_URL=http://garmin:8080",
@@ -35,7 +37,7 @@ func TestServersFromEnv(t *testing.T) {
 
 func TestServersFromEnvParsesTools(t *testing.T) {
 	env := []string{
-		"MCP_GARMIN_GLOBAL_URL=http://x/mcp",
+		testGarminGlobalURLEnv,
 		"MCP_GARMIN_GLOBAL_TOOLS=get_activity*, *_workout ,get_exercise_types",
 	}
 	servers, err := ServersFromEnv(env)
@@ -55,9 +57,48 @@ func TestServersFromEnvParsesTools(t *testing.T) {
 }
 
 func TestServersFromEnvNoToolsMeansNil(t *testing.T) {
-	servers, _ := ServersFromEnv([]string{"MCP_GARMIN_GLOBAL_URL=http://x/mcp"})
+	servers, _ := ServersFromEnv([]string{testGarminGlobalURLEnv})
 	if servers[0].Tools != nil {
 		t.Fatalf("expected nil Tools, got %v", servers[0].Tools)
+	}
+}
+
+func TestServersFromEnvParsesAliasAndHint(t *testing.T) {
+	env := []string{
+		"MCP_CLOAKBROWSER_GLOBAL_URL=http://x/mcp",
+		"MCP_CLOAKBROWSER_GLOBAL_ALIAS=browser",
+		"MCP_CLOAKBROWSER_GLOBAL_HINT=a full live web browser — use for current info: weather, news, prices",
+	}
+	servers, err := ServersFromEnv(env)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("servers=%d err=%v", len(servers), err)
+	}
+	if servers[0].Alias != testBrowserAlias {
+		t.Fatalf("Alias=%q want %q", servers[0].Alias, testBrowserAlias)
+	}
+	if servers[0].Hint != "a full live web browser — use for current info: weather, news, prices" {
+		t.Fatalf("Hint=%q", servers[0].Hint)
+	}
+}
+
+func TestServersFromEnvNoAliasOrHintMeansEmpty(t *testing.T) {
+	servers, _ := ServersFromEnv([]string{testGarminGlobalURLEnv})
+	if servers[0].Alias != "" || servers[0].Hint != "" {
+		t.Fatalf("want empty Alias/Hint, got Alias=%q Hint=%q", servers[0].Alias, servers[0].Hint)
+	}
+}
+
+func TestServersFromEnvInvalidAliasFallsBackToEmpty(t *testing.T) {
+	env := []string{
+		testGarminGlobalURLEnv,
+		"MCP_GARMIN_GLOBAL_ALIAS=Not_Valid!",
+	}
+	servers, err := ServersFromEnv(env)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("servers=%d err=%v", len(servers), err)
+	}
+	if servers[0].Alias != "" {
+		t.Fatalf("want invalid alias dropped (empty), got %q", servers[0].Alias)
 	}
 }
 

@@ -13,12 +13,15 @@ import (
 )
 
 const (
-	testServerName   = "mine"
-	testServerPass   = "sekret"
-	testServerURL    = "https://a.example.io/mcp"
-	testTransportSSE = "sse"
-	testBobUsername  = "bob"
-	testBobServer    = "bobsrv"
+	testServerName              = "mine"
+	testServerPass              = "sekret"
+	testServerURL               = "https://a.example.io/mcp"
+	testTransportSSE            = "sse"
+	testTransportStreamableHTTP = "streamable-http"
+	testBobUsername             = "bob"
+	testBobServer               = "bobsrv"
+	testAliasMine               = "mine"
+	testHintWeather             = "use for weather"
 )
 
 func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
@@ -43,7 +46,7 @@ func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 	repo := store.NewUserServerRepo(pool, cipher)
 
 	id, err := repo.Create(ctx, alice.ID, store.UserMCPInput{
-		Name: testServerName, URL: testServerURL, Transport: "streamable-http",
+		Name: testServerName, URL: testServerURL, Transport: testTransportStreamableHTTP,
 		AuthUser: "u", AuthPass: testServerPass,
 	})
 	if err != nil {
@@ -92,6 +95,57 @@ func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 	all, err := repo.AllServers(ctx)
 	if err != nil || len(all) != 2 {
 		t.Fatalf("AllServers=%d err=%v want 2", len(all), err)
+	}
+}
+
+// TestUserServerRepo_AliasAndHintRoundTrip verifies alias/hint are stored,
+// listed back (as UserMCPRecord), and surfaced on the decrypted mcp.Server
+// used by the registry — and that leaving both blank keeps them empty
+// rather than erroring.
+func TestUserServerRepo_AliasAndHintRoundTrip(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+
+	users := store.NewUserRepository(pool)
+	alice, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+
+	cipher, err := crypto.NewCipher(bytes.Repeat([]byte{3}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	repo := store.NewUserServerRepo(pool, cipher)
+
+	id, err := repo.Create(ctx, alice.ID, store.UserMCPInput{
+		Name: testServerName, URL: testServerURL, Transport: testTransportStreamableHTTP,
+		AuthPass: "p", Alias: testAliasMine, Hint: testHintWeather,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	recs, err := repo.ListForOwner(ctx, alice.ID)
+	if err != nil || len(recs) != 1 || recs[0].Alias != testAliasMine || recs[0].Hint != testHintWeather {
+		t.Fatalf("ListForOwner=%#v err=%v want Alias=mine Hint='use for weather'", recs, err)
+	}
+
+	servers, err := repo.ServersForUser(ctx, testAliceUsername)
+	if err != nil || len(servers) != 1 || servers[0].Alias != testAliasMine || servers[0].Hint != testHintWeather {
+		t.Fatalf("ServersForUser=%#v err=%v", servers, err)
+	}
+
+	// Update clearing both back to blank must succeed and actually clear them.
+	if err := repo.Update(ctx, alice.ID, id, store.UserMCPInput{
+		Name: testServerName, URL: testServerURL, Transport: testTransportStreamableHTTP, AuthPass: "",
+	}); err != nil {
+		t.Fatalf("Update (clear alias/hint): %v", err)
+	}
+	recs, err = repo.ListForOwner(ctx, alice.ID)
+	if err != nil || len(recs) != 1 || recs[0].Alias != "" || recs[0].Hint != "" {
+		t.Fatalf("after clearing update: %#v err=%v want empty Alias/Hint", recs, err)
 	}
 }
 
