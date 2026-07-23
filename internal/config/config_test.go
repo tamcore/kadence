@@ -36,12 +36,16 @@ func validConfig() Config {
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("KADENCE_LISTEN_ADDR", "")
+	t.Setenv("KADENCE_HEALTH_ADDR", "")
 	t.Setenv("KADENCE_ENV", "")
 
 	cfg := Load()
 
 	if cfg.ListenAddr != ":8080" {
 		t.Fatalf("ListenAddr = %q, want %q", cfg.ListenAddr, ":8080")
+	}
+	if cfg.HealthAddr != ":8081" {
+		t.Fatalf("HealthAddr = %q, want %q", cfg.HealthAddr, ":8081")
 	}
 	if cfg.Env != "dev" {
 		t.Fatalf("Env = %q, want %q", cfg.Env, "dev")
@@ -53,12 +57,16 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadOverrides(t *testing.T) {
 	t.Setenv("KADENCE_LISTEN_ADDR", ":9090")
+	t.Setenv("KADENCE_HEALTH_ADDR", ":9091")
 	t.Setenv("KADENCE_ENV", "prod")
 
 	cfg := Load()
 
 	if cfg.ListenAddr != ":9090" {
 		t.Fatalf("ListenAddr = %q, want %q", cfg.ListenAddr, ":9090")
+	}
+	if cfg.HealthAddr != ":9091" {
+		t.Fatalf("HealthAddr = %q, want %q", cfg.HealthAddr, ":9091")
 	}
 	if !cfg.IsProd() {
 		t.Fatal("IsProd() = false, want true when KADENCE_ENV=prod")

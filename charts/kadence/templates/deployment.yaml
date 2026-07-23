@@ -65,6 +65,8 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        - containerPort: 8081
+          name: health
         env:
         {{- include "kadence.dbEnv" . | nindent 8 }}
         {{- range $server := .Values.mcp.servers }}
@@ -109,8 +111,8 @@ spec:
             name: {{ include "kadence.fullname" . }}-secret
         livenessProbe:
           httpGet:
-            path: /api/healthz
-            port: http
+            path: /healthz
+            port: health
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5

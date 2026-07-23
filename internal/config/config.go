@@ -15,6 +15,14 @@ import (
 // Config holds runtime configuration for the Kadence server.
 type Config struct {
 	ListenAddr string
+	// HealthAddr is the bind address for the dedicated liveness-only listener
+	// (KADENCE_HEALTH_ADDR, default :8081), which serves nothing but
+	// GET /healthz and stays up through the main server's graceful drain (see
+	// cmd/server/serve.Run) so kubelet's liveness probe never sees it go
+	// down mid-drain. The readiness probe stays on the main listener's
+	// /api/healthz, so removal from the Service endpoints still happens as
+	// intended once srv.Shutdown stops accepting connections.
+	HealthAddr string
 	Env        string
 	// LogLevel is the slog level (KADENCE_LOG_LEVEL): debug|info|warn|error.
 	LogLevel string
@@ -140,6 +148,7 @@ type Config struct {
 
 const (
 	defaultListenAddr = ":8080"
+	defaultHealthAddr = ":8081"
 	defaultEnv        = "dev"
 	envProd           = "prod"
 	envProduction     = "production"
@@ -169,6 +178,7 @@ const (
 func Load() Config {
 	cfg := Config{
 		ListenAddr:     envOr("KADENCE_LISTEN_ADDR", defaultListenAddr),
+		HealthAddr:     envOr("KADENCE_HEALTH_ADDR", defaultHealthAddr),
 		Env:            envOr("KADENCE_ENV", defaultEnv),
 		LogLevel:       envOr("KADENCE_LOG_LEVEL", "info"),
 		DatabaseURL:    os.Getenv("KADENCE_DATABASE_URL"),
