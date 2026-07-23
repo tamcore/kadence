@@ -16,12 +16,36 @@ vi.mock('$lib/stores/chat', async () => {
 });
 vi.mock('$app/navigation', () => ({ goto: (...a: unknown[]) => gotoMock(...a) }));
 
+vi.mock('$lib/stores/auth', async () => {
+	const { writable } = await import('svelte/store');
+	return {
+		currentUser: writable<User | null>(null)
+	};
+});
+
 import Home from './+page.svelte';
 import { activeId as activeIdStore } from '$lib/stores/chat';
+import { currentUser } from '$lib/stores/auth';
+import type { User } from '$lib/types';
+
+function testUser(overrides: Partial<User>): User {
+	return {
+		id: 1,
+		username: 'alice',
+		email: 'alice@example.com',
+		role: 'user',
+		displayName: '',
+		unitSystem: 'metric',
+		location: '',
+		aboutMe: '',
+		...overrides
+	};
+}
 
 afterEach(() => {
 	vi.clearAllMocks();
 	activeIdStore.set(null);
+	currentUser.set(null);
 });
 
 describe('home page', () => {
@@ -29,6 +53,24 @@ describe('home page', () => {
 		render(Home);
 		expect(screen.getByRole('heading')).toBeInTheDocument();
 		expect(screen.getByRole('textbox')).toBeInTheDocument();
+	});
+
+	it('greets by displayName when set', () => {
+		currentUser.set(testUser({ displayName: 'Alice' }));
+		render(Home);
+		expect(screen.getByRole('heading')).toHaveTextContent('What can I help with, Alice?');
+	});
+
+	it('falls back to username when displayName is empty', () => {
+		currentUser.set(testUser({ displayName: '' }));
+		render(Home);
+		expect(screen.getByRole('heading')).toHaveTextContent('What can I help with, alice?');
+	});
+
+	it('omits the name entirely when signed out', () => {
+		currentUser.set(null);
+		render(Home);
+		expect(screen.getByRole('heading')).toHaveTextContent('What can I help with?');
 	});
 
 	it('calls newChat on mount', () => {

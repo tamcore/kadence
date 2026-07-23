@@ -5,6 +5,8 @@ export interface User {
 	role: 'admin' | 'user';
 	displayName: string;
 	unitSystem: 'metric' | 'imperial';
+	location: string;
+	aboutMe: string;
 }
 
 export interface Conversation {

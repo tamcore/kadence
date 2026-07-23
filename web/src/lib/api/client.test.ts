@@ -67,7 +67,9 @@ describe('central 401 handling', () => {
 			email: 'a@x.io',
 			role: 'user',
 			displayName: 'Alice',
-			unitSystem: 'metric'
+			unitSystem: 'metric',
+			location: '',
+			aboutMe: ''
 		});
 		vi.stubGlobal('fetch', mockFetch(401, { data: null, error: 'unauthorized' }));
 
@@ -86,7 +88,9 @@ describe('central 401 handling', () => {
 			email: 'a@x.io',
 			role: 'user',
 			displayName: 'Alice',
-			unitSystem: 'metric'
+			unitSystem: 'metric',
+			location: '',
+			aboutMe: ''
 		});
 		vi.stubGlobal('fetch', mockFetch(500, { data: null, error: 'boom' }));
 

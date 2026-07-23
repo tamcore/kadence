@@ -5,6 +5,8 @@ export interface ProfileInput {
 	displayName: string;
 	email: string;
 	unitSystem: 'metric' | 'imperial';
+	location?: string;
+	aboutMe?: string;
 }
 
 export interface PasswordInput {

@@ -26,10 +26,10 @@ func TestUnitPromptLine(t *testing.T) {
 // unit-system sentence for the given unit preference.
 func TestSystemPromptIncludesUnitLine(t *testing.T) {
 	s := NewService(nil, ServiceConfig{}, Deps{})
-	if !strings.Contains(s.systemPrompt("imperial"), "miles") {
+	if !strings.Contains(s.systemPrompt(UserContext{UnitSystem: "imperial"}), "miles") {
 		t.Fatal("imperial systemPrompt missing miles line")
 	}
-	if !strings.Contains(s.systemPrompt("metric"), "kilometers") {
+	if !strings.Contains(s.systemPrompt(UserContext{UnitSystem: "metric"}), "kilometers") {
 		t.Fatal("metric systemPrompt missing km line")
 	}
 }

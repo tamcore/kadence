@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,19 +19,31 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
-const testUsername = "alice"
+const (
+	testUsername = "alice"
+	testEmail    = "a@x.io"
+	testLocation = "Berlin"
+	testAboutMe  = "runs marathons"
+)
 
 type fakeProfileUsers struct {
 	user            model.User
 	updateErr       error
 	passwordUpdated bool
+
+	// lastLocation/lastAboutMe capture the args UpdateProfile was called
+	// with, so tests can assert trimming happened before the call.
+	lastLocation string
+	lastAboutMe  string
 }
 
 func (f *fakeProfileUsers) GetByID(_ context.Context, _ int64) (model.User, error) {
 	return f.user, nil
 }
 
-func (f *fakeProfileUsers) UpdateProfile(_ context.Context, _ int64, _, _, _ string) error {
+func (f *fakeProfileUsers) UpdateProfile(_ context.Context, _ int64, _, _, _, location, aboutMe string) error {
+	f.lastLocation = location
+	f.lastAboutMe = aboutMe
 	return f.updateErr
 }
 
@@ -92,16 +105,91 @@ func TestProfile_Update_EmailConflictAndUnitValidation(t *testing.T) {
 	}
 
 	h2 := handlers.NewProfile(&fakeProfileUsers{}, &fakeProfileSessions{}, config.Config{})
-	if code := doAuthedPatch(t, h2.Update, `{"displayName":"A","email":"a@x.io","unitSystem":"bogus"}`); code != http.StatusBadRequest {
+	body2 := fmt.Sprintf(`{"displayName":"A","email":"%s","unitSystem":"bogus"}`, testEmail)
+	if code := doAuthedPatch(t, h2.Update, body2); code != http.StatusBadRequest {
 		t.Fatalf("bad unit code=%d want %d", code, http.StatusBadRequest)
 	}
 }
 
 func TestProfile_Update_Success(t *testing.T) {
-	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: "a@x.io", DisplayName: "A", UnitSystem: model.UnitMetric}}
+	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: testEmail, DisplayName: "A", UnitSystem: model.UnitMetric}}
 	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{})
-	if code := doAuthedPatch(t, h.Update, `{"displayName":"A","email":"a@x.io","unitSystem":"metric"}`); code != http.StatusOK {
+	body1 := fmt.Sprintf(`{"displayName":"A","email":"%s","unitSystem":"metric"}`, testEmail)
+	if code := doAuthedPatch(t, h.Update, body1); code != http.StatusOK {
 		t.Fatalf("status=%d want 200", code)
+	}
+}
+
+func TestProfile_Update_TrimsLocationAndAboutMe(t *testing.T) {
+	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: testEmail}}
+	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{})
+	body := fmt.Sprintf(
+		`{"displayName":"A","email":"%s","unitSystem":"metric","location":"  %s  ","aboutMe":"  %s  "}`,
+		testEmail, testLocation, testAboutMe)
+	if code := doAuthedPatch(t, h.Update, body); code != http.StatusOK {
+		t.Fatalf("status=%d want 200", code)
+	}
+	if users.lastLocation != testLocation || users.lastAboutMe != testAboutMe {
+		t.Fatalf("expected trimmed location/aboutMe, got location=%q aboutMe=%q", users.lastLocation, users.lastAboutMe)
+	}
+}
+
+func TestProfile_Update_LocationOverCapRejected(t *testing.T) {
+	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: testEmail}}
+	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{})
+	over := strings.Repeat("a", 121)
+	body := fmt.Sprintf(`{"displayName":"A","email":"%s","unitSystem":"metric","location":"%s"}`, testEmail, over)
+	if code := doAuthedPatch(t, h.Update, body); code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 for location over 120 chars", code)
+	}
+}
+
+func TestProfile_Update_AboutMeOverCapRejected(t *testing.T) {
+	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: testEmail}}
+	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{})
+	over := strings.Repeat("a", 1001)
+	body := fmt.Sprintf(`{"displayName":"A","email":"%s","unitSystem":"metric","aboutMe":"%s"}`, testEmail, over)
+	if code := doAuthedPatch(t, h.Update, body); code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 for aboutMe over 1000 chars", code)
+	}
+}
+
+func TestProfile_Update_LocationAndAboutMeAtCapAccepted(t *testing.T) {
+	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: testEmail}}
+	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{})
+	loc := strings.Repeat("a", 120)
+	about := strings.Repeat("b", 1000)
+	body := fmt.Sprintf(`{"displayName":"A","email":"%s","unitSystem":"metric","location":"%s","aboutMe":"%s"}`,
+		testEmail, loc, about)
+	if code := doAuthedPatch(t, h.Update, body); code != http.StatusOK {
+		t.Fatalf("status=%d want 200 at exact cap", code)
+	}
+}
+
+func TestProfile_Update_ResponseIncludesLocationAndAboutMe(t *testing.T) {
+	users := &fakeProfileUsers{user: model.User{
+		ID: 1, Username: testUsername, Email: testEmail, DisplayName: "A", UnitSystem: model.UnitMetric,
+		Location: testLocation, AboutMe: testAboutMe,
+	}}
+	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{})
+	req := httptest.NewRequest(http.MethodPatch, "/api/profile", strings.NewReader(fmt.Sprintf(
+		`{"displayName":"A","email":"%s","unitSystem":"metric","location":"%s","aboutMe":"%s"}`,
+		testEmail, testLocation, testAboutMe)))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 1, Username: testUsername}))
+	rec := httptest.NewRecorder()
+	h.Update(rec, req)
+
+	var env struct {
+		Data struct {
+			Location string `json:"location"`
+			AboutMe  string `json:"aboutMe"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Data.Location != testLocation || env.Data.AboutMe != testAboutMe {
+		t.Fatalf("DTO round-trip missing location/aboutMe: %s", rec.Body.String())
 	}
 }
 

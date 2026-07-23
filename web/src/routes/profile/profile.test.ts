@@ -206,6 +206,38 @@ describe('/profile', () => {
 		expect(await screen.findByRole('alert')).toHaveTextContent('incorrect current password');
 	});
 
+	it('saves location and about me via the Account form', async () => {
+		listSessionsMock.mockResolvedValue([]);
+		listPasskeysMock.mockResolvedValue([]);
+		updateProfileMock.mockResolvedValueOnce({
+			id: 1,
+			username: 'u',
+			displayName: 'u',
+			email: 'u@example.com',
+			role: 'user',
+			unitSystem: 'metric',
+			location: 'Berlin',
+			aboutMe: 'runs marathons'
+		});
+		render(Page);
+
+		// displayName/email are required for native form validation to allow
+		// submission at all — this test only cares about location/aboutMe, but
+		// the fields still need non-empty values to reach the submit handler.
+		await fireEvent.input(screen.getByLabelText('Display name'), { target: { value: 'Alice' } });
+		await fireEvent.input(screen.getByLabelText('Email'), { target: { value: 'alice@example.com' } });
+		await fireEvent.input(screen.getByLabelText('Location'), { target: { value: 'Berlin' } });
+		await fireEvent.input(screen.getByLabelText('About me'), { target: { value: 'runs marathons' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+
+		await waitFor(() =>
+			expect(updateProfileMock).toHaveBeenCalledWith(
+				expect.objectContaining({ location: 'Berlin', aboutMe: 'runs marathons' })
+			)
+		);
+		await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
+	});
+
 	it('saves preferences (unit system) via the shared profile update path', async () => {
 		listSessionsMock.mockResolvedValue([]);
 		listPasskeysMock.mockResolvedValue([]);

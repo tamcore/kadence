@@ -15,7 +15,9 @@ const sampleUser = {
 	email: 'alice@example.com',
 	role: 'user',
 	displayName: 'Alice',
-	unitSystem: 'metric'
+	unitSystem: 'metric',
+	location: '',
+	aboutMe: ''
 };
 
 describe('profile api', () => {
@@ -44,6 +46,30 @@ describe('profile api', () => {
 			displayName: 'Alice',
 			email: 'alice@example.com',
 			unitSystem: 'metric'
+		});
+	});
+
+	it('PATCHes /api/profile with location and aboutMe when provided', async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(jsonResponse(200, { data: { ...sampleUser, location: 'Berlin', aboutMe: 'runs marathons' } }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await updateProfile({
+			displayName: 'Alice',
+			email: 'alice@example.com',
+			unitSystem: 'metric',
+			location: 'Berlin',
+			aboutMe: 'runs marathons'
+		});
+
+		const [, init] = fetchMock.mock.calls[0];
+		expect(JSON.parse(init.body)).toEqual({
+			displayName: 'Alice',
+			email: 'alice@example.com',
+			unitSystem: 'metric',
+			location: 'Berlin',
+			aboutMe: 'runs marathons'
 		});
 	});
 
