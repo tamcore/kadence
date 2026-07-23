@@ -12,6 +12,7 @@ Values shown are the built-in defaults; `—` means unset/empty.
 | Variable | Default | Purpose |
 |---|---|---|
 | `KADENCE_LISTEN_ADDR` | `:8080` | HTTP listener bind address. |
+| `KADENCE_HEALTH_ADDR` | `:8081` | Dedicated liveness-only listener bind address, serving only `GET /healthz` (200, no auth). Stays up through the entire graceful-drain window so kubelet's liveness probe never fires during a rolling shutdown; the readiness probe stays on the main listener's `/api/healthz` so the pod is still correctly removed from Service endpoints once draining starts. |
 | `KADENCE_ENV` | `dev` | `dev` \| `prod` \| `production`. Prod enables secure cookies + strict CSRF. |
 | `KADENCE_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 | `KADENCE_DATABASE_URL` | — (required) | Postgres DSN (pgvector). goose migrations run on startup. |

@@ -252,7 +252,17 @@ func Run() error {
 		IdleTimeout:       idleTimeout,
 	}
 
+	// healthSrv is a second, dedicated listener that serves only GET
+	// /healthz. It starts before the main server and is shut down LAST (see
+	// below) so kubelet's liveness probe — pointed at this listener, not the
+	// main one — never sees a failure while the main server is draining
+	// in-flight requests. The main listener's /api/healthz remains the
+	// readiness probe target: readiness failing during drain is the whole
+	// point (it removes the pod from Service endpoints).
+	healthSrv := newHealthServer(cfg.HealthAddr)
+
 	errCh := make(chan error, 1)
+	startHealthServer(healthSrv, errCh)
 	go func() {
 		slog.Info("server listening", "addr", cfg.ListenAddr, "env", cfg.Env)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -268,15 +278,29 @@ func Run() error {
 	}
 
 	shutdownErr := shutdownServer(srv, shutdownTimeout)
+	if shutdownErr != nil {
+		slog.Warn("graceful shutdown deadline exceeded", "err", shutdownErr)
+	}
 
-	// Cancel rootCtx's background goroutines only after srv.Shutdown has
-	// returned (requests have drained or the shutdown timeout elapsed), then
-	// wait for them to actually exit before returning — so the deferred
-	// store.Close(pool) above never runs while a goroutine is still
-	// mid-query against the pool.
-	stopSignals()
+	// rootCtx is already cancelled (signal.NotifyContext fired it at signal
+	// time, which is what unblocked the select above and is what the
+	// background goroutines below are watching) — nothing left to cancel
+	// here. What remains is waiting for those goroutines to actually have
+	// exited before returning, so the deferred store.Close(pool) above never
+	// runs while one of them is still mid-query against the pool.
+	// stopSignals is deferred rather than called here: rootCtx has already
+	// done its job, and calling it again would only be a redundant release
+	// of signal.NotifyContext's internal resources ahead of the func return.
 	if drainGoroutines(&bgWG, goroutineDrainTimeout, slog.Default()) {
 		slog.Warn("proceeding with shutdown despite goroutine drain timeout")
+	}
+
+	// The health listener is shut down last, after the main server has
+	// finished draining AND background goroutines have exited, so liveness
+	// stays green for the full drain window regardless of how long either
+	// step takes.
+	if err := shutdownServer(healthSrv, shutdownTimeout); err != nil {
+		slog.Warn("health listener shutdown deadline exceeded", "err", err)
 	}
 
 	return shutdownErr
