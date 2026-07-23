@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,8 +32,19 @@ import (
 
 const (
 	readHeaderTimeout = 10 * time.Second
-	shutdownTimeout   = 10 * time.Second
-	startupTimeout    = 30 * time.Second
+	// shutdownTimeout bounds how long srv.Shutdown waits for in-flight
+	// requests to finish, including long-lived SSE chat streams which can run
+	// up to cfg.LLMTimeout (default 300s) — 310s keeps a 10s margin.
+	shutdownTimeout = 310 * time.Second
+	// idleTimeout bounds how long a keep-alive connection may sit idle
+	// between requests before the server closes it.
+	idleTimeout = 120 * time.Second
+	// goroutineDrainTimeout bounds how long Run waits, after srv.Shutdown
+	// returns, for background goroutines (reindex worker, MCP health poller,
+	// session reaper) to observe rootCtx cancellation and exit, before
+	// proceeding to close the DB pool regardless.
+	goroutineDrainTimeout = 15 * time.Second
+	startupTimeout        = 30 * time.Second
 )
 
 // mcpToolsAdapter satisfies chat.MCPTools over *mcp.Registry. It exists only
@@ -92,7 +104,11 @@ func Run() error {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
 
-	go runSessionReaper(rootCtx, sessions, sessionReapInterval, slog.Default())
+	var bgWG sync.WaitGroup
+
+	bgWG.Go(func() {
+		runSessionReaper(rootCtx, sessions, sessionReapInterval, slog.Default())
+	})
 
 	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
 	deps.Profile = handlers.NewProfile(users, sessions, cfg)
@@ -146,7 +162,9 @@ func Run() error {
 			chunkRepo := store.NewChunkRepository(pool, cfg.EmbedModel)
 			rag = chat.NewRAG(embedder, chunkRepo, cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
-			go reindex.Run(rootCtx, chunkRepo, embedder.Embed, slog.Default())
+			bgWG.Go(func() {
+				reindex.Run(rootCtx, chunkRepo, embedder.Embed, slog.Default())
+			})
 
 			docsRepo := store.NewDocumentRepository(pool)
 			extractors := buildIngestExtractors(cfg)
@@ -185,7 +203,9 @@ func Run() error {
 			slog.Info("mcp enabled", "env_servers", len(servers), "user_mcp", userSrc != nil)
 
 			poller := mcp.NewHealthPoller(registry, mcp.DefaultHealthInterval)
-			go poller.Run(rootCtx)
+			bgWG.Go(func() {
+				poller.Run(rootCtx)
+			})
 
 			// userRepo is a *store.UserServerRepo; passed as nil explicitly
 			// when unset to avoid handing NewMCP a non-nil interface wrapping
@@ -229,6 +249,7 @@ func Run() error {
 		Addr:              cfg.ListenAddr,
 		Handler:           api.NewRouter(deps),
 		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 
 	errCh := make(chan error, 1)
@@ -246,9 +267,19 @@ func Run() error {
 		slog.Info("shutdown signal received")
 	}
 
-	shutdownCtx, cancel2 := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel2()
-	return srv.Shutdown(shutdownCtx)
+	shutdownErr := shutdownServer(srv, shutdownTimeout)
+
+	// Cancel rootCtx's background goroutines only after srv.Shutdown has
+	// returned (requests have drained or the shutdown timeout elapsed), then
+	// wait for them to actually exit before returning — so the deferred
+	// store.Close(pool) above never runs while a goroutine is still
+	// mid-query against the pool.
+	stopSignals()
+	if drainGoroutines(&bgWG, goroutineDrainTimeout, slog.Default()) {
+		slog.Warn("proceeding with shutdown despite goroutine drain timeout")
+	}
+
+	return shutdownErr
 }
 
 // buildIngestExtractors returns the document extractors used for RAG
