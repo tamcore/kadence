@@ -20,7 +20,9 @@ const existingUser = {
 	email: 'bob@example.com',
 	role: 'user' as const,
 	displayName: 'Bob',
-	unitSystem: 'metric' as const
+	unitSystem: 'metric' as const,
+	location: '',
+	aboutMe: ''
 };
 
 afterEach(() => {

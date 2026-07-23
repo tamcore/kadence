@@ -25,6 +25,8 @@ type User struct {
 	Role           string
 	DisplayName    string
 	UnitSystem     string
+	Location       string
+	AboutMe        string
 	CreatedAt      time.Time
 	WebAuthnHandle string
 }

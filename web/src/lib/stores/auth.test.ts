@@ -15,7 +15,9 @@ describe('auth store', () => {
 			email: 'a@x.io',
 			role: 'admin',
 			displayName: 'Alice',
-			unitSystem: 'metric'
+			unitSystem: 'metric',
+			location: '',
+			aboutMe: ''
 		});
 		expect(get(currentUser)?.username).toBe('alice');
 		expect(get(isAuthenticated)).toBe(true);
@@ -29,7 +31,9 @@ describe('auth store', () => {
 			email: 'a@x.io',
 			role: 'user',
 			displayName: 'Alice',
-			unitSystem: 'metric'
+			unitSystem: 'metric',
+			location: '',
+			aboutMe: ''
 		});
 		clearAuth();
 		expect(get(currentUser)).toBeNull();

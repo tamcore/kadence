@@ -16,10 +16,15 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
+	const MAX_LOCATION_LEN = 120;
+	const MAX_ABOUT_ME_LEN = 1000;
+
 	let form = $state({
 		displayName: $currentUser?.displayName ?? '',
 		email: $currentUser?.email ?? '',
-		unitSystem: ($currentUser?.unitSystem ?? 'metric') as 'metric' | 'imperial'
+		unitSystem: ($currentUser?.unitSystem ?? 'metric') as 'metric' | 'imperial',
+		location: $currentUser?.location ?? '',
+		aboutMe: $currentUser?.aboutMe ?? ''
 	});
 
 	let pw = $state({ currentPassword: '', newPassword: '', logoutOthers: true });
@@ -202,6 +207,21 @@
 		<form class="form" onsubmit={saveProfile}>
 			<Input label="Display name" name="displayName" required bind:value={form.displayName} />
 			<Input label="Email" name="email" type="email" required bind:value={form.email} />
+			<Input
+				label="Location"
+				name="location"
+				maxlength={MAX_LOCATION_LEN}
+				bind:value={form.location}
+			/>
+			<label class="field">
+				<span class="field-label">About me</span>
+				<textarea
+					name="aboutMe"
+					rows="4"
+					maxlength={MAX_ABOUT_ME_LEN}
+					bind:value={form.aboutMe}
+				></textarea>
+			</label>
 			<Button type="submit" variant="primary">Save account</Button>
 		</form>
 	</section>
@@ -353,6 +373,28 @@
 	.form {
 		display: grid;
 		gap: 8px;
+	}
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		margin-bottom: 12px;
+	}
+	.field-label {
+		font-size: 0.85rem;
+		color: var(--text-muted);
+	}
+	.field textarea {
+		padding: 10px 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		font: inherit;
+		background: var(--surface);
+		resize: vertical;
+	}
+	.field textarea:focus {
+		outline: 2px solid var(--accent);
+		border-color: var(--accent);
 	}
 	.modal-actions {
 		display: flex;

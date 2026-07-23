@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -19,9 +20,15 @@ import (
 // profileUsers is the user persistence the profile handler needs.
 type profileUsers interface {
 	GetByID(ctx context.Context, id int64) (model.User, error)
-	UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem string) error
+	UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe string) error
 	UpdatePassword(ctx context.Context, id int64, passwordHash string) error
 }
+
+// Field length caps enforced on PATCH /api/profile.
+const (
+	maxLocationLen = 120
+	maxAboutMeLen  = 1000
+)
 
 // profileSessions is the session persistence the profile handler needs.
 type profileSessions interface {
@@ -51,6 +58,8 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"displayName"`
 		Email       string `json:"email"`
 		UnitSystem  string `json:"unitSystem"`
+		Location    string `json:"location"`
+		AboutMe     string `json:"aboutMe"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -66,8 +75,18 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "valid email required")
 		return
 	}
+	location := strings.TrimSpace(in.Location)
+	if len(location) > maxLocationLen {
+		RespondError(w, http.StatusBadRequest, fmt.Sprintf("location must be %d characters or fewer", maxLocationLen))
+		return
+	}
+	aboutMe := strings.TrimSpace(in.AboutMe)
+	if len(aboutMe) > maxAboutMeLen {
+		RespondError(w, http.StatusBadRequest, fmt.Sprintf("about me must be %d characters or fewer", maxAboutMeLen))
+		return
+	}
 
-	if err := h.users.UpdateProfile(r.Context(), u.ID, strings.TrimSpace(in.DisplayName), email, in.UnitSystem); err != nil {
+	if err := h.users.UpdateProfile(r.Context(), u.ID, strings.TrimSpace(in.DisplayName), email, in.UnitSystem, location, aboutMe); err != nil {
 		if errors.Is(err, store.ErrEmailTaken) {
 			RespondError(w, http.StatusConflict, "that email is already in use")
 			return

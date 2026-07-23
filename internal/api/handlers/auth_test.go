@@ -36,7 +36,7 @@ func (s *sessionStore) Delete(_ context.Context, id string) error { s.deleted = 
 func newAuth(t *testing.T, pw string) (*handlers.Auth, *sessionStore) {
 	t.Helper()
 	hash, _ := auth.HashPassword(pw)
-	u := model.User{ID: 1, Username: "alice", Email: "a@x.io", PasswordHash: hash, Role: model.RoleUser}
+	u := model.User{ID: 1, Username: "alice", Email: testEmail, PasswordHash: hash, Role: model.RoleUser}
 	ss := &sessionStore{}
 	return handlers.NewAuth(config.Config{}, userGetter{u}, ss), ss
 }

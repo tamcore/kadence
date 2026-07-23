@@ -22,7 +22,9 @@
 </script>
 
 <section class="home">
-	<h1>What can I help with{$currentUser ? `, ${$currentUser.username}` : ''}?</h1>
+	<h1>
+		What can I help with{$currentUser ? `, ${$currentUser.displayName || $currentUser.username}` : ''}?
+	</h1>
 	<div class="composer-wrap">
 		<Composer disabled={$sending} onSubmit={start} placeholder="Ask your coach…" />
 	</div>

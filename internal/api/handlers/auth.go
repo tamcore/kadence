@@ -48,12 +48,15 @@ type publicUser struct {
 	Role        string `json:"role"`
 	DisplayName string `json:"displayName"`
 	UnitSystem  string `json:"unitSystem"`
+	Location    string `json:"location"`
+	AboutMe     string `json:"aboutMe"`
 }
 
 func toPublic(u model.User) publicUser {
 	return publicUser{
 		ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role,
 		DisplayName: u.DisplayName, UnitSystem: u.UnitSystem,
+		Location: u.Location, AboutMe: u.AboutMe,
 	}
 }
 

@@ -35,7 +35,8 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 
 func scanUser(row pgx.Row) (model.User, error) {
 	var u model.User
-	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem, &u.CreatedAt, &u.WebAuthnHandle)
+	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem,
+		&u.Location, &u.AboutMe, &u.CreatedAt, &u.WebAuthnHandle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.User{}, ErrNotFound
 	}
@@ -45,7 +46,8 @@ func scanUser(row pgx.Row) (model.User, error) {
 	return u, nil
 }
 
-const userCols = "id, username, email, password_hash, role, display_name, unit_system, created_at, webauthn_user_handle"
+const userCols = "id, username, email, password_hash, role, display_name, unit_system, " +
+	"COALESCE(location, '') AS location, COALESCE(about_me, '') AS about_me, created_at, webauthn_user_handle"
 
 // Create inserts a new user and returns it with ID and CreatedAt populated.
 func (r *UserRepository) Create(ctx context.Context, u model.User) (model.User, error) {
@@ -134,12 +136,15 @@ func (r *UserRepository) UpdateUser(ctx context.Context, id int64, username, ema
 	return u, nil
 }
 
-// UpdateProfile updates a user's display name, email, and unit system
-// preference. Returns ErrEmailTaken if email collides with another user.
-func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem string) error {
+// UpdateProfile updates a user's display name, email, unit system preference,
+// location, and about-me text. location and aboutMe are stored as NULL when
+// empty (so a cleared field round-trips to ""); non-empty values overwrite
+// any prior one. Returns ErrEmailTaken if email collides with another user.
+func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe string) error {
 	_, err := r.pool.Exec(ctx,
-		`UPDATE users SET display_name = $1, email = $2, unit_system = $3 WHERE id = $4`,
-		displayName, email, unitSystem, id)
+		`UPDATE users SET display_name = $1, email = $2, unit_system = $3, location = NULLIF($4, ''), about_me = NULLIF($5, '')
+		 WHERE id = $6`,
+		displayName, email, unitSystem, location, aboutMe, id)
 	if isUniqueViolation(err) {
 		return ErrEmailTaken
 	}

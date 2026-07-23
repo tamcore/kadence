@@ -5,7 +5,8 @@
 		name,
 		value = $bindable(''),
 		required = false,
-		autocomplete
+		autocomplete,
+		maxlength
 	}: {
 		label: string;
 		type?: string;
@@ -13,15 +14,16 @@
 		value?: string;
 		required?: boolean;
 		autocomplete?: string | undefined;
+		maxlength?: number | undefined;
 	} = $props();
 </script>
 
 <label class="field">
 	<span>{label}</span>
 	{#if autocomplete}
-		<input {type} {name} {required} autocomplete={autocomplete as any} bind:value />
+		<input {type} {name} {required} {maxlength} autocomplete={autocomplete as any} bind:value />
 	{:else}
-		<input {type} {name} {required} bind:value />
+		<input {type} {name} {required} {maxlength} bind:value />
 	{/if}
 </label>
 
