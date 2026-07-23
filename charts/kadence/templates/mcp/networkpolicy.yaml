@@ -34,11 +34,7 @@ spec:
   {{- toYaml $server.egress | nindent 2 }}
   {{- else }}
   {{- include "kadence.netpol.dnsEgress" $root | nindent 2 }}
-  {{- if eq $server.name "cloakbrowser" }}
-  {{- include "kadence.netpol.publicWebEgress" $root | nindent 2 }}
-  {{- else }}
   {{- include "kadence.netpol.httpsEgress" $root | nindent 2 }}
-  {{- end }}
   {{- end }}
 {{- end }}
 {{- end }}

@@ -140,27 +140,21 @@ is portable across clusters.
 {{- end -}}
 
 {{/*
-NetworkPolicy egress rule: TCP 80/443 to anywhere. Used by MCP servers that
-need outbound HTTP(S) to an external API (e.g. garmin-mcp -> Garmin's API).
-*/}}
-{{- define "kadence.netpol.httpsEgress" -}}
-- to:
-  - ipBlock:
-      cidr: 0.0.0.0/0
-  ports:
-  - protocol: TCP
-    port: 80
-  - protocol: TCP
-    port: 443
-{{- end -}}
-
-{{/*
 NetworkPolicy egress rule: TCP 80/443 to anywhere EXCEPT RFC1918 private
 ranges and link-local (incl. cloud/node metadata, 169.254.0.0/16). Used by
-the cloakbrowser MCP server: it browses the public web on the user's behalf
-and must not be able to reach cluster-internal services or node metadata.
+the app container (outbound to external LLM/embedding providers) and by
+MCP servers that need outbound HTTP(S) to an external API (e.g. garmin-mcp
+-> Garmin's API, cloakbrowser-mcp -> the public web on the user's behalf).
+Without this except-list, any pod using this rule could reach cluster-
+internal services (e.g. kube-apiserver's ClusterIP, typically in
+10.96.0.0/12) or node metadata endpoints over 80/443.
+
+Note: a small number of "*.nip.io"/"*.sslip.io" user-configured MCP allowed
+hosts embed an IP address in the hostname; if that embedded IP falls in one
+of the excluded private ranges, resolving that host and connecting to it is
+now blocked by design. This is intended hardening, not a regression.
 */}}
-{{- define "kadence.netpol.publicWebEgress" -}}
+{{- define "kadence.netpol.httpsEgress" -}}
 - to:
   - ipBlock:
       cidr: 0.0.0.0/0
