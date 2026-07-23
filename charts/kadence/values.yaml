@@ -11,6 +11,13 @@ fullnameOverride: ""
 
 replicaCount: 2
 
+# terminationGracePeriodSeconds must cover the app's shutdown drain window
+# (in-flight SSE chat streams can run up to KADENCE_LLM_TIMEOUT, currently
+# bounded by shutdownTimeout=310s in cmd/server/serve/serve.go) plus margin
+# for the kubelet to send SIGKILL only as a last resort. Only applied to the
+# app Deployment (not sidecars).
+terminationGracePeriodSeconds: 310
+
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
