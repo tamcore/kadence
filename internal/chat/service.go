@@ -51,6 +51,11 @@ type MCPUserSnapshot interface {
 	// Call invokes a named tool with JSON-encoded arguments and returns its
 	// (also JSON-ish/plain text) result.
 	Call(ctx context.Context, toolName, argsJSON string) (string, error)
+	// ToolHints returns one "Tool guide: <prefix>: <hint>" line per server
+	// (applicable to this snapshot's user) that has a usage hint configured.
+	// A server without one contributes no line; an empty slice means none
+	// of this user's servers have a hint. Never touches the network.
+	ToolHints() []string
 }
 
 // ServiceConfig carries model params + system prompt.
@@ -247,21 +252,9 @@ func (s *Service) systemPrompt(unitSystem string) string {
 // Stream runs one chat turn: resolve/create the conversation, persist the user
 // message, stream the assistant reply (persisting it), emitting SSE events.
 func (s *Service) Stream(ctx context.Context, userID int64, username string, unitSystem string, conversationID string, userText string, sink EventSink) error {
-	if conversationID == "" {
-		title := userText
-		runes := []rune(title)
-		if len(runes) > TitleMaxLen {
-			title = string(runes[:TitleMaxLen])
-		}
-		c, err := s.convs.Create(ctx, userID, title)
-		if err != nil {
-			return s.fail(sink, "could not create conversation")
-		}
-		conversationID = c.ID
-	} else {
-		if _, err := s.convs.GetByID(ctx, conversationID, userID); err != nil {
-			return s.fail(sink, "conversation not found")
-		}
+	conversationID, err := s.resolveConversation(ctx, userID, conversationID, userText, sink)
+	if err != nil {
+		return err
 	}
 
 	if err := sink.Send(ChatEvent{Type: EventMeta, ConversationID: conversationID}); err != nil {
@@ -283,7 +276,16 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		MaxTokens:   s.cfg.MaxTokens,
 		Temperature: s.cfg.Temperature,
 	}
-	systemPrompt := s.systemPrompt(unitSystem)
+
+	// mcpSnap is resolved once here — before the system prompt is built —
+	// and reused for the whole turn (tool listing below, plus every tool
+	// call in runToolLoop), instead of re-resolving the user's MCP servers
+	// (DB query + credential decrypt) on every tool call within that turn.
+	// It must be resolved this early so any per-server usage hints
+	// (mcpSnap.ToolHints) can be folded into the system prompt actually
+	// sent below — and therefore counted by boundHistory's token sizing,
+	// which sizes against systemPrompt.
+	mcpSnap, systemPrompt := s.resolveMCPAndSystemPrompt(ctx, username, unitSystem)
 	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: systemPrompt})
 
 	streamCtx := ctx
@@ -348,14 +350,6 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		}
 	}
 
-	// mcpSnap is resolved once here and reused for the whole turn (tool
-	// listing below, plus every tool call in runToolLoop), instead of
-	// re-resolving the user's MCP servers (DB query + credential decrypt) on
-	// every tool call.
-	var mcpSnap MCPUserSnapshot
-	if s.mcp != nil && s.mcp.Enabled() {
-		mcpSnap = s.mcp.SnapshotFor(ctx, username)
-	}
 	req.Tools = s.assembleTools(ctx, mcpSnap)
 
 	redactor := &turnRedactor{}
@@ -385,6 +379,50 @@ func (s *Service) Stream(ctx context.Context, userID int64, username string, uni
 		return err
 	}
 	return sink.Flush()
+}
+
+// resolveConversation returns the conversation ID Stream should use for this
+// turn: it creates a new conversation (titled from userText, truncated to
+// TitleMaxLen runes) when conversationID is empty, or verifies the caller
+// owns the existing conversation otherwise. Any failure is reported via sink
+// and returned as the error.
+func (s *Service) resolveConversation(ctx context.Context, userID int64, conversationID, userText string, sink EventSink) (string, error) {
+	if conversationID != "" {
+		if _, err := s.convs.GetByID(ctx, conversationID, userID); err != nil {
+			return "", s.fail(sink, "conversation not found")
+		}
+		return conversationID, nil
+	}
+
+	title := userText
+	runes := []rune(title)
+	if len(runes) > TitleMaxLen {
+		title = string(runes[:TitleMaxLen])
+	}
+	c, err := s.convs.Create(ctx, userID, title)
+	if err != nil {
+		return "", s.fail(sink, "could not create conversation")
+	}
+	return c.ID, nil
+}
+
+// resolveMCPAndSystemPrompt resolves the caller's MCP server snapshot (once,
+// for reuse across the whole turn) and builds the system prompt, folding in
+// any per-server tool-usage hints so they are counted by boundHistory's
+// token sizing further down in Stream.
+func (s *Service) resolveMCPAndSystemPrompt(ctx context.Context, username, unitSystem string) (MCPUserSnapshot, string) {
+	var mcpSnap MCPUserSnapshot
+	if s.mcp != nil && s.mcp.Enabled() {
+		mcpSnap = s.mcp.SnapshotFor(ctx, username)
+	}
+
+	systemPrompt := s.systemPrompt(unitSystem)
+	if mcpSnap != nil {
+		if hints := mcpSnap.ToolHints(); len(hints) > 0 {
+			systemPrompt += "\n\n" + strings.Join(hints, "\n")
+		}
+	}
+	return mcpSnap, systemPrompt
 }
 
 // assembleRAGInserts retrieves RAG context for userText and, if any notes

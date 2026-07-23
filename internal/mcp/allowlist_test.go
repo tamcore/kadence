@@ -45,3 +45,23 @@ func TestHostAllowedEmptyPatternsDeny(t *testing.T) {
 		t.Fatal("empty patterns should deny")
 	}
 }
+
+func TestValidateHint(t *testing.T) {
+	if err := mcp.ValidateHint(""); err != nil {
+		t.Fatalf("empty hint should be valid, got %v", err)
+	}
+	ok := make([]rune, mcp.HintMaxLen)
+	for i := range ok {
+		ok[i] = 'a'
+	}
+	if err := mcp.ValidateHint(string(ok)); err != nil {
+		t.Fatalf("hint at exactly HintMaxLen should be valid, got %v", err)
+	}
+	over := make([]rune, mcp.HintMaxLen+1)
+	for i := range over {
+		over[i] = 'a'
+	}
+	if err := mcp.ValidateHint(string(over)); err == nil {
+		t.Fatal("hint over HintMaxLen should be invalid")
+	}
+}

@@ -20,6 +20,8 @@ const (
 	testGarminName       = "GARMIN"
 	testUserPhilippScope = userScopePrefix + "philipp"
 	testGetToolsPattern  = "get_*"
+	testCloakBrowserName = "CLOAKBROWSER"
+	testBrowserAlias     = "browser"
 )
 
 // anonymizedActivitiesFixture is modeled on a real garmin_mcp get_activities
@@ -410,6 +412,89 @@ func TestRegistry_SnapshotForResolvesUserServersOnce(t *testing.T) {
 
 	if got := src.calls.Load(); got != 1 {
 		t.Fatalf("ServersForUser calls after 3 ToolsFor+Call rounds = %d, want still 1 (snapshot reused)", got)
+	}
+}
+
+func TestRegistry_ToolsForUsesAliasAsPrefix(t *testing.T) {
+	ts := newFakeGarminServer(t)
+	reg := NewRegistry([]Server{
+		{Name: testCloakBrowserName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, Alias: testBrowserAlias},
+	}, nil, nil)
+	ctx := context.Background()
+
+	tools, err := reg.ToolsFor(ctx, "anyuser")
+	if err != nil {
+		t.Fatalf("ToolsFor: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "browser__get_activities" {
+		t.Fatalf("want browser__get_activities, got %+v", tools)
+	}
+
+	if _, err := reg.Call(ctx, "anyuser", "browser__get_activities", `{"limit":1}`); err != nil {
+		t.Fatalf("Call via alias prefix: %v", err)
+	}
+	if _, err := reg.Call(ctx, "anyuser", "cloakbrowser__get_activities", `{}`); err == nil {
+		t.Fatal("Call via the real name must fail once an alias is set (only the alias routes)")
+	}
+}
+
+func TestRegistry_AliasCollisionFallsBackToName(t *testing.T) {
+	ts1 := newFakeGarminServer(t)
+	ts2 := newFakeGarminServer(t)
+	reg := NewRegistry([]Server{
+		{Name: testCloakBrowserName, Scope: scopeGlobal, URL: ts1.URL, Transport: transportStreamableHTTP, Alias: testBrowserAlias},
+		{Name: "BROWSER", Scope: scopeGlobal, URL: ts2.URL, Transport: transportStreamableHTTP},
+	}, nil, nil)
+	ctx := context.Background()
+
+	tools, err := reg.ToolsFor(ctx, "anyuser")
+	if err != nil {
+		t.Fatalf("ToolsFor: %v", err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("want 2 tools (one per server), got %d: %+v", len(tools), tools)
+	}
+	names := make([]string, 0, len(tools))
+	for _, tl := range tools {
+		names = append(names, tl.Name)
+	}
+	// The real "browser" server reserves that prefix; the aliased server
+	// must fall back to its own name instead of colliding.
+	if !strings.Contains(strings.Join(names, ","), "cloakbrowser__get_activities") {
+		t.Fatalf("want the alias to fall back to cloakbrowser__, got %v", names)
+	}
+	if !strings.Contains(strings.Join(names, ","), "browser__get_activities") {
+		t.Fatalf("want the real browser server to keep browser__, got %v", names)
+	}
+}
+
+func TestRegistry_ToolHints(t *testing.T) {
+	ts := newFakeGarminServer(t)
+	reg := NewRegistry([]Server{
+		{Name: testCloakBrowserName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP,
+			Alias: testBrowserAlias, Hint: "use for current info: weather, news, prices"},
+		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
+	}, nil, nil)
+
+	snap := reg.SnapshotFor(context.Background(), "anyuser")
+	hints := snap.ToolHints()
+	if len(hints) != 1 {
+		t.Fatalf("want 1 hint line (only the hinted server), got %v", hints)
+	}
+	if hints[0] != "Tool guide: browser: use for current info: weather, news, prices" {
+		t.Fatalf("hint line = %q", hints[0])
+	}
+}
+
+func TestRegistry_ToolHintsEmptyWhenNoServerHasOne(t *testing.T) {
+	ts := newFakeGarminServer(t)
+	reg := NewRegistry([]Server{
+		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
+	}, nil, nil)
+
+	snap := reg.SnapshotFor(context.Background(), "anyuser")
+	if hints := snap.ToolHints(); len(hints) != 0 {
+		t.Fatalf("want no hint lines, got %v", hints)
 	}
 }
 

@@ -10,6 +10,8 @@ export interface McpServer {
 	error?: string;
 	url?: string;
 	id?: number;
+	alias?: string;
+	hint?: string;
 	editable: boolean;
 }
 
@@ -24,6 +26,8 @@ export interface McpInput {
 	transport: string;
 	authUser: string;
 	authPass: string;
+	alias: string;
+	hint: string;
 }
 
 export interface McpTool {

@@ -17,7 +17,12 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
-const allowedTestHost = "a.example.io"
+const (
+	allowedTestHost   = "a.example.io"
+	testScopeGlobal   = "GLOBAL"
+	testGarminServer  = "garmin"
+	testTransportSHTP = "streamable-http"
+)
 
 type fakeMcpHealth struct {
 	status []mcp.ServerHealth
@@ -118,11 +123,11 @@ func doAuthedPutParam(t *testing.T, fn http.HandlerFunc, paramValue, body string
 	return authedGetResult{Code: rec.Code, Body: rec.Body.String()}
 }
 
-// doAuthedGet builds an authed GET request for path, invokes fn, and returns
-// the response body string.
-func doAuthedGet(t *testing.T, fn http.HandlerFunc, role, path string) string {
+// doAuthedGet builds an authed GET request for "/api/mcp", invokes fn, and
+// returns the response body string.
+func doAuthedGet(t *testing.T, fn http.HandlerFunc, role string) string {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{Username: "u", Role: role}))
 	rec := httptest.NewRecorder()
 	fn(rec, req)
@@ -169,24 +174,100 @@ func assertNotContains(t *testing.T, body string, unwanted ...string) {
 
 func TestMCP_List_AdminSeesUrlAndError_MemberDoesNot(t *testing.T) {
 	fake := &fakeMcpHealth{status: []mcp.ServerHealth{
-		{Name: "garmin", Scope: "GLOBAL", Transport: "streamable-http", URL: "http://secret", OK: true, ToolCount: 3, CheckedAt: time.Now()},
-		{Name: "down", Scope: "GLOBAL", URL: "http://d", OK: false, Err: "boom", CheckedAt: time.Now()},
+		{Name: testGarminServer, Scope: testScopeGlobal, Transport: testTransportSHTP, URL: "http://secret", OK: true, ToolCount: 3, CheckedAt: time.Now()},
+		{Name: "down", Scope: testScopeGlobal, URL: "http://d", OK: false, Err: "boom", CheckedAt: time.Now()},
 	}}
 	h := handlers.NewMCP(fake, nil, nil, false, 10)
 
-	adminBody := doAuthedGet(t, h.List, model.RoleAdmin, "/api/mcp")
-	memberBody := doAuthedGet(t, h.List, model.RoleUser, "/api/mcp")
+	adminBody := doAuthedGet(t, h.List, model.RoleAdmin)
+	memberBody := doAuthedGet(t, h.List, model.RoleUser)
 
 	assertContains(t, adminBody, `"url":"http://secret"`, `"error":"boom"`, `"state":"healthy"`, `"scope":"global"`)
 	assertNotContains(t, memberBody, `http://secret`, `boom`)
 	assertContains(t, memberBody, `"state":"unhealthy"`, `"toolCount":3`)
 }
 
-func TestMCP_Tools_404ForNonApplicable(t *testing.T) {
-	fake := &fakeMcpHealth{tools: map[string][]mcp.ToolInfo{"garmin": {{Name: "get_x", Description: "d", Schema: []byte(`{"type":"object"}`)}}}}
+func TestMCP_List_IncludesAliasAndHint(t *testing.T) {
+	fake := &fakeMcpHealth{status: []mcp.ServerHealth{
+		{Name: "cloakbrowser", Scope: testScopeGlobal, Transport: "streamable-http", Alias: "browser", Hint: "use for weather", OK: true},
+	}}
 	h := handlers.NewMCP(fake, nil, nil, false, 10)
 
-	ok := doAuthedGetParam(t, h.Tools, model.RoleUser, "/api/mcp/garmin/tools", "name", "garmin")
+	body := doAuthedGet(t, h.List, model.RoleUser)
+	assertContains(t, body, `"alias":"browser"`, `"hint":"use for weather"`)
+}
+
+func TestMCP_List_OmitsAliasAndHintWhenUnset(t *testing.T) {
+	fake := &fakeMcpHealth{status: []mcp.ServerHealth{
+		{Name: testGarminServer, Scope: testScopeGlobal, Transport: testTransportSHTP, OK: true},
+	}}
+	h := handlers.NewMCP(fake, nil, nil, false, 10)
+
+	body := doAuthedGet(t, h.List, model.RoleUser)
+	assertNotContains(t, body, `"alias"`, `"hint"`)
+}
+
+func TestMCP_Create_RejectsInvalidAlias(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true, 10)
+	body := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse","alias":"Not_Valid!"}`
+	if code := doAuthedPost(t, h.Create, body); code != 400 {
+		t.Fatalf("invalid-alias create code=%d want 400", code)
+	}
+	if us.created {
+		t.Fatal("store.Create should not be called for an invalid alias")
+	}
+}
+
+func TestMCP_Create_RejectsHintOverCap(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true, 10)
+	longHint := strings.Repeat("a", mcp.HintMaxLen+1)
+	body := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse","hint":"` + longHint + `"}`
+	if code := doAuthedPost(t, h.Create, body); code != 400 {
+		t.Fatalf("over-cap hint create code=%d want 400", code)
+	}
+	if us.created {
+		t.Fatal("store.Create should not be called for a hint over the cap")
+	}
+}
+
+func TestMCP_Create_AcceptsValidAliasAndHint(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true, 10)
+	body := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse","alias":"browser","hint":"use for weather"}`
+	if code := doAuthedPost(t, h.Create, body); code != 201 {
+		t.Fatalf("valid alias/hint create code=%d want 201", code)
+	}
+	if !us.created {
+		t.Fatal("store.Create should be called for a valid alias/hint")
+	}
+}
+
+func TestMCP_Update_RejectsInvalidAliasAndOverCapHint(t *testing.T) {
+	us := &fakeUserStore{}
+	h := handlers.NewMCP(&fakeMcpHealth{}, us, []string{allowedTestHost}, true, 10)
+
+	badAlias := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse","alias":"BAD_ALIAS"}`
+	if res := doAuthedPutParam(t, h.Update, "1", badAlias); res.Code != 400 {
+		t.Fatalf("bad-alias update code=%d want 400", res.Code)
+	}
+
+	longHint := strings.Repeat("a", mcp.HintMaxLen+1)
+	badHint := `{"name":"x","url":"https://` + allowedTestHost + `/mcp","transport":"sse","hint":"` + longHint + `"}`
+	if res := doAuthedPutParam(t, h.Update, "1", badHint); res.Code != 400 {
+		t.Fatalf("over-cap hint update code=%d want 400", res.Code)
+	}
+	if us.updated {
+		t.Fatal("store.Update should not be called for invalid alias/hint")
+	}
+}
+
+func TestMCP_Tools_404ForNonApplicable(t *testing.T) {
+	fake := &fakeMcpHealth{tools: map[string][]mcp.ToolInfo{testGarminServer: {{Name: "get_x", Description: "d", Schema: []byte(`{"type":"object"}`)}}}}
+	h := handlers.NewMCP(fake, nil, nil, false, 10)
+
+	ok := doAuthedGetParam(t, h.Tools, model.RoleUser, "/api/mcp/"+testGarminServer+"/tools", "name", testGarminServer)
 	if ok.Code != 200 {
 		t.Fatalf("applicable server code=%d want 200", ok.Code)
 	}

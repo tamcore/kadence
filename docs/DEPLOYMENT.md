@@ -74,6 +74,8 @@ mcp:
       env:
         - { name: GARMIN_MCP_TRANSPORT, value: streamable-http }
       tools: ["get_activit*", "*_workout"]   # app-side glob allowlist
+      alias: garmin                          # optional: tool-name prefix override
+      hint: "use for activity history and training plans"  # optional: chat system-prompt guidance
       existingSecret: garmin-creds           # server-specific secret (optional)
       persistence:                           # optional per-server volume
         enabled: true

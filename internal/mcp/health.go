@@ -29,6 +29,8 @@ type ServerHealth struct {
 	Scope     string
 	Transport string
 	URL       string
+	Alias     string
+	Hint      string
 	OK        bool
 	ToolCount int
 	Tools     []ToolInfo
@@ -110,6 +112,7 @@ func (p *HealthPoller) probeOne(ctx context.Context, s Server) {
 
 	h := ServerHealth{
 		Name: s.Name, Scope: s.Scope, Transport: s.Transport, URL: s.URL,
+		Alias: s.Alias, Hint: s.Hint,
 		CheckedAt: time.Now(),
 	}
 	tools, err := p.src.Probe(probeCtx, s)
@@ -141,7 +144,10 @@ func (p *HealthPoller) StatusFor(username string) []ServerHealth {
 		if h, ok := p.cache[s.Name+"/"+s.Scope]; ok {
 			out = append(out, h)
 		} else {
-			out = append(out, ServerHealth{Name: s.Name, Scope: s.Scope, Transport: s.Transport, URL: s.URL})
+			out = append(out, ServerHealth{
+				Name: s.Name, Scope: s.Scope, Transport: s.Transport, URL: s.URL,
+				Alias: s.Alias, Hint: s.Hint,
+			})
 		}
 	}
 	return out

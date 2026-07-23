@@ -23,7 +23,9 @@ const sampleInput = {
 	url: 'https://mcp.example.com',
 	transport: 'streamable-http',
 	authUser: 'u',
-	authPass: 'p'
+	authPass: 'p',
+	alias: '',
+	hint: ''
 };
 
 describe('mcp api', () => {
@@ -94,6 +96,16 @@ describe('mcp api', () => {
 		expect(result.name).toBe('a/b');
 		const [url] = fetchMock.mock.calls[0];
 		expect(url).toBe(`/api/mcp/${encodeURIComponent('a/b')}/tools`);
+	});
+
+	it('POSTs /api/mcp with alias and hint included in the body', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: sampleServer }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await createMcp({ ...sampleInput, alias: 'browser', hint: 'use for weather' });
+
+		const [, init] = fetchMock.mock.calls[0];
+		expect(JSON.parse(init.body)).toMatchObject({ alias: 'browser', hint: 'use for weather' });
 	});
 
 	it('throws APIError when creating a server fails validation', async () => {

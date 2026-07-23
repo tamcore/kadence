@@ -72,6 +72,10 @@ func (a mcpSnapshotAdapter) Call(ctx context.Context, toolName, argsJSON string)
 	return a.snap.Call(ctx, toolName, argsJSON)
 }
 
+func (a mcpSnapshotAdapter) ToolHints() []string {
+	return a.snap.ToolHints()
+}
+
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
 func Run() error {
 	cfg := config.Load()

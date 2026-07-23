@@ -104,6 +104,15 @@ func (u *UserSnapshot) Call(ctx context.Context, toolName, argsJSON string) (str
 	return u.reg.call(ctx, u.username, u.servers, toolName, argsJSON)
 }
 
+// ToolHints returns one "Tool guide: <prefix>: <hint>" line per server
+// (resolved at snapshot time, applicable to this user) that has a non-empty
+// Hint — in the same order those servers would be listed by ToolsFor. A
+// server without a Hint contributes no line. This never touches the
+// network: it's derived from data already resolved by SnapshotFor.
+func (u *UserSnapshot) ToolHints() []string {
+	return u.reg.toolHints(u.username, u.servers)
+}
+
 // applicableServers returns env servers plus the user's own DB servers.
 func (r *Registry) applicableServers(ctx context.Context, username string) []Server {
 	out := append([]Server(nil), r.servers...)
@@ -134,11 +143,8 @@ func (r *Registry) ToolsFor(ctx context.Context, username string) ([]provider.To
 func (r *Registry) toolsFor(ctx context.Context, username string, servers []Server) ([]provider.ToolDefinition, error) {
 	var defs []provider.ToolDefinition
 
-	for _, s := range servers {
-		if !s.AppliesTo(username) {
-			continue
-		}
-
+	applicable, prefixes := applicableServersWithPrefixes(username, servers)
+	for i, s := range applicable {
 		client, err := r.clientFor(ctx, s)
 		if err != nil {
 			slog.Warn("mcp: skipping server (connect failed)", "server", s.Name, "scope", s.Scope, "error", err)
@@ -152,7 +158,7 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 			continue
 		}
 
-		prefix := strings.ToLower(s.Name) + "__"
+		prefix := prefixes[i] + "__"
 		for _, t := range tools {
 			if !s.allowsTool(t.Name) {
 				continue
@@ -168,6 +174,21 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 	return defs, nil
 }
 
+// toolHints returns one "Tool guide: <prefix>: <hint>" line per server
+// applicable to username that has a non-empty Hint, using the same
+// alias-or-name prefix toolsFor would assign. Pure/no network calls.
+func (r *Registry) toolHints(username string, servers []Server) []string {
+	applicable, prefixes := applicableServersWithPrefixes(username, servers)
+	var lines []string
+	for i, s := range applicable {
+		if s.Hint == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("Tool guide: %s: %s", prefixes[i], s.Hint))
+	}
+	return lines
+}
+
 // Call routes a namespaced tool call ("<server>__<tool>") to the owning
 // server (applicable to username) and invokes it with the given
 // JSON-encoded arguments.
@@ -179,18 +200,18 @@ func (r *Registry) Call(ctx context.Context, username, toolName, argsJSON string
 // dispatches against an already-resolved servers slice, without querying
 // userSrc again.
 func (r *Registry) call(ctx context.Context, username string, servers []Server, toolName, argsJSON string) (string, error) {
-	serverName, realTool, ok := strings.Cut(toolName, "__")
+	prefix, realTool, ok := strings.Cut(toolName, "__")
 	if !ok {
 		return "", fmt.Errorf("mcp: invalid tool name %q (expected <server>__<tool>)", toolName)
 	}
 
-	s, ok := findApplicableServerIn(servers, username, serverName)
+	s, ok := findApplicableServerIn(servers, username, prefix)
 	if !ok {
-		return "", fmt.Errorf("mcp: no server %q available for user %q", serverName, username)
+		return "", fmt.Errorf("mcp: no server %q available for user %q", prefix, username)
 	}
 
 	if !s.allowsTool(realTool) {
-		return "", fmt.Errorf("mcp: tool %q is not enabled for server %q", realTool, serverName)
+		return "", fmt.Errorf("mcp: tool %q is not enabled for server %q", realTool, prefix)
 	}
 
 	client, err := r.clientFor(ctx, s)
@@ -257,18 +278,70 @@ func (s Server) allowsTool(toolName string) bool {
 	return false
 }
 
-// findApplicableServerIn finds the server matching serverName
-// (case-insensitive on the server's Name) within servers that applies to
-// username, searching env servers before the user's own DB servers (the
-// order applicableServers returns them in). On a name collision, the env
-// server wins.
-func findApplicableServerIn(servers []Server, username, serverName string) (Server, bool) {
-	for _, s := range servers {
-		if strings.EqualFold(s.Name, serverName) && s.AppliesTo(username) {
+// findApplicableServerIn finds the server whose effective tool-name prefix
+// (alias, or its Name when no alias applies — see serverPrefixes) matches
+// prefix case-insensitively, among servers applying to username. Searching
+// env servers before the user's own DB servers (the order applicableServers
+// returns them in) means on a name collision the env server wins, same as
+// before aliasing existed.
+func findApplicableServerIn(servers []Server, username, prefix string) (Server, bool) {
+	applicable, prefixes := applicableServersWithPrefixes(username, servers)
+	for i, s := range applicable {
+		if strings.EqualFold(prefixes[i], prefix) {
 			return s, true
 		}
 	}
 	return Server{}, false
+}
+
+// applicableServersWithPrefixes filters servers down to those applying to
+// username (preserving order) and computes each one's effective tool-name
+// prefix via serverPrefixes, so callers get a servers/prefixes pair indexed
+// in lockstep.
+func applicableServersWithPrefixes(username string, servers []Server) ([]Server, []string) {
+	applicable := make([]Server, 0, len(servers))
+	for _, s := range servers {
+		if s.AppliesTo(username) {
+			applicable = append(applicable, s)
+		}
+	}
+	return applicable, serverPrefixes(applicable)
+}
+
+// serverPrefixes computes the effective tool-name prefix for each server in
+// servers (already filtered to one user's applicable servers): the
+// lowercased Alias when set and non-colliding, otherwise the lowercased
+// Name — exactly today's behavior for any server without an alias. A
+// collision (an alias matching another server's Name, or an earlier
+// server's already-assigned prefix) falls back to the server's own Name
+// instead of crashing, with a warning logged.
+func serverPrefixes(servers []Server) []string {
+	reservedNames := make(map[string]bool, len(servers))
+	for _, s := range servers {
+		reservedNames[strings.ToLower(s.Name)] = true
+	}
+
+	used := make(map[string]bool, len(servers))
+	prefixes := make([]string, len(servers))
+	for i, s := range servers {
+		name := strings.ToLower(s.Name)
+		alias := strings.ToLower(s.Alias)
+
+		prefix := name
+		switch {
+		case alias == "" || alias == name:
+			// No alias, or alias redundant with the name: prefix is name.
+		case used[alias] || reservedNames[alias]:
+			slog.Warn("mcp: server alias collides, falling back to server name",
+				"server", s.Name, "scope", s.Scope, "alias", s.Alias)
+		default:
+			prefix = alias
+		}
+
+		used[prefix] = true
+		prefixes[i] = prefix
+	}
+	return prefixes
 }
 
 // clientFor returns a client for the given server. Env-configured servers use

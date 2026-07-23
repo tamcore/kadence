@@ -21,6 +21,18 @@ func ValidateServerName(name string) error {
 	return nil
 }
 
+// HintMaxLen is the maximum length (in runes) of a server's usage Hint.
+const HintMaxLen = 300
+
+// ValidateHint reports an error if hint is longer than HintMaxLen runes. An
+// empty hint is always valid (it just means no hint line is added).
+func ValidateHint(hint string) error {
+	if n := len([]rune(hint)); n > HintMaxLen {
+		return fmt.Errorf("hint must be at most %d characters (got %d)", HintMaxLen, n)
+	}
+	return nil
+}
+
 // ValidateTransport reports an error unless transport is one of the
 // recognized Server.Transport values (streamable-http, sse).
 func ValidateTransport(transport string) error {

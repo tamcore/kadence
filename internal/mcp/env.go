@@ -30,6 +30,8 @@ const (
 	fieldAuthUser
 	fieldAuthPass
 	fieldTools
+	fieldAlias
+	fieldHint
 )
 
 // knownFieldSuffixes lists the env-var suffixes recognized after
@@ -45,6 +47,8 @@ var knownFieldSuffixes = []struct {
 	{"_TRANSPORT", fieldTransport},
 	{"_URL", fieldURL},
 	{"_TOOLS", fieldTools},
+	{"_ALIAS", fieldAlias},
+	{"_HINT", fieldHint},
 }
 
 // Server describes one remote MCP server derived from the env contract.
@@ -59,6 +63,16 @@ type Server struct {
 	// matched against the unprefixed tool name. Empty/nil means no
 	// filtering — all tools the server exposes are allowed.
 	Tools []string
+	// Alias, if set and valid (serverNamePattern) and not colliding with
+	// another server visible to the same user, replaces Name as this
+	// server's tool-name prefix (see registry.go's serverPrefixes). Empty
+	// means no alias: the prefix is Name, exactly as before this field
+	// existed.
+	Alias string
+	// Hint is a free-text "when to use this server" line surfaced to the
+	// model in the chat system prompt (see chat.Service.systemPrompt /
+	// MCPUserSnapshot.ToolHints). Empty means no hint line is added.
+	Hint string
 }
 
 // AppliesTo reports whether this server's tools should be offered to the
@@ -76,6 +90,8 @@ type serverBuilder struct {
 	authUser       string
 	authPass       string
 	tools          string
+	alias          string
+	hint           string
 	hasURL         bool
 }
 
@@ -119,6 +135,8 @@ func ServersFromEnv(environ []string) ([]Server, error) {
 			AuthPass:  b.authPass,
 			Transport: b.transport,
 			Tools:     splitTools(b.tools),
+			Alias:     validatedAlias(b.name, b.scope, b.alias),
+			Hint:      b.hint,
 		})
 	}
 	return servers, nil
@@ -158,7 +176,28 @@ func applyField(b *serverBuilder, matchedField field, value string) {
 		b.authPass = value
 	case fieldTools:
 		b.tools = value
+	case fieldAlias:
+		b.alias = value
+	case fieldHint:
+		b.hint = value
 	}
+}
+
+// validatedAlias returns alias unchanged if it is non-empty and matches
+// serverNamePattern (the same format required of user-defined server
+// names), so it can safely replace name as a tool-name prefix. An invalid
+// alias is dropped (server falls back to its real name as the prefix) with
+// a warning logged — one malformed alias must not fail startup or break the
+// server it's attached to.
+func validatedAlias(name, scope, alias string) string {
+	if alias == "" {
+		return ""
+	}
+	if err := ValidateServerName(alias); err != nil {
+		slog.Warn("mcp: invalid alias, falling back to server name", "server", name, "scope", scope, "alias", alias, "error", err)
+		return ""
+	}
+	return alias
 }
 
 // splitTools parses a comma-separated MCP_<NAME>_<SCOPE>_TOOLS value into a

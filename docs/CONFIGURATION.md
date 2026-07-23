@@ -125,7 +125,15 @@ MCP_<NAME>_<SCOPE>_AUTH_USER
 MCP_<NAME>_<SCOPE>_AUTH_PASS
 MCP_<NAME>_<SCOPE>_TRANSPORT     # streamable-http | sse
 MCP_<NAME>_<SCOPE>_TOOLS         # optional: comma/space-separated globs (unprefixed tool names)
+MCP_<NAME>_<SCOPE>_ALIAS         # optional: short name replacing NAME as the tool-name prefix
+MCP_<NAME>_<SCOPE>_HINT          # optional: "when to use this" line injected into the chat system prompt
 ```
+
+`ALIAS`, when set, must match `^[a-z0-9][a-z0-9-]{0,31}$` (the same format as
+user-defined server names); an invalid alias is dropped (falls back to `NAME`)
+with a warning logged, never a startup failure. If two servers visible to the
+same user would resolve to the same prefix, the later one falls back to its
+own `NAME` instead of colliding — also logged, never a crash.
 
 - `<NAME>` — e.g. `GARMIN`. `<SCOPE>` — `GLOBAL` (all users) or `USER_<username>`.
 - A user's tools at chat time = global servers ∪ their own servers.

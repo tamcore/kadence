@@ -20,6 +20,11 @@ var ErrDuplicateName = errors.New("store: duplicate user MCP server name")
 // UserMCPInput is the create/update payload (plaintext password).
 type UserMCPInput struct {
 	Name, URL, Transport, AuthUser, AuthPass string
+	// Alias, if set, replaces Name as this server's tool-name prefix (see
+	// mcp.Server.Alias). Hint is a free-text "when to use this" line
+	// injected into the chat system prompt (see mcp.Server.Hint). Both
+	// optional; empty means neither is set.
+	Alias, Hint string
 }
 
 // UserMCPRecord is a password-free projection for API responses.
@@ -29,6 +34,8 @@ type UserMCPRecord struct {
 	URL       string
 	Transport string
 	AuthUser  string
+	Alias     string
+	Hint      string
 	CreatedAt time.Time
 }
 
@@ -52,9 +59,9 @@ func (r *UserServerRepo) Create(ctx context.Context, ownerUserID int64, in UserM
 	}
 	var id int64
 	err = r.pool.QueryRow(ctx,
-		`INSERT INTO user_mcp_servers (owner_user_id, name, url, transport, auth_user, auth_pass_enc)
-		 VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		ownerUserID, in.Name, in.URL, in.Transport, in.AuthUser, enc).Scan(&id)
+		`INSERT INTO user_mcp_servers (owner_user_id, name, url, transport, auth_user, auth_pass_enc, alias, hint)
+		 VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,'')) RETURNING id`,
+		ownerUserID, in.Name, in.URL, in.Transport, in.AuthUser, enc, in.Alias, in.Hint).Scan(&id)
 	if isUniqueViolation(err) {
 		return 0, ErrDuplicateName
 	}
@@ -72,9 +79,9 @@ func (r *UserServerRepo) Update(ctx context.Context, ownerUserID, id int64, in U
 	)
 	if in.AuthPass == "" {
 		tag, err = r.pool.Exec(ctx,
-			`UPDATE user_mcp_servers SET name=$1, url=$2, transport=$3, auth_user=$4
-			 WHERE id=$5 AND owner_user_id=$6`,
-			in.Name, in.URL, in.Transport, in.AuthUser, id, ownerUserID)
+			`UPDATE user_mcp_servers SET name=$1, url=$2, transport=$3, auth_user=$4, alias=NULLIF($5,''), hint=NULLIF($6,'')
+			 WHERE id=$7 AND owner_user_id=$8`,
+			in.Name, in.URL, in.Transport, in.AuthUser, in.Alias, in.Hint, id, ownerUserID)
 	} else {
 		var enc []byte
 		enc, err = r.cipher.Encrypt(in.AuthPass)
@@ -82,9 +89,9 @@ func (r *UserServerRepo) Update(ctx context.Context, ownerUserID, id int64, in U
 			return fmt.Errorf("store: encrypt: %w", err)
 		}
 		tag, err = r.pool.Exec(ctx,
-			`UPDATE user_mcp_servers SET name=$1, url=$2, transport=$3, auth_user=$4, auth_pass_enc=$5
-			 WHERE id=$6 AND owner_user_id=$7`,
-			in.Name, in.URL, in.Transport, in.AuthUser, enc, id, ownerUserID)
+			`UPDATE user_mcp_servers SET name=$1, url=$2, transport=$3, auth_user=$4, auth_pass_enc=$5, alias=NULLIF($6,''), hint=NULLIF($7,'')
+			 WHERE id=$8 AND owner_user_id=$9`,
+			in.Name, in.URL, in.Transport, in.AuthUser, enc, in.Alias, in.Hint, id, ownerUserID)
 	}
 	if isUniqueViolation(err) {
 		return ErrDuplicateName
@@ -114,7 +121,7 @@ func (r *UserServerRepo) Delete(ctx context.Context, ownerUserID, id int64) erro
 // ListForOwner returns password-free records for an owner.
 func (r *UserServerRepo) ListForOwner(ctx context.Context, ownerUserID int64) ([]UserMCPRecord, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, name, url, transport, auth_user, created_at
+		`SELECT id, name, url, transport, auth_user, COALESCE(alias,''), COALESCE(hint,''), created_at
 		 FROM user_mcp_servers WHERE owner_user_id=$1 ORDER BY name`, ownerUserID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list user mcp servers: %w", err)
@@ -123,7 +130,7 @@ func (r *UserServerRepo) ListForOwner(ctx context.Context, ownerUserID int64) ([
 	var out []UserMCPRecord
 	for rows.Next() {
 		var rec UserMCPRecord
-		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &rec.AuthUser, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.URL, &rec.Transport, &rec.AuthUser, &rec.Alias, &rec.Hint, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("store: scan user mcp record: %w", err)
 		}
 		out = append(out, rec)
@@ -134,7 +141,7 @@ func (r *UserServerRepo) ListForOwner(ctx context.Context, ownerUserID int64) ([
 // ServersForUser returns decrypted mcp.Server values for one user (by username).
 func (r *UserServerRepo) ServersForUser(ctx context.Context, username string) ([]mcp.Server, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT s.name, s.url, s.transport, s.auth_user, s.auth_pass_enc
+		`SELECT s.name, s.url, s.transport, s.auth_user, s.auth_pass_enc, COALESCE(s.alias,''), COALESCE(s.hint,'')
 		 FROM user_mcp_servers s JOIN users u ON u.id = s.owner_user_id
 		 WHERE u.username = $1 ORDER BY s.name`, username)
 	if err != nil {
@@ -146,7 +153,7 @@ func (r *UserServerRepo) ServersForUser(ctx context.Context, username string) ([
 // AllServers returns decrypted mcp.Server values for every user (for the poller).
 func (r *UserServerRepo) AllServers(ctx context.Context) ([]mcp.Server, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT s.name, s.url, s.transport, s.auth_user, s.auth_pass_enc, u.username
+		`SELECT s.name, s.url, s.transport, s.auth_user, s.auth_pass_enc, COALESCE(s.alias,''), COALESCE(s.hint,''), u.username
 		 FROM user_mcp_servers s JOIN users u ON u.id = s.owner_user_id
 		 ORDER BY u.username, s.name`)
 	if err != nil {
@@ -162,14 +169,14 @@ func (r *UserServerRepo) scanServers(rows pgx.Rows, usernameOverride string) ([]
 	defer rows.Close()
 	var out []mcp.Server
 	for rows.Next() {
-		var name, u, transport, authUser string
+		var name, u, transport, authUser, alias, hint string
 		var enc []byte
 		username := usernameOverride
 		var scanErr error
 		if usernameOverride == "" {
-			scanErr = rows.Scan(&name, &u, &transport, &authUser, &enc, &username)
+			scanErr = rows.Scan(&name, &u, &transport, &authUser, &enc, &alias, &hint, &username)
 		} else {
-			scanErr = rows.Scan(&name, &u, &transport, &authUser, &enc)
+			scanErr = rows.Scan(&name, &u, &transport, &authUser, &enc, &alias, &hint)
 		}
 		if scanErr != nil {
 			return nil, fmt.Errorf("store: scan user server: %w", scanErr)
@@ -181,6 +188,7 @@ func (r *UserServerRepo) scanServers(rows pgx.Rows, usernameOverride string) ([]
 		out = append(out, mcp.Server{
 			Name: name, Scope: "USER_" + username, URL: u,
 			AuthUser: authUser, AuthPass: pass, Transport: transport,
+			Alias: alias, Hint: hint,
 		})
 	}
 	return out, rows.Err()
