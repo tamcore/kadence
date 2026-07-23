@@ -19,6 +19,24 @@ service:
   type: ClusterIP
   port: 8080
 
+# NetworkPolicies (wave 2, issue 14). Covers: postgres ingress-from-app,
+# app ingress-from-ingress-controller + egress-to-{postgres,mcp,markitdown,
+# DNS,external-443}, and (non-cloakbrowser) mcp/markitdown egress. See the
+# per-server `mcp.servers[].egress` key above for tightening a single server.
+networkPolicy:
+  enabled: true
+  # Opt-in namespace-wide default-deny-all (ingress+egress). Only flip this on
+  # once you've confirmed the explicit allow policies above cover every flow
+  # your deployment actually uses (e.g. an externalDatabase host outside the
+  # cluster is NOT covered by the bundled-postgres allow rule below).
+  defaultDeny: false
+  # Namespace the ingress controller's pods live in; the app NetworkPolicy
+  # allows ingress from any pod in a namespace matching this selector.
+  # Default matches the ingress-nginx project's conventional namespace name.
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+
 ingress:
   enabled: false
   className: nginx
@@ -128,6 +146,12 @@ externalDatabase:
 #   shm         (optional) size string, e.g. "512Mi"; mounts a Memory-backed
 #               emptyDir at /dev/shm — required for Chromium-based servers
 #               (Playwright/cloakbrowser) which crash on the default 64Mi shm
+#   egress      (optional, requires networkPolicy.enabled) raw NetworkPolicy
+#               `egress` rule list that REPLACES this server's default egress
+#               (cluster DNS + TCP 80/443 to 0.0.0.0/0, or — for a server
+#               named "cloakbrowser" — TCP 80/443 to 0.0.0.0/0 excluding
+#               RFC1918 + link-local). Use to tighten a server down to the
+#               exact hosts/ports it actually needs.
 mcp:
   servers: []
   authUsername: kadence # basicAuth username the app uses for every MCP server

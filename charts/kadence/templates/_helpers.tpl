@@ -120,6 +120,63 @@ Context: the root context (.).
 {{- end -}}
 
 {{/*
+NetworkPolicy egress rule: cluster DNS (kube-dns), UDP+TCP 53. Targets
+kube-dns via namespaceSelector+podSelector (not a hardcoded ClusterIP) so it
+is portable across clusters.
+*/}}
+{{- define "kadence.netpol.dnsEgress" -}}
+- to:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+  ports:
+  - protocol: UDP
+    port: 53
+  - protocol: TCP
+    port: 53
+{{- end -}}
+
+{{/*
+NetworkPolicy egress rule: TCP 80/443 to anywhere. Used by MCP servers that
+need outbound HTTP(S) to an external API (e.g. garmin-mcp -> Garmin's API).
+*/}}
+{{- define "kadence.netpol.httpsEgress" -}}
+- to:
+  - ipBlock:
+      cidr: 0.0.0.0/0
+  ports:
+  - protocol: TCP
+    port: 80
+  - protocol: TCP
+    port: 443
+{{- end -}}
+
+{{/*
+NetworkPolicy egress rule: TCP 80/443 to anywhere EXCEPT RFC1918 private
+ranges and link-local (incl. cloud/node metadata, 169.254.0.0/16). Used by
+the cloakbrowser MCP server: it browses the public web on the user's behalf
+and must not be able to reach cluster-internal services or node metadata.
+*/}}
+{{- define "kadence.netpol.publicWebEgress" -}}
+- to:
+  - ipBlock:
+      cidr: 0.0.0.0/0
+      except:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 169.254.0.0/16
+  ports:
+  - protocol: TCP
+    port: 80
+  - protocol: TCP
+    port: 443
+{{- end -}}
+
+{{/*
 Database env vars (KADENCE_DATABASE_URL and, when using the bundled
 Postgres, POSTGRES_PASSWORD). Shared by the app container and the
 wait-for-db initContainer so both use the same one source of truth.
