@@ -1,3 +1,8 @@
+# NOTE: the Deployment's livenessProbe targets a dedicated :8081 health
+# listener introduced in this wave. Upgrading only the chart (without also
+# upgrading to an image version that serves :8081) will crash-loop on
+# liveness — the probe has nothing to connect to. Always upgrade chart and
+# image together from this wave onward.
 image:
   repository: ghcr.io/tamcore/kadence
   tag: "" # defaults to .Chart.AppVersion
@@ -13,10 +18,15 @@ replicaCount: 2
 
 # terminationGracePeriodSeconds must cover the app's shutdown drain window
 # (in-flight SSE chat streams can run up to KADENCE_LLM_TIMEOUT, currently
-# bounded by shutdownTimeout=310s in cmd/server/serve/serve.go) plus margin
-# for the kubelet to send SIGKILL only as a last resort. Only applied to the
-# app Deployment (not sidecars).
-terminationGracePeriodSeconds: 310
+# bounded by shutdownTimeout=310s in cmd/server/serve/serve.go) PLUS the
+# subsequent background-goroutine drain (goroutineDrainTimeout=15s) PLUS the
+# final health-listener shutdown that runs after both of those complete —
+# 310 + 15 = 325s worst case before the health listener even starts closing.
+# 310 alone left zero margin: the kubelet would SIGKILL mid-drain the moment
+# the main server used its full budget. 335s gives ~10s of headroom for the
+# health listener's own (normally near-instant) shutdown. Only applied to
+# the app Deployment (not sidecars).
+terminationGracePeriodSeconds: 335
 
 podDisruptionBudget:
   enabled: true
@@ -34,8 +44,10 @@ networkPolicy:
   enabled: true
   # Opt-in namespace-wide default-deny-all (ingress+egress). Only flip this on
   # once you've confirmed the explicit allow policies above cover every flow
-  # your deployment actually uses (e.g. an externalDatabase host outside the
-  # cluster is NOT covered by the bundled-postgres allow rule below).
+  # your deployment actually uses. Note this is unrelated to the
+  # externalDatabase gap below — that gap exists regardless of defaultDeny,
+  # because with the bundled Postgres disabled there is simply no egress
+  # rule at all for the app -> external DB host; see extraAppEgress.
   defaultDeny: false
   # Namespace the ingress controller's pods live in; the app NetworkPolicy
   # allows ingress from any pod in a namespace matching this selector.
@@ -43,6 +55,35 @@ networkPolicy:
   ingressNamespaceSelector:
     matchLabels:
       kubernetes.io/metadata.name: ingress-nginx
+  # CoreDNS pod label values to match in the DNS egress rule's
+  # matchExpressions (see kadence.netpol.dnsEgress). "kube-dns" covers
+  # kubeadm/vanilla clusters; "coredns" covers clusters that label the
+  # CoreDNS pods with the deployment name instead. Add to this list if your
+  # cluster uses a different convention.
+  dnsPodSelectorValues:
+  - kube-dns
+  - coredns
+  # Raw NetworkPolicy egress rule list appended verbatim to the app
+  # Deployment's egress rules (in addition to the postgres/mcp/markitdown/
+  # DNS/external-443 rules above). Use this to allow egress to resources
+  # this chart doesn't know about — most importantly, an externalDatabase
+  # host: when postgres.enabled=false, NOTHING in this chart's default
+  # rules covers the app -> DB connection (the bundled-postgres egress rule
+  # above is gated on postgres.enabled=true), so with networkPolicy.enabled
+  # (or defaultDeny) on, the app cannot reach an external DB unless you add
+  # a rule here for its host/port. Example:
+  #   extraAppEgress:
+  #   - to:
+  #     - ipBlock:
+  #         cidr: 10.20.30.40/32
+  #     ports:
+  #     - protocol: TCP
+  #       port: 5432
+  extraAppEgress: []
+  # NOTE: kubelet's liveness/readiness probes hit the pod directly from the
+  # node (not via a NetworkPolicy-selectable pod/namespace), so probe
+  # traffic to ports 8080/8081 is never subject to these NetworkPolicies —
+  # no ingress rule is needed (or possible) for probes to keep working.
 
 ingress:
   enabled: false
@@ -128,6 +169,12 @@ postgres:
       memory: 256Mi
 
 # External database. Used only when postgres.enabled=false.
+# IMPORTANT: with networkPolicy.enabled (or defaultDeny) on, the chart's
+# default egress rules do NOT cover this host — the bundled-postgres egress
+# rule in the app NetworkPolicy is gated on postgres.enabled=true and there
+# is no equivalent rule for an external DB. Add an allow rule for this
+# host/port to networkPolicy.extraAppEgress or the app will be unable to
+# reach it.
 externalDatabase:
   url: "" # postgres://user:pass@host:5432/db?sslmode=require
   existingSecret: "" # optional: name of a secret holding the DB URL key
@@ -154,11 +201,16 @@ externalDatabase:
 #               emptyDir at /dev/shm — required for Chromium-based servers
 #               (Playwright/cloakbrowser) which crash on the default 64Mi shm
 #   egress      (optional, requires networkPolicy.enabled) raw NetworkPolicy
-#               `egress` rule list that REPLACES this server's default egress
-#               (cluster DNS + TCP 80/443 to 0.0.0.0/0, or — for a server
-#               named "cloakbrowser" — TCP 80/443 to 0.0.0.0/0 excluding
-#               RFC1918 + link-local). Use to tighten a server down to the
-#               exact hosts/ports it actually needs.
+#               `egress` rule list that REPLACES this server's default
+#               egress. The default (every MCP server, not just
+#               cloakbrowser) is cluster DNS + TCP 80/443 to 0.0.0.0/0
+#               EXCEPT RFC1918 private ranges and link-local (see
+#               kadence.netpol.httpsEgress) — so out of the box no server
+#               can reach cluster-internal services or node metadata over
+#               80/443. A server that genuinely needs a private/in-cluster
+#               endpoint (e.g. a self-hosted API on a RFC1918 address) must
+#               set its own `egress` override here, since the shared
+#               except-list rule blocks that by design.
 mcp:
   servers: []
   authUsername: kadence # basicAuth username the app uses for every MCP server

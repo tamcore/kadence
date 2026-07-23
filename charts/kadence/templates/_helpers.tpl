@@ -130,8 +130,17 @@ is portable across clusters.
       matchLabels:
         kubernetes.io/metadata.name: kube-system
     podSelector:
-      matchLabels:
-        k8s-app: kube-dns
+      # matchExpressions (not an exact matchLabels) because the CoreDNS pod
+      # label varies by cluster/distro convention: some run kube-dns's
+      # legacy "kube-dns" label (kubeadm default), others run "coredns"
+      # (e.g. some managed/EKS-style installs). Covers both upstream
+      # conventions so DNS egress isn't blocked depending on which
+      # convention the target cluster's CoreDNS deployment happens to use.
+      matchExpressions:
+      - key: k8s-app
+        operator: In
+        values:
+        {{- toYaml .Values.networkPolicy.dnsPodSelectorValues | nindent 8 }}
   ports:
   - protocol: UDP
     port: 53
