@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -137,6 +138,7 @@ func (h *Scheduled) Create(w http.ResponseWriter, r *http.Request) {
 	defer stop()
 	result, err := h.service.Create(streamCtx, scheduledActor(r), body.Message)
 	if err != nil {
+		slog.Error("scheduled create failed", "err", err)
 		if stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: "could not create scheduled task"}) == nil {
 			_ = stream.event(map[string]any{scheduledEventType: scheduledEventDone})
 		}
@@ -163,6 +165,7 @@ func (h *Scheduled) Refine(w http.ResponseWriter, r *http.Request) {
 	defer stop()
 	result, err := h.service.Refine(streamCtx, scheduledActor(r), id, body.Message)
 	if err != nil {
+		slog.Error("scheduled refinement failed", "task_id", id, "err", err)
 		message := "could not refine scheduled task"
 		if errors.Is(err, scheduled.ErrDefinitionLimit) {
 			message = "refinement limit reached; start a new scheduled task"

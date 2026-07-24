@@ -368,23 +368,23 @@ func TestScheduledTaskRepositoryListsOnlyStaleRunningOccurrences(t *testing.T) {
 		t.Fatalf("zero-limit stale claims = %+v, %v; want nil", none, err)
 	}
 
-	if err := repo.SoftDelete(ctx, task.ID, owner.ID); err != nil {
-		t.Fatalf("SoftDelete running task: %v", err)
+	if err := repo.SoftDelete(ctx, task.ID, owner.ID); !errors.Is(err, store.ErrScheduledRunInProgress) {
+		t.Fatalf("SoftDelete running task err=%v, want ErrScheduledRunInProgress", err)
 	}
-	deleted, err := repo.ListStaleRunning(ctx, now.Add(-time.Hour), 10)
+	stillActive, err := repo.ListStaleRunning(ctx, now.Add(-time.Hour), 10)
 	if err != nil {
-		t.Fatalf("ListStaleRunning deleted task: %v", err)
+		t.Fatalf("ListStaleRunning active task: %v", err)
 	}
-	if len(deleted) != 1 || deleted[0].Run.ID != oldRun.ID ||
-		deleted[0].Task.State != model.ScheduledTaskStateDeleted ||
-		deleted[0].Task.DeletedAt == nil {
-		t.Fatalf("deleted stale claims = %+v, want deleted task run", deleted)
+	if len(stillActive) != 1 || stillActive[0].Run.ID != oldRun.ID ||
+		stillActive[0].Task.State != model.ScheduledTaskStateActive ||
+		stillActive[0].Task.DeletedAt != nil {
+		t.Fatalf("stale claims after rejected delete = %+v, want active task run", stillActive)
 	}
 	if err := repo.FinishFailure(ctx, model.ScheduledExecutionFailure{
 		RunID: oldRun.ID, UserID: owner.ID, Code: "execution_interrupted",
 		IncrementFailures: true, TaskState: model.ScheduledTaskStateActive,
 	}); err != nil {
-		t.Fatalf("FinishFailure deleted stale run: %v", err)
+		t.Fatalf("FinishFailure stale run: %v", err)
 	}
 	var runState, taskState string
 	if err := pool.QueryRow(ctx,
@@ -393,10 +393,10 @@ func TestScheduledTaskRepositoryListsOnlyStaleRunningOccurrences(t *testing.T) {
 		 JOIN scheduled_tasks AS task ON task.id = run.task_id
 		 WHERE run.id = $1`, oldRun.ID,
 	).Scan(&runState, &taskState); err != nil {
-		t.Fatalf("read recovered deleted run: %v", err)
+		t.Fatalf("read recovered stale run: %v", err)
 	}
-	if runState != model.ScheduledTaskRunStateFailed || taskState != model.ScheduledTaskStateDeleted {
-		t.Fatalf("recovered deleted state = run %q task %q", runState, taskState)
+	if runState != model.ScheduledTaskRunStateFailed || taskState != model.ScheduledTaskStateActive {
+		t.Fatalf("recovered stale state = run %q task %q", runState, taskState)
 	}
 }
 
@@ -639,6 +639,99 @@ func TestScheduledTaskRepositoryRejectsDraftRevisionWhileRunInProgress(t *testin
 	}
 	if draft.State != model.ScheduledTaskStateDraft || draft.Version != task.Version+1 {
 		t.Fatalf("draft after terminal run=%+v", draft)
+	}
+}
+
+func TestScheduledTaskRepositoryRejectsLifecycleChangesWhileRunInProgress(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	ctx := context.Background()
+
+	type lifecycleChange func(*store.ScheduledTaskRepository, model.ScheduledTask, int64, time.Time) error
+	changes := []struct {
+		name string
+		run  lifecycleChange
+	}{
+		{
+			name: "run now",
+			run: func(repo *store.ScheduledTaskRepository, task model.ScheduledTask, userID int64, now time.Time) error {
+				_, err := repo.RunNow(ctx, userID, task.ID, "manual:overlap", now)
+				return err
+			},
+		},
+		{
+			name: "pause",
+			run: func(repo *store.ScheduledTaskRepository, task model.ScheduledTask, userID int64, _ time.Time) error {
+				_, err := repo.Pause(ctx, task.ID, userID, task.Version)
+				return err
+			},
+		},
+		{
+			name: "soft delete",
+			run: func(repo *store.ScheduledTaskRepository, task model.ScheduledTask, userID int64, _ time.Time) error {
+				return repo.SoftDelete(ctx, task.ID, userID)
+			},
+		},
+		{
+			name: "pause by conversation",
+			run: func(repo *store.ScheduledTaskRepository, task model.ScheduledTask, userID int64, _ time.Time) error {
+				_, err := repo.PauseByConversation(ctx, task.ConversationID, userID)
+				return err
+			},
+		},
+	}
+
+	for _, runState := range []string{model.ScheduledTaskRunStatePending, model.ScheduledTaskRunStateRunning} {
+		for _, change := range changes {
+			t.Run(runState+"/"+change.name, func(t *testing.T) {
+				testutil.CleanTables(t, pool)
+				users := store.NewUserRepository(pool)
+				conversations := store.NewConversationRepository(pool)
+				repo := store.NewScheduledTaskRepository(pool, 10)
+				owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+				conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+				now := time.Now().UTC().Truncate(time.Second)
+				task, err := repo.Create(ctx, model.ScheduledTask{
+					UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: scheduledConfirmedName,
+					Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+					CompiledPrompt: scheduledOldPrompt, Timezone: scheduledTimezoneUTC,
+					NextRunAt: new(now.Add(time.Hour)),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				run, err := repo.RunNow(ctx, owner.ID, task.ID, "manual:in-progress", now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runState == model.ScheduledTaskRunStateRunning {
+					claims, claimErr := repo.ClaimDue(ctx, now, 1)
+					if claimErr != nil || len(claims) != 1 || claims[0].Run.ID != run.ID {
+						t.Fatalf("ClaimDue: claims=%+v err=%v", claims, claimErr)
+					}
+				}
+				before, err := repo.GetByID(ctx, task.ID, owner.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if err := change.run(repo, before, owner.ID, now); !errors.Is(err, store.ErrScheduledRunInProgress) {
+					t.Fatalf("lifecycle change err=%v, want ErrScheduledRunInProgress", err)
+				}
+				after, err := repo.GetByID(ctx, task.ID, owner.ID)
+				if err != nil {
+					t.Fatalf("task changed visibility: %v", err)
+				}
+				sameNextRun := after.NextRunAt == nil && before.NextRunAt == nil ||
+					after.NextRunAt != nil && before.NextRunAt != nil && after.NextRunAt.Equal(*before.NextRunAt)
+				if after.State != before.State || after.Version != before.Version || !sameNextRun {
+					t.Fatalf("task changed while run in progress: before=%+v after=%+v", before, after)
+				}
+				runs, err := repo.ListRuns(ctx, task.ID, owner.ID)
+				if err != nil || len(runs) != 1 || runs[0].ID != run.ID || runs[0].State != runState {
+					t.Fatalf("runs after rejected lifecycle change=%+v err=%v", runs, err)
+				}
+			})
+		}
 	}
 }
 
@@ -991,8 +1084,8 @@ func TestScheduledTaskRepositoryFinishPreservesPauseAndMissingToolFailureCount(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Pause(ctx, task.ID, owner.ID, task.Version); err != nil {
-		t.Fatal(err)
+	if _, err := repo.Pause(ctx, task.ID, owner.ID, task.Version); !errors.Is(err, store.ErrScheduledRunInProgress) {
+		t.Fatalf("pause running task err=%v, want ErrScheduledRunInProgress", err)
 	}
 	next := now.Add(time.Hour)
 	if err := repo.FinishSuccess(ctx, model.ScheduledExecutionSuccess{
@@ -1001,6 +1094,9 @@ func TestScheduledTaskRepositoryFinishPreservesPauseAndMissingToolFailureCount(t
 		Content: "Finished current occurrence", Unread: true, MonitoringState: json.RawMessage(`{}`), NextRunAt: &next,
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := repo.Pause(ctx, task.ID, owner.ID, task.Version); err != nil {
+		t.Fatalf("pause after terminal run: %v", err)
 	}
 	paused, err := repo.GetByID(ctx, task.ID, owner.ID)
 	if err != nil || paused.State != model.ScheduledTaskStatePaused || paused.NextRunAt != nil {

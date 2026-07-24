@@ -770,6 +770,10 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 		if _, err := newService(tasks).Pause(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrInvalidTransition) {
 			t.Fatalf("stale pause err=%v", err)
 		}
+		tasks.pauseError = store.ErrScheduledRunInProgress
+		if _, err := newService(tasks).Pause(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrRunInProgress) {
+			t.Fatalf("running pause err=%v", err)
+		}
 		tasks.getError = failure
 		if _, err := newService(tasks).Resume(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
@@ -851,6 +855,10 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 		if _, err := newService(tasks).RunNow(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
+		tasks.runNowError = store.ErrScheduledRunInProgress
+		if _, err := newService(tasks).RunNow(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrRunInProgress) {
+			t.Fatalf("running manual run err=%v", err)
+		}
 		tasks.runNowError = nil
 		tasks.task = base()
 		tasks.task.State = model.ScheduledTaskStatePaused
@@ -861,6 +869,10 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 		tasks.deleteError = failure
 		if err := newService(tasks).Delete(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
+		}
+		tasks.deleteError = store.ErrScheduledRunInProgress
+		if err := newService(tasks).Delete(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrRunInProgress) {
+			t.Fatalf("running delete err=%v", err)
 		}
 		tasks.readError = failure
 		if err := newService(tasks).MarkRead(ctx, 7, serviceTaskID); !errors.Is(err, failure) {

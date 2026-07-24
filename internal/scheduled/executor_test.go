@@ -582,7 +582,6 @@ func TestExecutorHelperBoundsAndMetadata(t *testing.T) {
 		{{Name: interactiveCredentialsTool}, {Name: "kadence__load_skill"}, {Name: "ok"}},
 		{{Name: ""}},
 		{{Name: "x", Parameters: json.RawMessage(`{`)}},
-		{{Name: "x", Description: strings.Repeat("d", maxToolDescriptionBytes+1)}},
 	}
 	if offered, _, code := exactExecutionTools(metadataCases[0], []string{"ok"}); code != "" || len(offered) != 1 {
 		t.Fatalf("filtered metadata=%+v code=%s", offered, code)
@@ -592,6 +591,14 @@ func TestExecutorHelperBoundsAndMetadata(t *testing.T) {
 		if _, _, code := exactExecutionTools(definitions, []string{name}); code != failureInvalidTask {
 			t.Fatalf("metadata code=%s", code)
 		}
+	}
+	longDescription := strings.Repeat("d", maxToolDescriptionBytes+1)
+	offered, _, code := exactExecutionTools(
+		[]provider.ToolDefinition{{Name: "long", Description: longDescription}},
+		[]string{"long"},
+	)
+	if code != "" || len(offered) != 1 || len(offered[0].Description) != maxToolDescriptionBytes {
+		t.Fatalf("long description not bounded: offered=%+v code=%s", offered, code)
 	}
 	if offered, _, code := exactExecutionTools(
 		[]provider.ToolDefinition{{Name: "new", Parameters: json.RawMessage(`{`)}, {Name: "ok"}},

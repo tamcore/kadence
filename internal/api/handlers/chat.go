@@ -247,6 +247,10 @@ func (h *Chat) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 	if h.scheduled != nil {
 		linked, err := h.scheduled.PauseByConversation(r.Context(), id, u.ID)
 		if err != nil {
+			if errors.Is(err, store.ErrScheduledRunInProgress) {
+				RespondError(w, http.StatusConflict, "scheduled task conflict")
+				return
+			}
 			RespondError(w, http.StatusInternalServerError, "could not pause scheduled task")
 			return
 		}

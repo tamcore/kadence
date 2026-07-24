@@ -264,6 +264,27 @@ describe('/scheduled', () => {
 		expect(screen.getByText(/latest: no change/i)).toBeInTheDocument();
 	});
 
+	it.each(['pending', 'running'])(
+		'shows that task controls are unavailable while the latest occurrence is %s',
+		(state) => {
+			(scheduledTasks as unknown as { set: (value: unknown[]) => void }).set([
+				{
+					id: 'task-in-progress',
+					name: 'Active recovery check',
+					state: 'active',
+					timezone: 'UTC',
+					unreadCount: 0,
+					recentRun: { id: 10, state, unread: false }
+				}
+			]);
+			render(Page);
+
+			expect(screen.getByText(new RegExp(`latest: ${state}`, 'i'))).toHaveTextContent(
+				'Task controls unavailable until this run finishes'
+			);
+		}
+	);
+
 	it('offers an accessible continuation control when more tasks are available', async () => {
 		(scheduledTasks as unknown as { set: (value: unknown[]) => void }).set([
 			{

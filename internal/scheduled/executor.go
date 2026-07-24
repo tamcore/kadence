@@ -348,10 +348,10 @@ func exactExecutionTools(visible []provider.ToolDefinition, authorized []string)
 			return nil, nil, failureMissingTool
 		}
 		if len(definition.Name) == 0 || len(definition.Name) > maxToolNameBytes ||
-			len(definition.Description) > maxToolDescriptionBytes ||
 			len(definition.Parameters) > maxToolMetadataBytes || (len(definition.Parameters) > 0 && !json.Valid(definition.Parameters)) {
 			return nil, nil, failureInvalidTask
 		}
+		definition.Description = boundedToolDescription(definition.Description)
 		metadataBytes += len(definition.Name) + len(definition.Description) + len(definition.Parameters)
 		if metadataBytes > maxToolMetadataBytes {
 			return nil, nil, failureInvalidTask
