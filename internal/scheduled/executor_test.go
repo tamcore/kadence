@@ -17,6 +17,8 @@ const (
 	executorTestUsername    = "alice"
 	executorInvalidTimezone = "bad"
 	executorDataTool        = "data__read"
+	executorTestTaskID      = "task"
+	executorDailyRRULE      = "FREQ=DAILY"
 )
 
 type executorProvider struct {
@@ -129,13 +131,13 @@ func claimedTask(kind string, now time.Time) model.ClaimedScheduledTask {
 		FirstRun: true,
 		Username: executorTestUsername,
 		Task: model.ScheduledTask{
-			ID: "task", UserID: 7, ConversationID: "conversation", Kind: kind,
+			ID: executorTestTaskID, UserID: 7, ConversationID: "conversation", Kind: kind,
 			State: model.ScheduledTaskStateActive, CompiledPrompt: "check training data",
 			Timezone: defaultTimezoneUTC, AuthorizedTools: []string{executorDataTool}, NextRunAt: nil,
 			LastRunAt: &next,
 		},
 		Run: model.ScheduledTaskRun{
-			ID: 11, TaskID: "task", State: model.ScheduledTaskRunStateRunning,
+			ID: 11, TaskID: executorTestTaskID, State: model.ScheduledTaskRunStateRunning,
 			ScheduledFor: next, StartedAt: &started,
 		},
 	}
@@ -236,7 +238,7 @@ func TestExecutorGatherCallsOnlyAuthorizedToolsAndSynthesizesToolFree(t *testing
 	claimed := claimedTask(model.ScheduledTaskKindData, now)
 	claimed.FirstRun = false
 	claimed.Task.DTStart = new(now.Add(-24 * time.Hour))
-	claimed.Task.RRULE = "FREQ=DAILY"
+	claimed.Task.RRULE = executorDailyRRULE
 
 	if err := executorFor(worker, synthesis, catalog, store, now).Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed); err != nil {
 		t.Fatal(err)
@@ -375,7 +377,7 @@ func TestExecutorFailureAdvancementAndPausePolicies(t *testing.T) {
 				claimed.Task.OneOffAt = new(claimed.Run.ScheduledFor)
 			} else {
 				claimed.Task.DTStart = new(now.Add(-24 * time.Hour))
-				claimed.Task.RRULE = "FREQ=DAILY"
+				claimed.Task.RRULE = executorDailyRRULE
 			}
 			worker := &executorProvider{err: errors.New("raw provider secret")}
 			snapshot := &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}}

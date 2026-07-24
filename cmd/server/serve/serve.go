@@ -280,7 +280,39 @@ func Run() error {
 			})
 			deps.Scheduled = handlers.NewScheduled(scheduledSvc)
 			deps.Chat = handlers.NewChat(chatSvc, convs, msgs, tasks)
-			slog.Info("scheduled enabled", "max_active_per_user", cfg.ScheduledMaxActivePerUser)
+			workerProvider := provider.NewOpenAICompat(
+				cfg.ResolvedScheduledWorkerBaseURL(),
+				cfg.ResolvedScheduledWorkerAPIKey(),
+			)
+			executor := scheduled.NewExecutor(scheduled.ExecutorDeps{
+				Worker: workerProvider, Synthesis: prov,
+				Tools: scheduledToolsAdapter{catalog: unattendedTools},
+				Store: tasks,
+				Config: scheduled.ExecutorConfig{
+					WorkerModel:         cfg.ResolvedScheduledWorkerModel(),
+					WorkerMaxTokens:     cfg.ScheduledWorkerMaxTokens,
+					WorkerTimeout:       cfg.ScheduledWorkerTimeout,
+					WorkerMaxIterations: cfg.ScheduledWorkerMaxIterations,
+					SynthesisModel:      cfg.LLMModel,
+					SynthesisMaxTokens:  cfg.LLMMaxTokens,
+					SynthesisTimeout:    cfg.LLMTimeout,
+				},
+			})
+			worker := scheduled.NewWorker(scheduled.WorkerDeps{
+				Store: tasks, Executor: executor,
+				Config: scheduled.WorkerConfig{
+					Concurrency: cfg.ScheduledWorkerConcurrency,
+					StaleAfter: scheduledStaleAfter(
+						cfg.ScheduledWorkerTimeout,
+						cfg.LLMTimeout,
+					),
+				},
+				Log: slog.Default(),
+			})
+			startScheduledWorker(rootCtx, &bgWG, true, worker)
+			slog.Info("scheduled enabled",
+				"max_active_per_user", cfg.ScheduledMaxActivePerUser,
+				"worker_concurrency", cfg.ScheduledWorkerConcurrency)
 		} else {
 			deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		}

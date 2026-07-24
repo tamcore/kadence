@@ -699,6 +699,65 @@ func (r *ScheduledTaskRepository) ClaimDue(ctx context.Context, now time.Time, l
 	return claimed, nil
 }
 
+// ListStaleRunning returns started occurrences older than before. It does not
+// mutate them: FinishFailure performs the owner-scoped running-state CAS, so
+// concurrent replicas may inspect the same stale row but only one can recover
+// it.
+func (r *ScheduledTaskRepository) ListStaleRunning(ctx context.Context, before time.Time, limit int) ([]model.ClaimedScheduledTask, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+scheduledTaskRunColsQualified+`, task.user_id, users.username
+		 FROM scheduled_task_runs AS run
+		 JOIN scheduled_tasks AS task ON task.id = run.task_id
+		 JOIN users ON users.id = task.user_id
+		 WHERE run.state = $1 AND run.started_at IS NOT NULL AND run.started_at < $2
+		 ORDER BY run.started_at
+		 LIMIT $3`,
+		model.ScheduledTaskRunStateRunning, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list stale scheduled runs: %w", err)
+	}
+	type staleRun struct {
+		run      model.ScheduledTaskRun
+		userID   int64
+		username string
+	}
+	stale := make([]staleRun, 0)
+	for rows.Next() {
+		var item staleRun
+		if err := rows.Scan(
+			&item.run.ID, &item.run.TaskID, &item.run.OccurrenceKey, &item.run.ScheduledFor,
+			&item.run.State, &item.run.StartedAt, &item.run.FinishedAt, &item.run.Result,
+			&item.run.Error, &item.run.Unread, &item.run.CreatedAt, &item.userID, &item.username,
+		); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan stale scheduled run: %w", err)
+		}
+		stale = append(stale, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate stale scheduled runs: %w", err)
+	}
+	rows.Close()
+
+	claims := make([]model.ClaimedScheduledTask, 0, len(stale))
+	for _, item := range stale {
+		task, err := scanScheduledTask(r.pool.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks WHERE id = $1::uuid AND user_id = $2`,
+			item.run.TaskID, item.userID))
+		if err != nil {
+			return nil, fmt.Errorf("load stale scheduled task: %w", err)
+		}
+		claims = append(claims, model.ClaimedScheduledTask{
+			Task: task, Run: item.run, Username: item.username,
+		})
+	}
+	return claims, nil
+}
+
 // FinishSuccess atomically completes a still-running occurrence, optionally
 // inserts its linked assistant delivery, resets failures, persists monitoring
 // state, and advances the task.

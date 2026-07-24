@@ -22,6 +22,7 @@ const (
 	scheduledConfirmedName  = "Confirmed"
 	scheduledOldPrompt      = "old prompt"
 	scheduledSafeResult     = "Safe result"
+	scheduledDailyRRULE     = "FREQ=DAILY"
 )
 
 func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
@@ -203,6 +204,91 @@ func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 	}
 }
 
+func TestScheduledTaskRepositoryListsOnlyStaleRunningOccurrences(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "stale-owner", "stale-owner@example.com")
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	now := time.Now().UTC().Truncate(time.Second)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Name: "Recover",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: "recover", Timezone: scheduledTimezoneUTC,
+		DTStart: new(now.Add(-48 * time.Hour)), RRULE: scheduledDailyRRULE,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStarted := now.Add(-2 * time.Hour)
+	oldRun, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "old-running", ScheduledFor: oldStarted,
+		State: model.ScheduledTaskRunStateRunning, StartedAt: &oldStarted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshStarted := now.Add(-time.Minute)
+	if _, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "fresh-running", ScheduledFor: freshStarted,
+		State: model.ScheduledTaskRunStateRunning, StartedAt: &freshStarted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "pending", ScheduledFor: now,
+		State: model.ScheduledTaskRunStatePending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := repo.ListStaleRunning(ctx, now.Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListStaleRunning: %v", err)
+	}
+	if len(stale) != 1 || stale[0].Run.ID != oldRun.ID || stale[0].Task.ID != task.ID ||
+		stale[0].Username != owner.Username {
+		t.Fatalf("stale claims = %+v, want old owner-scoped run", stale)
+	}
+	if none, err := repo.ListStaleRunning(ctx, now.Add(-time.Hour), 0); err != nil || none != nil {
+		t.Fatalf("zero-limit stale claims = %+v, %v; want nil", none, err)
+	}
+
+	if err := repo.SoftDelete(ctx, task.ID, owner.ID); err != nil {
+		t.Fatalf("SoftDelete running task: %v", err)
+	}
+	deleted, err := repo.ListStaleRunning(ctx, now.Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListStaleRunning deleted task: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0].Run.ID != oldRun.ID ||
+		deleted[0].Task.State != model.ScheduledTaskStateDeleted ||
+		deleted[0].Task.DeletedAt == nil {
+		t.Fatalf("deleted stale claims = %+v, want deleted task run", deleted)
+	}
+	if err := repo.FinishFailure(ctx, model.ScheduledExecutionFailure{
+		RunID: oldRun.ID, UserID: owner.ID, Code: "execution_interrupted",
+		IncrementFailures: true, TaskState: model.ScheduledTaskStateActive,
+	}); err != nil {
+		t.Fatalf("FinishFailure deleted stale run: %v", err)
+	}
+	var runState, taskState string
+	if err := pool.QueryRow(ctx,
+		`SELECT run.state, task.state
+		 FROM scheduled_task_runs AS run
+		 JOIN scheduled_tasks AS task ON task.id = run.task_id
+		 WHERE run.id = $1`, oldRun.ID,
+	).Scan(&runState, &taskState); err != nil {
+		t.Fatalf("read recovered deleted run: %v", err)
+	}
+	if runState != model.ScheduledTaskRunStateFailed || taskState != model.ScheduledTaskStateDeleted {
+		t.Fatalf("recovered deleted state = run %q task %q", runState, taskState)
+	}
+}
+
 func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
@@ -282,7 +368,7 @@ func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *tes
 			task, err := repo.Create(ctx, model.ScheduledTask{
 				UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: scheduledConfirmedName,
 				Kind: model.ScheduledTaskKindReminder, State: tc.state, CompiledPrompt: scheduledOldPrompt,
-				Timezone: scheduledTimezoneUTC, RRULE: "FREQ=DAILY", DTStart: new(time.Now().UTC()),
+				Timezone: scheduledTimezoneUTC, RRULE: scheduledDailyRRULE, DTStart: new(time.Now().UTC()),
 				AuthorizedTools: []string{"search"}, StaticMessage: "old static message",
 				NextRunAt: new(time.Now().UTC().Add(time.Hour)),
 			})
@@ -312,7 +398,7 @@ func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *tes
 			raceTask, err := repo.Create(ctx, model.ScheduledTask{
 				UserID: owner.ID, ConversationID: raceConversation.ID, Version: 1, Name: "Racing",
 				Kind: model.ScheduledTaskKindReminder, State: tc.state, CompiledPrompt: "race prompt",
-				Timezone: scheduledTimezoneUTC, RRULE: "FREQ=DAILY", DTStart: new(time.Now().UTC()),
+				Timezone: scheduledTimezoneUTC, RRULE: scheduledDailyRRULE, DTStart: new(time.Now().UTC()),
 				AuthorizedTools: []string{"search"}, StaticMessage: "race static message",
 				NextRunAt: new(time.Now().UTC().Add(time.Hour)),
 			})

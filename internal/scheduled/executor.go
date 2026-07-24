@@ -305,28 +305,7 @@ func (e *Executor) synthesize(ctx context.Context, canonical string, outcome Wor
 }
 
 func (e *Executor) recordFailure(ctx context.Context, claimed model.ClaimedScheduledTask, code string) error {
-	failure := ExecutionFailure{
-		RunID: claimed.Run.ID, UserID: claimed.Task.UserID, Code: code,
-		IncrementFailures: code != failureMissingTool,
-		TaskState:         model.ScheduledTaskStateActive,
-	}
-	switch {
-	case code == failureMissingTool:
-		failure.Pause = true
-		failure.TaskState = model.ScheduledTaskStatePaused
-	case claimed.Task.OneOffAt != nil:
-		failure.TaskState = model.ScheduledTaskStateFailed
-	case claimed.Task.ConsecutiveFailures+1 >= 3:
-		failure.Pause = true
-		failure.TaskState = model.ScheduledTaskStatePaused
-	default:
-		next, err := scheduleFor(claimed.Task).NextAfter(e.now())
-		if err != nil {
-			failure.TaskState = model.ScheduledTaskStateFailed
-		} else {
-			failure.NextRunAt = &next
-		}
-	}
+	failure := executionFailure(claimed, e.now(), code)
 	if err := e.store.FinishFailure(ctx, failure); err != nil {
 		return err
 	}
