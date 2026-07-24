@@ -94,6 +94,16 @@ spec:
         - name: {{ $prefix }}_HINT
           value: {{ . | quote }}
         {{- end }}
+        {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
+        - name: KADENCE_FIT_DOWNLOAD_TOOL
+          value: {{ $server.fitAnalysis.downloadTool | quote }}
+        - name: KADENCE_FIT_BRIDGE_URL
+          value: {{ printf "http://%s:8081" $svc | quote }}
+        - name: KADENCE_FIT_BRIDGE_AUTH_USER
+          valueFrom: { secretKeyRef: { name: {{ $secret }}, key: username } }
+        - name: KADENCE_FIT_BRIDGE_AUTH_PASS
+          valueFrom: { secretKeyRef: { name: {{ $secret }}, key: password } }
+        {{- end }}
         {{- end }}
         {{- if .Values.markitdown.enabled }}
         {{- $mdSvc := include "kadence.markitdown.fullname" . }}

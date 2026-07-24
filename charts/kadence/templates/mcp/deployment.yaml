@@ -61,7 +61,7 @@ spec:
         - secretRef:
             name: {{ $server.existingSecret }}
         {{- end }}
-        {{- if or (and $server.persistence $server.persistence.enabled) $server.shm }}
+        {{- if or (and $server.persistence $server.persistence.enabled) $server.shm (and $server.fitAnalysis $server.fitAnalysis.enabled) }}
         volumeMounts:
         {{- if and $server.persistence $server.persistence.enabled }}
         - name: data
@@ -72,7 +72,29 @@ spec:
         - name: dshm
           mountPath: /dev/shm
         {{- end }}
+        {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
+        - name: fit-files
+          mountPath: {{ $server.fitAnalysis.downloadDir }}
         {{- end }}
+        {{- end }}
+      {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
+      - name: file-bridge
+        image: {{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}
+        command: ["/kadence", "file-bridge"]
+        ports:
+        - containerPort: 8081
+          name: file-bridge
+        env:
+        - name: KADENCE_FILE_BRIDGE_ROOT
+          value: {{ $server.fitAnalysis.downloadDir | quote }}
+        - name: KADENCE_FILE_BRIDGE_AUTH_USER
+          valueFrom: { secretKeyRef: { name: {{ $authSecretName }}, key: username } }
+        - name: KADENCE_FILE_BRIDGE_AUTH_PASS
+          valueFrom: { secretKeyRef: { name: {{ $authSecretName }}, key: password } }
+        volumeMounts:
+        - name: fit-files
+          mountPath: {{ $server.fitAnalysis.downloadDir }}
+      {{- end }}
       - name: nginx
         image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
         securityContext:
@@ -163,6 +185,10 @@ spec:
         emptyDir:
           medium: Memory
           sizeLimit: {{ $server.shm }}
+      {{- end }}
+      {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
+      - name: fit-files
+        emptyDir: {}
       {{- end }}
 ---
 {{- if and $server.persistence $server.persistence.enabled }}

@@ -121,7 +121,12 @@ type Config struct {
 	// Empty means no custom CA: MCP traffic uses mcp-go's default HTTP
 	// client (plaintext http, or https verified against the system trust
 	// store).
-	MCPCAFile string
+	MCPCAFile         string
+	FITDownloadTool   string
+	FITBridgeURL      string
+	FITBridgeAuthUser string
+	FITBridgeAuthPass string
+	FITMaxBytes       int
 
 	// User-defined MCP servers. EncryptionKey is a 32-byte key (KADENCE_ENCRYPTION_KEY,
 	// base64-encoded) used to encrypt stored per-user MCP server credentials.
@@ -226,6 +231,11 @@ func Load() Config {
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 16)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 	cfg.MCPCAFile = os.Getenv("KADENCE_MCP_CA_FILE")
+	cfg.FITDownloadTool = os.Getenv("KADENCE_FIT_DOWNLOAD_TOOL")
+	cfg.FITBridgeURL = os.Getenv("KADENCE_FIT_BRIDGE_URL")
+	cfg.FITBridgeAuthUser = os.Getenv("KADENCE_FIT_BRIDGE_AUTH_USER")
+	cfg.FITBridgeAuthPass = os.Getenv("KADENCE_FIT_BRIDGE_AUTH_PASS")
+	cfg.FITMaxBytes = envIntOr("KADENCE_FIT_MAX_BYTES", 32<<20)
 
 	key, keyErr := decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
 	cfg.EncryptionKey = key
@@ -269,6 +279,10 @@ func (c Config) RAGEnabled() bool { return c.EmbedAPIKey != "" }
 
 // MarkitdownEnabled reports whether the markitdown-mcp ingestion extractor is configured.
 func (c Config) MarkitdownEnabled() bool { return c.MarkitdownURL != "" }
+
+func (c Config) FITEnabled() bool {
+	return c.FITDownloadTool != "" && c.FITBridgeURL != "" && c.FITBridgeAuthUser != "" && c.FITBridgeAuthPass != ""
+}
 
 // UserMCPEnabled reports whether user-defined MCP servers can be registered:
 // a valid 32-byte encryption key AND at least one allowlisted host.
