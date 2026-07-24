@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
@@ -163,4 +166,119 @@ func TestUserRepositoryListDeleteCount(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("Count after delete = %d, want 1", n)
 	}
+}
+
+func TestUserRepositoryDeleteCascadesScheduledAudit(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+
+	user, err := users.Create(ctx, model.User{
+		Username: "scheduled-owner", Email: "scheduled-owner@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	conversation, err := conversations.CreateWithKind(ctx, user.ID, "Scheduled", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatalf("create scheduled conversation: %v", err)
+	}
+	taskID := createScheduledTaskWithDeliveredRun(t, ctx, pool, user.ID, conversation.ID)
+
+	if err := users.Delete(ctx, user.ID); err != nil {
+		t.Fatalf("Delete user with scheduled audit: %v", err)
+	}
+	for table, query := range map[string]string{
+		conversationsTable:    `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`,
+		"scheduled_tasks":     `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`,
+		"scheduled_task_runs": `SELECT COUNT(*) FROM scheduled_task_runs WHERE task_id = $1::uuid`,
+	} {
+		id := taskID
+		if table == conversationsTable {
+			id = conversation.ID
+		}
+		var count int
+		if err := pool.QueryRow(ctx, query, id).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count after user delete = %d, want 0", table, count)
+		}
+	}
+}
+
+func TestScheduledTaskSoftDeleteRetainsAudit(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+
+	user, err := users.Create(ctx, model.User{
+		Username: "scheduled-soft-delete", Email: "scheduled-soft-delete@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	conversation, err := conversations.CreateWithKind(ctx, user.ID, "Scheduled", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatalf("create scheduled conversation: %v", err)
+	}
+	taskID := createScheduledTaskWithDeliveredRun(t, ctx, pool, user.ID, conversation.ID)
+
+	if err := store.NewScheduledTaskRepository(pool, 10).SoftDelete(ctx, taskID, user.ID); err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+	var state string
+	var deleted bool
+	if err := pool.QueryRow(ctx,
+		`SELECT state, deleted_at IS NOT NULL FROM scheduled_tasks WHERE id = $1::uuid`, taskID).
+		Scan(&state, &deleted); err != nil {
+		t.Fatalf("read soft-deleted task: %v", err)
+	}
+	if state != model.ScheduledTaskStateDeleted || !deleted {
+		t.Fatalf("soft-deleted task state=%q deleted_at_set=%t", state, deleted)
+	}
+	var runCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM scheduled_task_runs
+		  WHERE task_id = $1::uuid AND state = 'delivered' AND result = 'audit result'`, taskID).
+		Scan(&runCount); err != nil {
+		t.Fatalf("count retained task runs: %v", err)
+	}
+	if runCount != 1 {
+		t.Fatalf("retained delivered run count = %d, want 1", runCount)
+	}
+}
+
+func createScheduledTaskWithDeliveredRun(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	userID int64,
+	conversationID string,
+) string {
+	t.Helper()
+	var taskID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO scheduled_tasks (
+		     user_id, conversation_id, kind, state, compiled_prompt, timezone
+		 ) VALUES ($1, $2::uuid, 'reminder', 'completed', 'reflect', 'UTC')
+		 RETURNING id::text`,
+		userID, conversationID).Scan(&taskID); err != nil {
+		t.Fatalf("insert scheduled task: %v", err)
+	}
+	deliveredAt := time.Date(2026, 7, 24, 20, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO scheduled_task_runs (
+		     task_id, occurrence_key, scheduled_for, state, finished_at, result
+		 ) VALUES ($1::uuid, 'scheduled:2026-07-24T20:00:00Z', $2, 'delivered', $2, 'audit result')`,
+		taskID, deliveredAt); err != nil {
+		t.Fatalf("insert delivered task run: %v", err)
+	}
+	return taskID
 }

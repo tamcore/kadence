@@ -1,9 +1,11 @@
 package handlers_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -386,11 +388,21 @@ func TestScheduledDetailMapsOwnerMissToNotFound(t *testing.T) {
 }
 
 func TestScheduledCreateStreamsDefinitionErrorsWithoutProviderDetails(t *testing.T) {
-	h := handlers.NewScheduled(&fakeScheduledLifecycle{createErr: errors.New("scheduled: malformed compiler output")})
+	var logs bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
+	internalErr := errors.New("scheduled: malformed compiler output")
+	h := handlers.NewScheduled(&fakeScheduledLifecycle{createErr: internalErr})
 	req := withUser(httptest.NewRequest(http.MethodPost, "/api/scheduled/tasks", strings.NewReader(`{"message":"remind me"}`)), 7)
 	rec := httptest.NewRecorder()
 	h.Create(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"type":"error"`) || strings.Contains(rec.Body.String(), "malformed compiler") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if logOutput := logs.String(); !strings.Contains(logOutput, "scheduled create failed") ||
+		!strings.Contains(logOutput, internalErr.Error()) {
+		t.Fatalf("missing internal error log: %q", logOutput)
 	}
 }

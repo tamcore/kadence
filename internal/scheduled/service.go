@@ -316,8 +316,11 @@ func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model
 		return model.ScheduledTask{}, ErrInvalidTransition
 	}
 	paused, err := s.deps.Tasks.Pause(ctx, taskID, userID, task.Version)
-	if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+	switch {
+	case errors.Is(err, store.ErrInvalidScheduledTaskState):
 		return model.ScheduledTask{}, ErrInvalidTransition
+	case errors.Is(err, store.ErrScheduledRunInProgress):
+		return model.ScheduledTask{}, ErrRunInProgress
 	}
 	return paused, err
 }
@@ -348,7 +351,11 @@ func (s *Service) Delete(ctx context.Context, userID int64, taskID string) error
 	if err := s.ready(); err != nil {
 		return err
 	}
-	return s.deps.Tasks.SoftDelete(ctx, taskID, userID)
+	err := s.deps.Tasks.SoftDelete(ctx, taskID, userID)
+	if errors.Is(err, store.ErrScheduledRunInProgress) {
+		return ErrRunInProgress
+	}
+	return err
 }
 
 // RunNow records a distinct pending manual occurrence and marks the confirmed
@@ -359,8 +366,11 @@ func (s *Service) RunNow(ctx context.Context, userID int64, taskID string) (mode
 	}
 	now := s.deps.Now().UTC()
 	run, err := s.deps.Tasks.RunNow(ctx, userID, taskID, "manual:"+uuid.NewString(), now)
-	if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+	switch {
+	case errors.Is(err, store.ErrInvalidScheduledTaskState):
 		return model.ScheduledTaskRun{}, ErrInvalidTransition
+	case errors.Is(err, store.ErrScheduledRunInProgress):
+		return model.ScheduledTaskRun{}, ErrRunInProgress
 	}
 	return run, err
 }

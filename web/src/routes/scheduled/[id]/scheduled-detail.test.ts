@@ -134,7 +134,7 @@ describe('/scheduled/[id]', () => {
 		vi.useRealTimers();
 	});
 
-	it('supports pause, run now, and confirmed deletion', async () => {
+	it('supports pause and run now', async () => {
 		getMock.mockResolvedValue(structuredClone(detail));
 		pauseMock.mockResolvedValue({ ...detail.task, state: 'paused' });
 		runMock.mockResolvedValue({
@@ -143,7 +143,6 @@ describe('/scheduled/[id]', () => {
 			scheduledFor: '2026-07-25T08:00:00Z',
 			unread: false
 		});
-		deleteMock.mockResolvedValue({ ok: true });
 		render(Page);
 		await screen.findByRole('heading', { name: 'Post-run review' });
 
@@ -151,11 +150,74 @@ describe('/scheduled/[id]', () => {
 		await waitFor(() => expect(pauseMock).toHaveBeenCalledWith('task-1'));
 		await fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 		expect(runMock).toHaveBeenCalledWith('task-1');
+	});
+
+	it('supports confirmed deletion when no occurrence is in progress', async () => {
+		getMock.mockResolvedValue(structuredClone(detail));
+		deleteMock.mockResolvedValue({ ok: true });
+		render(Page);
+		await screen.findByRole('heading', { name: 'Post-run review' });
+
 		await fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
 		const dialog = screen.getByRole('dialog', { name: 'Delete scheduled task' });
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('task-1'));
 		expect(gotoMock).toHaveBeenCalledWith('/scheduled');
+	});
+
+	it.each(['pending', 'running'])(
+		'disables lifecycle controls while the latest occurrence is %s',
+		async (state) => {
+			const inProgress = structuredClone(detail);
+			inProgress.runs = [
+				{
+					id: 3,
+					state,
+					scheduledFor: '2026-07-25T08:00:00Z',
+					error: '',
+					unread: false
+				},
+				...inProgress.runs
+			];
+			getMock.mockResolvedValue(inProgress);
+			render(Page);
+			await screen.findByRole('heading', { name: 'Post-run review' });
+
+			expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled();
+			expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+			expect(screen.getByRole('button', { name: 'Delete task' })).toBeDisabled();
+			expect(screen.getByRole('status')).toHaveTextContent(
+				'Task controls are available when this run finishes.'
+			);
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+			await fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+			await fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+			expect(pauseMock).not.toHaveBeenCalled();
+			expect(runMock).not.toHaveBeenCalled();
+			expect(deleteMock).not.toHaveBeenCalled();
+		}
+	);
+
+	it('disables lifecycle controls when an older occurrence is still running', async () => {
+		const overlapping = structuredClone(detail);
+		overlapping.runs = [
+			...overlapping.runs,
+			{
+				id: 0,
+				state: 'running',
+				scheduledFor: '2026-07-22T08:00:00Z',
+				error: '',
+				unread: false
+			}
+		];
+		getMock.mockResolvedValue(overlapping);
+		render(Page);
+		await screen.findByRole('heading', { name: 'Post-run review' });
+
+		expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Delete task' })).toBeDisabled();
 	});
 
 	it('redirects without loading when Scheduled is disabled', async () => {

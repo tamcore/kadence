@@ -23,6 +23,9 @@
 	let destroyed = false;
 
 	const id = $derived($page.params.id ?? '');
+	const occurrenceInProgress = $derived(
+		detail?.runs.some((run) => run.state === 'pending' || run.state === 'running') ?? false
+	);
 
 	onMount(() => {
 		if ($currentUser?.scheduledEnabled === false) {
@@ -74,7 +77,7 @@
 	}
 
 	async function changeState(): Promise<void> {
-		if (!detail || busy) return;
+		if (!detail || busy || (detail.task.state === 'active' && occurrenceInProgress)) return;
 		busy = true;
 		error = '';
 		try {
@@ -92,7 +95,7 @@
 	}
 
 	async function runNow(): Promise<void> {
-		if (!detail || busy) return;
+		if (!detail || busy || occurrenceInProgress) return;
 		busy = true;
 		error = '';
 		try {
@@ -108,6 +111,7 @@
 
 	async function remove(): Promise<void> {
 		confirmDelete = false;
+		if (!detail || busy || occurrenceInProgress) return;
 		busy = true;
 		try {
 			await deleteScheduledTask(id);
@@ -149,16 +153,30 @@
 			</div>
 			<div class="controls">
 				{#if detail.task.state === 'active' || detail.task.state === 'paused'}
-					<button disabled={busy} onclick={changeState}>
+					<button
+						disabled={busy || (detail.task.state === 'active' && occurrenceInProgress)}
+						onclick={changeState}
+					>
 						{detail.task.state === 'active' ? 'Pause' : 'Resume'}
 					</button>
 				{/if}
-				<button disabled={busy || !['active', 'paused'].includes(detail.task.state)} onclick={runNow}
+				<button
+					disabled={busy || occurrenceInProgress || !['active', 'paused'].includes(detail.task.state)}
+					onclick={runNow}
 					>Run now</button
 				>
-				<button class="delete" disabled={busy} onclick={() => (confirmDelete = true)}>Delete task</button>
+				<button
+					class="delete"
+					disabled={busy || occurrenceInProgress}
+					onclick={() => (confirmDelete = true)}>Delete task</button
+				>
 			</div>
 		</header>
+		{#if occurrenceInProgress}
+			<p class="execution-note" role="status">
+				Task controls are available when this run finishes.
+			</p>
+		{/if}
 
 		<section class="overview" aria-label="Task overview">
 			<div>
@@ -213,6 +231,7 @@
 	.state, .run-state { color: var(--accent); font: 600 0.72rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; text-transform: uppercase; letter-spacing: 0.06em; }
 	.state.paused, .state.failed, .run-state.failed { color: #b66a2c; }
 	.controls { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+	.execution-note { margin: 12px 0 0; color: var(--text-muted); font-size: 0.84rem; text-align: right; }
 	button { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
 	button.delete { color: var(--danger); }
 	button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -235,6 +254,7 @@
 		.detail-page { padding: 24px 16px 46px; }
 		header { align-items: flex-start; flex-direction: column; }
 		.controls { justify-content: flex-start; }
+		.execution-note { text-align: left; }
 		.overview { grid-template-columns: 1fr; }
 		.run-head { flex-direction: column; gap: 3px; }
 	}

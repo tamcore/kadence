@@ -293,6 +293,10 @@
 	function statusLabel(value: string): string {
 		return value.charAt(0).toUpperCase() + value.slice(1).replace('_', ' ');
 	}
+
+	function runInProgress(state?: string): boolean {
+		return state === 'pending' || state === 'running';
+	}
 </script>
 
 <svelte:head><title>Scheduled · Kadence</title></svelte:head>
@@ -400,7 +404,12 @@
 										: 'No next run'}
 								</span>
 								{#if task.recentRun}
-									<span class="recent">Latest: {statusLabel(task.recentRun.state)}</span>
+									<span class:in-progress={runInProgress(task.recentRun.state)} class="recent">
+										Latest: {statusLabel(task.recentRun.state)}
+										{#if runInProgress(task.recentRun.state)}
+											· Task controls unavailable until this run finishes
+										{/if}
+									</span>
 								{/if}
 							</a>
 						</li>

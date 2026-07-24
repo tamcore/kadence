@@ -227,6 +227,18 @@ func TestDeleteConversationScheduledLookupFailureIsInternal(t *testing.T) {
 	}
 }
 
+func TestDeleteConversationScheduledRunConflict(t *testing.T) {
+	convs := &fakeConvLister{}
+	pauser := &fakeScheduledConversationPauser{err: store.ErrScheduledRunInProgress}
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
+	rec := httptest.NewRecorder()
+	h.DeleteConversation(rec, req)
+	if rec.Code != http.StatusConflict || convs.deleteCalls != 0 {
+		t.Fatalf("status=%d deletes=%d body=%s", rec.Code, convs.deleteCalls, rec.Body.String())
+	}
+}
+
 func patchReq(t *testing.T, body string) *http.Request { //nolint:unparam
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPatch, "/api/conversations/1", strings.NewReader(body))

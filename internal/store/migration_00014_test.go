@@ -15,6 +15,11 @@ import (
 	"github.com/tamcore/kadence/internal/store/migrations"
 )
 
+const (
+	conversationsTable  = "conversations"
+	scheduledTasksTable = "scheduled_tasks"
+)
+
 func TestScheduledMigrationsRoundTrip(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test (needs Docker) in -short mode")
@@ -61,15 +66,30 @@ func TestScheduledMigrationsRoundTrip(t *testing.T) {
 	}
 	assertMessagePurposeColumn(t, ctx, db, true)
 	assertLegacyScheduledMessagePurposes(t, ctx, db)
+	assertScheduledRunDeleteRule(t, ctx, db, "RESTRICT")
+	if err := goose.UpToContext(ctx, db, ".", 16); err != nil {
+		t.Fatalf("apply migration 16: %v", err)
+	}
+	assertScheduledRunDeleteRule(t, ctx, db, "CASCADE")
+	if err := goose.DownToContext(ctx, db, ".", 15); err != nil {
+		t.Fatalf("reverse migration 16: %v", err)
+	}
+	assertScheduledRunDeleteRule(t, ctx, db, "RESTRICT")
+	if err := goose.UpToContext(ctx, db, ".", 16); err != nil {
+		t.Fatalf("reapply migration 16: %v", err)
+	}
+	assertScheduledRunDeleteRule(t, ctx, db, "CASCADE")
 	if err := goose.DownToContext(ctx, db, ".", 14); err != nil {
-		t.Fatalf("reverse migration 15: %v", err)
+		t.Fatalf("reverse migrations 15 and 16: %v", err)
 	}
 	assertScheduledSchema(t, ctx, db, true)
 	assertMessagePurposeColumn(t, ctx, db, false)
-	if err := goose.UpToContext(ctx, db, ".", 15); err != nil {
-		t.Fatalf("reapply migration 15: %v", err)
+	assertScheduledRunDeleteRule(t, ctx, db, "RESTRICT")
+	if err := goose.UpToContext(ctx, db, ".", 16); err != nil {
+		t.Fatalf("reapply migrations 15 and 16: %v", err)
 	}
 	assertLegacyScheduledMessagePurposes(t, ctx, db)
+	assertScheduledRunDeleteRule(t, ctx, db, "CASCADE")
 	if err := goose.DownToContext(ctx, db, ".", 13); err != nil {
 		t.Fatalf("reverse scheduled migrations: %v", err)
 	}
@@ -80,11 +100,11 @@ func TestScheduledMigrationsRoundTrip(t *testing.T) {
 	}
 	assertScheduledSchema(t, ctx, db, true)
 	assertMessagePurposeColumn(t, ctx, db, true)
+	assertScheduledRunDeleteRule(t, ctx, db, "CASCADE")
 }
 
 func assertScheduledSchema(t *testing.T, ctx context.Context, db *sql.DB, wantPresent bool) {
 	t.Helper()
-	const scheduledTasksTable = "scheduled_tasks"
 	for _, name := range []string{scheduledTasksTable, "scheduled_task_runs"} {
 		var exists bool
 		if err := db.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&exists); err != nil {
@@ -99,7 +119,7 @@ func assertScheduledSchema(t *testing.T, ctx context.Context, db *sql.DB, wantPr
 		name  string
 	}{
 		{table: "users", name: "timezone"},
-		{table: "conversations", name: "kind"},
+		{table: conversationsTable, name: "kind"},
 		{table: scheduledTasksTable, name: "delivery_policy"},
 		{table: scheduledTasksTable, name: "initial_run"},
 		{table: scheduledTasksTable, name: "stop_condition"},
@@ -128,6 +148,21 @@ func assertMessagePurposeColumn(t *testing.T, ctx context.Context, db *sql.DB, w
 	}
 	if exists != wantPresent {
 		t.Fatalf("messages.purpose exists=%t, want %t", exists, wantPresent)
+	}
+}
+
+func assertScheduledRunDeleteRule(t *testing.T, ctx context.Context, db *sql.DB, want string) {
+	t.Helper()
+	var got string
+	if err := db.QueryRowContext(ctx,
+		`SELECT delete_rule
+		   FROM information_schema.referential_constraints
+		  WHERE constraint_schema = current_schema()
+		    AND constraint_name = 'scheduled_task_runs_task_id_fkey'`).Scan(&got); err != nil {
+		t.Fatalf("read scheduled run delete rule: %v", err)
+	}
+	if got != want {
+		t.Fatalf("scheduled run delete rule = %q, want %q", got, want)
 	}
 }
 

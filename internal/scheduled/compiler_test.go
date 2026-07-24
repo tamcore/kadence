@@ -3,6 +3,7 @@ package scheduled_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,8 @@ const (
 	credentialsTool = "kadence__request_credentials"
 	weatherTool     = "weather"
 )
+
+var compilerNow = time.Date(2026, 7, 24, 18, 0, 0, 0, time.UTC)
 
 type refinementProvider struct {
 	reply             string
@@ -53,7 +56,9 @@ func (p *refinementProvider) StreamChatWithTools(ctx context.Context, req provid
 
 func compilerFor(reply string) (*scheduled.Compiler, *refinementProvider) {
 	p := &refinementProvider{reply: reply}
-	return scheduled.NewCompiler(p, scheduled.CompilerConfig{Model: "primary-model", MaxTokens: 777}), p
+	return scheduled.NewCompiler(p, scheduled.CompilerConfig{
+		Model: "primary-model", MaxTokens: 777, Now: func() time.Time { return compilerNow },
+	}), p
 }
 
 func availableTools() []provider.ToolDefinition {
@@ -92,6 +97,11 @@ func TestCompilerRefineQuestionIsToolFreeAndExcludesCredentials(t *testing.T) {
 	prompt := p.req.Messages[0].Content
 	if !strings.Contains(prompt, "must include nonblank assistantText") || !strings.Contains(prompt, weatherTool) || !strings.Contains(prompt, "Read the forecast.") || strings.Contains(prompt, credentialsTool) {
 		t.Fatalf("system prompt tool listing = %q", prompt)
+	}
+	if !strings.Contains(prompt, "Current UTC time: "+compilerNow.Format(time.RFC3339)) ||
+		!strings.Contains(prompt, "at and dtStart must be complete RFC3339 timestamps") ||
+		!strings.Contains(prompt, "Do not include version") {
+		t.Fatalf("system prompt lacks exact temporal context: %q", prompt)
 	}
 	if p.req.Model != "primary-model" || p.req.MaxTokens != 777 || p.req.Temperature != 0 {
 		t.Fatalf("request = %+v, want compiler settings", p.req)
@@ -139,6 +149,33 @@ func TestCompilerRefineNormalizesProposalAndTools(t *testing.T) {
 	}
 	if got, want := strings.Join(proposal.AuthorizedTools, ","), "news,weather"; got != want {
 		t.Fatalf("AuthorizedTools = %q, want %q", got, want)
+	}
+}
+
+func TestCompilerOwnsProposalVersion(t *testing.T) {
+	reply := strings.Replace(
+		proposalJSON(
+			"reminder",
+			"static",
+			`{"at":"2040-01-02T15:04:05Z","timezone":"UTC"}`,
+			"UTC",
+			`[]`,
+			"always",
+			"wait",
+			"",
+			"Reflect on today's training.",
+		),
+		`"version":0`,
+		`"version":"model-supplied-version"`,
+		1,
+	)
+	c, _ := compilerFor(reply)
+	got, err := c.Refine(context.Background(), nil, nil, 7)
+	if err != nil {
+		t.Fatalf("Refine() error = %v", err)
+	}
+	if got.Proposal == nil || got.Proposal.Version != 7 {
+		t.Fatalf("proposal = %+v, want application-owned version 7", got.Proposal)
 	}
 }
 
@@ -261,7 +298,6 @@ func TestCompilerRejectsUnsafeToolMetadata(t *testing.T) {
 		{name: "blank name", tool: provider.ToolDefinition{Name: ""}},
 		{name: "oversized name", tool: provider.ToolDefinition{Name: strings.Repeat("a", 129)}},
 		{name: "control character name", tool: provider.ToolDefinition{Name: "weather\nnext"}},
-		{name: "oversized description", tool: provider.ToolDefinition{Name: weatherTool, Description: strings.Repeat("a", 4097)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, p := compilerFor(`{"assistantText":"Question","question":{"id":"x","prompt":"p","kind":"text"}}`)
@@ -270,6 +306,63 @@ func TestCompilerRejectsUnsafeToolMetadata(t *testing.T) {
 			}
 			if p.called {
 				t.Fatal("provider was called with rejected tool metadata")
+			}
+		})
+	}
+}
+
+func TestCompilerTruncatesOversizedToolDescriptions(t *testing.T) {
+	const boundedDescriptionBytes = 4096
+	c, p := compilerFor(`{"assistantText":"Question","question":{"id":"x","prompt":"p","kind":"text"}}`)
+	description := strings.Repeat("a", boundedDescriptionBytes-1) + "étail"
+	if _, err := c.Refine(context.Background(), nil, []provider.ToolDefinition{{
+		Name: weatherTool, Description: description,
+	}}, 1); err != nil {
+		t.Fatalf("Refine() error = %v", err)
+	}
+	prompt := p.req.Messages[0].Content
+	if strings.Contains(prompt, "tail") || !strings.Contains(prompt, strings.Repeat("a", boundedDescriptionBytes-1)) {
+		t.Fatalf("tool description was not safely truncated")
+	}
+}
+
+func TestCompilerRejectsOversizedToolCatalogBeforeProviderCall(t *testing.T) {
+	const boundedDescriptionBytes = 4096
+	for _, tc := range []struct {
+		name  string
+		tools []provider.ToolDefinition
+	}{
+		{
+			name: "too many tools",
+			tools: func() []provider.ToolDefinition {
+				tools := make([]provider.ToolDefinition, 257)
+				for i := range tools {
+					tools[i].Name = fmt.Sprintf("tool_%03d", i)
+				}
+				return tools
+			}(),
+		},
+		{
+			name: "too many metadata bytes",
+			tools: func() []provider.ToolDefinition {
+				tools := make([]provider.ToolDefinition, 17)
+				for i := range tools {
+					tools[i] = provider.ToolDefinition{
+						Name:        fmt.Sprintf("tool_%03d", i),
+						Description: strings.Repeat("x", boundedDescriptionBytes),
+					}
+				}
+				return tools
+			}(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, p := compilerFor(`{"assistantText":"Question","question":{"id":"x","prompt":"p","kind":"text"}}`)
+			if _, err := c.Refine(context.Background(), nil, tc.tools, 1); err == nil {
+				t.Fatal("Refine() error = nil, want aggregate tool catalog error")
+			}
+			if p.called {
+				t.Fatal("provider was called with oversized tool catalog")
 			}
 		})
 	}
