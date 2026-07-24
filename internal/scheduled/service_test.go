@@ -60,16 +60,24 @@ func (f *serviceMessages) ListByConversation(context.Context, string) ([]model.M
 }
 
 type serviceTasks struct {
-	task         model.ScheduledTask
-	createError  error
-	getError     error
-	listError    error
-	updateError  error
-	deleteError  error
-	createRunErr error
-	listRunsErr  error
-	readError    error
-	unreadError  error
+	task           model.ScheduledTask
+	createError    error
+	getError       error
+	listError      error
+	updateError    error
+	deleteError    error
+	createRunErr   error
+	listRunsErr    error
+	readError      error
+	unreadError    error
+	beginError     error
+	saveError      error
+	confirmError   error
+	runNowError    error
+	beginCalls     int
+	saveVersion    int
+	confirmVersion int
+	ownerIDs       []int64
 }
 
 func (f *serviceTasks) Create(_ context.Context, task model.ScheduledTask) (model.ScheduledTask, error) {
@@ -99,6 +107,46 @@ func (f *serviceTasks) Update(_ context.Context, task model.ScheduledTask, _ int
 	f.task = task
 	return task, nil
 }
+func (f *serviceTasks) BeginDraftRevision(_ context.Context, _ string, userID int64) (model.ScheduledTask, error) {
+	f.ownerIDs = append(f.ownerIDs, userID)
+	f.beginCalls++
+	if f.beginError != nil {
+		return model.ScheduledTask{}, f.beginError
+	}
+	if f.task.State != model.ScheduledTaskStateDraft && f.task.State != model.ScheduledTaskStateActive && f.task.State != model.ScheduledTaskStatePaused {
+		return model.ScheduledTask{}, store.ErrInvalidScheduledTaskState
+	}
+	f.task.Version++
+	f.task.State = model.ScheduledTaskStateDraft
+	f.task.CompiledPrompt = ""
+	f.task.NextRunAt = nil
+	return f.task, nil
+}
+func (f *serviceTasks) SaveProposal(_ context.Context, task model.ScheduledTask, userID int64, expectedVersion int) (model.ScheduledTask, error) {
+	f.ownerIDs = append(f.ownerIDs, userID)
+	f.saveVersion = expectedVersion
+	if f.saveError != nil {
+		return model.ScheduledTask{}, f.saveError
+	}
+	if f.task.State != model.ScheduledTaskStateDraft || f.task.Version != expectedVersion {
+		return model.ScheduledTask{}, scheduled.ErrStaleProposal
+	}
+	f.task = task
+	return task, nil
+}
+func (f *serviceTasks) ConfirmProposal(_ context.Context, _ string, userID int64, expectedVersion int, next time.Time) (model.ScheduledTask, error) {
+	f.ownerIDs = append(f.ownerIDs, userID)
+	f.confirmVersion = expectedVersion
+	if f.confirmError != nil {
+		return model.ScheduledTask{}, f.confirmError
+	}
+	if f.task.State != model.ScheduledTaskStateDraft || f.task.Version != expectedVersion || f.task.CompiledPrompt == "" {
+		return model.ScheduledTask{}, scheduled.ErrStaleProposal
+	}
+	f.task.State = model.ScheduledTaskStateActive
+	f.task.NextRunAt = &next
+	return f.task, nil
+}
 func (f *serviceTasks) SoftDelete(context.Context, string, int64) error { return f.deleteError }
 func (f *serviceTasks) CreateRun(_ context.Context, _ int64, run model.ScheduledTaskRun) (model.ScheduledTaskRun, error) {
 	if f.createRunErr != nil {
@@ -106,6 +154,18 @@ func (f *serviceTasks) CreateRun(_ context.Context, _ int64, run model.Scheduled
 	}
 	run.ID = 1
 	return run, nil
+}
+func (f *serviceTasks) RunNow(_ context.Context, userID int64, _ string, occurrenceKey string, now time.Time) (model.ScheduledTaskRun, error) {
+	f.ownerIDs = append(f.ownerIDs, userID)
+	if f.runNowError != nil {
+		return model.ScheduledTaskRun{}, f.runNowError
+	}
+	if (f.task.State != model.ScheduledTaskStateActive && f.task.State != model.ScheduledTaskStatePaused) || f.task.CompiledPrompt == "" {
+		return model.ScheduledTaskRun{}, store.ErrInvalidScheduledTaskState
+	}
+	f.task.State = model.ScheduledTaskStateActive
+	f.task.NextRunAt = &now
+	return model.ScheduledTaskRun{ID: 1, TaskID: f.task.ID, OccurrenceKey: occurrenceKey, ScheduledFor: now, State: model.ScheduledTaskRunStatePending}, nil
 }
 func (f *serviceTasks) ListRuns(context.Context, string, int64) ([]model.ScheduledTaskRun, error) {
 	if f.listRunsErr != nil {
@@ -138,7 +198,9 @@ func (f *serviceCompiler) Refine(_ context.Context, history []provider.Message, 
 	if f.refinement != nil {
 		return *f.refinement, nil
 	}
-	return scheduled.Refinement{Text: "I will remind you.", Proposal: &f.proposal}, nil
+	proposal := f.proposal
+	proposal.Version = nextVersion
+	return scheduled.Refinement{Text: "I will remind you.", Proposal: &proposal}, nil
 }
 
 func TestServiceCreatesDraftBeforeRefinementAndConfirmsPersistedProposal(t *testing.T) {
@@ -154,6 +216,9 @@ func TestServiceCreatesDraftBeforeRefinementAndConfirmsPersistedProposal(t *test
 	}
 	if conversations.created.Kind != model.ConversationKindScheduled || len(messages.messages) != 2 || compiler.history[0].Content != "remind me" {
 		t.Fatalf("definition history was not persisted before refine: conv=%+v messages=%+v history=%+v", conversations.created, messages.messages, compiler.history)
+	}
+	if !strings.Contains(messages.messages[1].Content, `"compiledPrompt":"Remind the user to drink water"`) {
+		t.Fatalf("proposal audit missing from conversation: %q", messages.messages[1].Content)
 	}
 	if result.Task.State != model.ScheduledTaskStateDraft || result.Task.StaticMessage != "Drink water." || result.Task.DeliveryPolicy != string(scheduled.DeliveryPolicyAlways) || result.Task.InitialRun != string(scheduled.InitialRunWait) {
 		t.Fatalf("proposal did not round trip into draft: %+v", result.Task)
@@ -228,16 +293,16 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 		}
 	})
 	t.Run("refine guards draft ownership and message", func(t *testing.T) {
-		tasks := &serviceTasks{getError: failure}
+		tasks := &serviceTasks{beginError: failure}
 		svc := scheduled.NewService(scheduled.ServiceDeps{Conversations: &serviceConversations{}, Messages: &serviceMessages{}, Tasks: tasks, Compiler: &serviceCompiler{}})
 		if _, err := svc.Refine(ctx, actor, serviceTaskID, ""); err == nil {
 			t.Fatal("blank refine succeeded")
 		}
 		if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, failure) {
-			t.Fatalf("get err=%v", err)
+			t.Fatalf("begin err=%v", err)
 		}
-		tasks.getError = nil
-		tasks.task = model.ScheduledTask{ID: serviceTaskID, State: model.ScheduledTaskStateActive}
+		tasks.beginError = nil
+		tasks.task = model.ScheduledTask{ID: serviceTaskID, State: model.ScheduledTaskStateCompleted}
 		if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, scheduled.ErrInvalidTransition) {
 			t.Fatalf("state err=%v", err)
 		}
@@ -259,10 +324,10 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 		{name: "tools", messages: &serviceMessages{}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}, tools: func(context.Context, string) ([]provider.ToolDefinition, error) { return nil, failure }},
 		{name: "compiler", messages: &serviceMessages{}, tasks: &serviceTasks{}, compiler: &serviceCompiler{err: failure}},
 		{name: "assistant message", messages: &serviceMessages{addErrAt: map[int]error{2: failure}}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}},
-		{name: "proposal update", messages: &serviceMessages{}, tasks: &serviceTasks{updateError: failure}, compiler: &serviceCompiler{}},
+		{name: "proposal update", messages: &serviceMessages{}, tasks: &serviceTasks{saveError: failure}, compiler: &serviceCompiler{}},
 	} {
 		t.Run("refine wraps "+tc.name+" failure", func(t *testing.T) {
-			task := model.ScheduledTask{ID: serviceTaskID, ConversationID: serviceConversationID, Version: 1, State: model.ScheduledTaskStateDraft}
+			task := model.ScheduledTask{ID: serviceTaskID, ConversationID: serviceConversationID, Version: 0, State: model.ScheduledTaskStateDraft}
 			tc.tasks.task = task
 			svc := scheduled.NewService(scheduled.ServiceDeps{Conversations: &serviceConversations{}, Messages: tc.messages, Tasks: tc.tasks, Compiler: tc.compiler, ToolsForUser: tc.tools})
 			if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, failure) {
@@ -270,7 +335,7 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 			}
 		})
 	}
-	t.Run("refine keeps question draft and bumps existing proposal version", func(t *testing.T) {
+	t.Run("refine invalidates old proposal before a clarification question", func(t *testing.T) {
 		question := scheduled.Refinement{Text: "Which day?", Question: &scheduled.QuestionCard{ID: "day"}}
 		compiler := &serviceCompiler{refinement: &question}
 		tasks := &serviceTasks{task: model.ScheduledTask{ID: serviceTaskID, ConversationID: serviceConversationID, Version: 3, CompiledPrompt: "existing", State: model.ScheduledTaskStateDraft}}
@@ -281,8 +346,33 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 			return []provider.ToolDefinition{{Name: "weather"}}, nil
 		}})
 		result, err := svc.Refine(ctx, actor, serviceTaskID, "Tuesday")
-		if err != nil || result.Task.CompiledPrompt != "existing" || compiler.nextVersion != 4 || !toolsCalled {
+		if err != nil || result.Task.CompiledPrompt != "" || result.Task.Version != 4 || compiler.nextVersion != 4 || tasks.beginCalls != 1 || !toolsCalled {
 			t.Fatalf("result=%+v err=%v next=%d tools=%t", result, err, compiler.nextVersion, toolsCalled)
+		}
+	})
+	t.Run("active and paused tasks begin a new draft revision", func(t *testing.T) {
+		for _, state := range []string{model.ScheduledTaskStateActive, model.ScheduledTaskStatePaused} {
+			t.Run(state, func(t *testing.T) {
+				question := scheduled.Refinement{Text: "What should change?", Question: &scheduled.QuestionCard{ID: "change"}}
+				tasks := &serviceTasks{task: model.ScheduledTask{ID: serviceTaskID, ConversationID: serviceConversationID, Version: 7, State: state, CompiledPrompt: "confirmed", NextRunAt: new(time.Now())}}
+				svc := scheduled.NewService(scheduled.ServiceDeps{Conversations: &serviceConversations{}, Messages: &serviceMessages{}, Tasks: tasks, Compiler: &serviceCompiler{refinement: &question}})
+				result, err := svc.Refine(ctx, actor, serviceTaskID, "change it")
+				if err != nil || result.Task.State != model.ScheduledTaskStateDraft || result.Task.Version != 8 || result.Task.CompiledPrompt != "" || result.Task.NextRunAt != nil {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+			})
+		}
+	})
+	t.Run("proposal save is compare and swap", func(t *testing.T) {
+		tasks := &serviceTasks{task: model.ScheduledTask{ID: serviceTaskID, ConversationID: serviceConversationID, State: model.ScheduledTaskStateDraft}}
+		compiler := &serviceCompiler{proposal: scheduled.Proposal{Name: "new", CompiledPrompt: "new prompt"}}
+		svc := scheduled.NewService(scheduled.ServiceDeps{Conversations: &serviceConversations{}, Messages: &serviceMessages{}, Tasks: tasks, Compiler: compiler})
+		tasks.saveError = store.ErrStaleScheduledProposal
+		if _, err := svc.Refine(ctx, actor, serviceTaskID, "new definition"); !errors.Is(err, scheduled.ErrStaleProposal) {
+			t.Fatalf("err=%v", err)
+		}
+		if tasks.saveVersion != 1 || tasks.task.CompiledPrompt != "" {
+			t.Fatalf("version=%d task=%+v", tasks.saveVersion, tasks.task)
 		}
 	})
 	t.Run("create bounds the scheduled conversation title", func(t *testing.T) {
@@ -295,6 +385,32 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 			t.Fatalf("title length=%d", len([]rune(conversations.title)))
 		}
 	})
+}
+
+func TestServiceAllPublicMethodsRejectMissingDependencies(t *testing.T) {
+	ctx := context.Background()
+	svc := scheduled.NewService(scheduled.ServiceDeps{})
+	actor := scheduled.Actor{ID: 7}
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{name: "confirm", call: func() error { _, err := svc.Confirm(ctx, actor, serviceTaskID, 1); return err }},
+		{name: "list", call: func() error { _, err := svc.List(ctx, actor.ID); return err }},
+		{name: "detail", call: func() error { _, err := svc.Detail(ctx, actor.ID, serviceTaskID); return err }},
+		{name: "pause", call: func() error { _, err := svc.Pause(ctx, actor.ID, serviceTaskID); return err }},
+		{name: "resume", call: func() error { _, err := svc.Resume(ctx, actor.ID, serviceTaskID); return err }},
+		{name: "delete", call: func() error { return svc.Delete(ctx, actor.ID, serviceTaskID) }},
+		{name: "run", call: func() error { _, err := svc.RunNow(ctx, actor.ID, serviceTaskID); return err }},
+		{name: "read", call: func() error { return svc.MarkRead(ctx, actor.ID, serviceTaskID) }},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if err := check.call(); err == nil || !strings.Contains(err.Error(), "dependencies") {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
 }
 
 //nolint:gocyclo // This characterization test deliberately enumerates every lifecycle branch.
@@ -326,16 +442,20 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 			t.Fatal("invalid schedule confirmed")
 		}
 		tasks.task = base()
-		tasks.updateError = failure
+		tasks.confirmError = failure
 		if _, err := newService(tasks).Confirm(ctx, scheduled.Actor{}, serviceTaskID, 1); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
+		tasks.confirmError = store.ErrStaleScheduledProposal
+		if _, err := newService(tasks).Confirm(ctx, scheduled.Actor{}, serviceTaskID, 1); !errors.Is(err, scheduled.ErrStaleProposal) {
+			t.Fatal(err)
+		}
 		tasks.task = base()
-		tasks.updateError = store.ErrActiveTaskLimit
+		tasks.confirmError = store.ErrActiveTaskLimit
 		if _, err := newService(tasks).Confirm(ctx, scheduled.Actor{}, serviceTaskID, 1); !errors.Is(err, store.ErrActiveTaskLimit) {
 			t.Fatal(err)
 		}
-		tasks.updateError = nil
+		tasks.confirmError = nil
 		tasks.task = base()
 		tasks.task.OneOffAt = nil
 		tasks.task.InitialRun = string(scheduled.InitialRunPreview)
@@ -418,11 +538,11 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 		}
 	})
 	t.Run("run now and simple operations propagate failures", func(t *testing.T) {
-		tasks := &serviceTasks{getError: failure}
+		tasks := &serviceTasks{runNowError: failure}
 		if _, err := newService(tasks).RunNow(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
-		tasks.getError = nil
+		tasks.runNowError = nil
 		tasks.task = base()
 		tasks.task.State = model.ScheduledTaskStateDraft
 		if _, err := newService(tasks).RunNow(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrInvalidTransition) {
@@ -434,16 +554,11 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		tasks.task.CompiledPrompt = serviceCompiledPrompt
-		tasks.createRunErr = failure
+		tasks.runNowError = failure
 		if _, err := newService(tasks).RunNow(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
-		tasks.createRunErr = nil
-		tasks.updateError = failure
-		if _, err := newService(tasks).RunNow(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
-			t.Fatal(err)
-		}
-		tasks.updateError = nil
+		tasks.runNowError = nil
 		tasks.task = base()
 		tasks.task.State = model.ScheduledTaskStatePaused
 		run, err := newService(tasks).RunNow(ctx, 7, serviceTaskID)

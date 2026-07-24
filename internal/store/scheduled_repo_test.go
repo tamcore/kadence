@@ -17,6 +17,7 @@ import (
 const (
 	scheduledTimezoneUTC    = "UTC"
 	scheduledTimezoneBerlin = "Europe/Berlin"
+	scheduledCompiledQuery  = "query"
 )
 
 func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
@@ -188,6 +189,176 @@ func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 	}
 }
 
+func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: "Confirmed",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: "old prompt", Timezone: scheduledTimezoneUTC, NextRunAt: new(time.Now().UTC().Add(time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.State != model.ScheduledTaskStateDraft || draft.Version != 2 || draft.CompiledPrompt != "" || draft.NextRunAt != nil {
+		t.Fatalf("draft revision = %+v", draft)
+	}
+	stale := draft
+	stale.Version = 1
+	stale.CompiledPrompt = "stale prompt"
+	if _, err := repo.SaveProposal(ctx, stale, owner.ID, 1); !errors.Is(err, store.ErrStaleScheduledProposal) {
+		t.Fatalf("stale SaveProposal err=%v", err)
+	}
+	draft.CompiledPrompt = "new prompt"
+	draft.Name = "Edited"
+	saved, err := repo.SaveProposal(ctx, draft, owner.ID, 2)
+	if err != nil || saved.CompiledPrompt != "new prompt" {
+		t.Fatalf("SaveProposal = %+v, %v", saved, err)
+	}
+	if _, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, 1, time.Now().UTC()); !errors.Is(err, store.ErrStaleScheduledProposal) {
+		t.Fatalf("stale ConfirmProposal err=%v", err)
+	}
+	confirmed, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, 2, time.Now().UTC())
+	if err != nil || confirmed.State != model.ScheduledTaskStateActive {
+		t.Fatalf("ConfirmProposal = %+v, %v", confirmed, err)
+	}
+}
+
+func TestScheduledTaskRepositoryRunNowIsAtomicAndClaimsPendingRunOnce(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 1)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	activeConversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	pausedConversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	if _, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: activeConversation.ID, Kind: model.ScheduledTaskKindReminder,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: "active", Timezone: scheduledTimezoneUTC,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: pausedConversation.ID, Kind: model.ScheduledTaskKindReminder,
+		State: model.ScheduledTaskStatePaused, CompiledPrompt: "paused", Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := repo.RunNow(ctx, owner.ID, paused.ID, "manual:rollback", now); !errors.Is(err, store.ErrActiveTaskLimit) {
+		t.Fatalf("RunNow active-limit err=%v", err)
+	}
+	unchanged, err := repo.GetByID(ctx, paused.ID, owner.ID)
+	if err != nil || unchanged.State != model.ScheduledTaskStatePaused || unchanged.NextRunAt != nil {
+		t.Fatalf("rollback task=%+v err=%v", unchanged, err)
+	}
+	if runs, err := repo.ListRuns(ctx, paused.ID, owner.ID); err != nil || len(runs) != 0 {
+		t.Fatalf("rollback runs=%+v err=%v", runs, err)
+	}
+
+	repo = store.NewScheduledTaskRepository(pool, 2)
+	if _, err := pool.Exec(ctx, `CREATE FUNCTION scheduled_test_fail_manual_due() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF NEW.next_run_at IS NOT NULL AND OLD.next_run_at IS DISTINCT FROM NEW.next_run_at THEN
+		RAISE EXCEPTION 'forced due update failure';
+	END IF;
+	RETURN NEW;
+END;
+$$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `CREATE TRIGGER scheduled_test_fail_manual_due BEFORE UPDATE ON scheduled_tasks FOR EACH ROW EXECUTE FUNCTION scheduled_test_fail_manual_due()`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RunNow(ctx, owner.ID, paused.ID, "manual:update-rollback", now); err == nil {
+		t.Fatal("RunNow update failure = nil")
+	}
+	if _, err := pool.Exec(ctx, `DROP TRIGGER scheduled_test_fail_manual_due ON scheduled_tasks`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DROP FUNCTION scheduled_test_fail_manual_due()`); err != nil {
+		t.Fatal(err)
+	}
+	if runs, err := repo.ListRuns(ctx, paused.ID, owner.ID); err != nil || len(runs) != 0 {
+		t.Fatalf("update rollback runs=%+v err=%v", runs, err)
+	}
+	pending, err := repo.RunNow(ctx, owner.ID, paused.ID, "manual:claim-once", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		claims []model.ClaimedScheduledTask
+		err    error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			claims, err := repo.ClaimDue(ctx, now, 1)
+			results <- result{claims: claims, err: err}
+		})
+	}
+	wg.Wait()
+	close(results)
+	var claims []model.ClaimedScheduledTask
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		claims = append(claims, result.claims...)
+	}
+	if len(claims) != 1 || claims[0].Run.ID != pending.ID || claims[0].Run.OccurrenceKey != pending.OccurrenceKey || claims[0].Run.State != model.ScheduledTaskRunStateRunning {
+		t.Fatalf("claims=%+v pending=%+v", claims, pending)
+	}
+}
+
+func TestScheduledTaskRepositorySanitizesPublicFailureCode(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Kind: model.ScheduledTaskKindData,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "failure-code", ScheduledFor: time.Now().UTC(), State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Error != "" {
+		t.Fatalf("new running run error=%q, want empty", run.Error)
+	}
+	if err := repo.RecordFailure(ctx, run.ID, owner.ID, "provider failed with secret=abc"); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := repo.ListRuns(ctx, task.ID, owner.ID)
+	if err != nil || len(runs) != 1 || runs[0].Error != "execution_failed" || len(runs[0].Error) > 64 {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+}
+
 func TestScheduledTaskRepositoryPausesAfterThreeFailures(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
@@ -199,7 +370,7 @@ func TestScheduledTaskRepositoryPausesAfterThreeFailures(t *testing.T) {
 	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
 	task, err := repo.Create(ctx, model.ScheduledTask{
 		UserID: owner.ID, ConversationID: conversation.ID, Name: "Failures", Kind: model.ScheduledTaskKindData,
-		State: model.ScheduledTaskStateActive, CompiledPrompt: "query", Timezone: scheduledTimezoneUTC,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +403,7 @@ func TestScheduledTaskRepositoryDeliveryResetsFailures(t *testing.T) {
 	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
 	task, err := repo.Create(ctx, model.ScheduledTask{
 		UserID: owner.ID, ConversationID: conversation.ID, Name: "Recovery", Kind: model.ScheduledTaskKindData,
-		State: model.ScheduledTaskStateActive, CompiledPrompt: "query", Timezone: scheduledTimezoneUTC,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
 	})
 	if err != nil {
 		t.Fatal(err)

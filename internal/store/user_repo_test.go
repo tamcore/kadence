@@ -67,7 +67,7 @@ func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 	if a.UnitSystem != model.UnitMetric || a.DisplayName != "" || a.Location != "" || a.AboutMe != "" {
 		t.Fatalf("defaults: display=%q unit=%q location=%q aboutMe=%q", a.DisplayName, a.UnitSystem, a.Location, a.AboutMe)
 	}
-	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", "newalice@x.io", model.UnitImperial, "Berlin, Germany", "Marathon runner training for a sub-3."); err != nil {
+	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", "newalice@x.io", model.UnitImperial, "Berlin, Germany", "Marathon runner training for a sub-3.", "UTC"); err != nil {
 		t.Fatalf("UpdateProfile: %v", err)
 	}
 	got, _ := repo.GetByID(ctx, a.ID)
@@ -78,7 +78,7 @@ func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 
 	// Clearing location/aboutMe (empty strings) must round-trip to empty, not
 	// leave the previous value behind.
-	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", "newalice@x.io", model.UnitImperial, "", ""); err != nil {
+	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", "newalice@x.io", model.UnitImperial, "", "", "UTC"); err != nil {
 		t.Fatalf("UpdateProfile clear: %v", err)
 	}
 	got, _ = repo.GetByID(ctx, a.ID)
@@ -86,7 +86,7 @@ func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 		t.Fatalf("after clearing: location=%q aboutMe=%q", got.Location, got.AboutMe)
 	}
 
-	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", b.Email, model.UnitImperial, "", ""); !errors.Is(err, store.ErrEmailTaken) {
+	if err := repo.UpdateProfile(ctx, a.ID, "Alice A", b.Email, model.UnitImperial, "", "", "UTC"); !errors.Is(err, store.ErrEmailTaken) {
 		t.Fatalf("email collision err=%v want ErrEmailTaken", err)
 	}
 	if err := repo.UpdatePassword(ctx, a.ID, "newhash"); err != nil {

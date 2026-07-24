@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,9 +39,10 @@ type Scheduled struct{ service ScheduledLifecycle }
 func NewScheduled(service ScheduledLifecycle) *Scheduled { return &Scheduled{service: service} }
 
 const (
-	scheduledEventType  = "type"
-	scheduledEventError = "error"
-	scheduledEventDone  = "done"
+	scheduledEventType   = "type"
+	scheduledEventError  = "error"
+	scheduledEventDone   = "done"
+	maxScheduledSSEBytes = 128 << 10
 )
 
 type scheduledTaskDTO struct {
@@ -111,6 +113,9 @@ func scheduledActor(r *http.Request) scheduled.Actor {
 
 // Create handles POST /api/scheduled/tasks and streams one refinement.
 func (h *Scheduled) Create(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	var body struct {
 		Message string `json:"message"`
 	}
@@ -118,19 +123,24 @@ func (h *Scheduled) Create(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "message is required")
 		return
 	}
-	stream, stop := beginScheduledStream(w)
+	streamCtx, cancel := context.WithCancel(r.Context())
+	stream, stop := beginScheduledStream(w, cancel)
 	defer stop()
-	result, err := h.service.Create(r.Context(), scheduledActor(r), body.Message)
+	result, err := h.service.Create(streamCtx, scheduledActor(r), body.Message)
 	if err != nil {
-		stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: "could not create scheduled task"})
-		stream.event(map[string]any{scheduledEventType: scheduledEventDone})
+		if stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: "could not create scheduled task"}) == nil {
+			_ = stream.event(map[string]any{scheduledEventType: scheduledEventDone})
+		}
 		return
 	}
-	h.streamDefinition(stream, result)
+	_ = h.streamDefinition(stream, result)
 }
 
 // Refine handles POST /api/scheduled/tasks/{id}/messages.
 func (h *Scheduled) Refine(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	id := chi.URLParam(r, "id")
 	var body struct {
 		Message string `json:"message"`
@@ -139,40 +149,53 @@ func (h *Scheduled) Refine(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "id and message are required")
 		return
 	}
-	stream, stop := beginScheduledStream(w)
+	streamCtx, cancel := context.WithCancel(r.Context())
+	stream, stop := beginScheduledStream(w, cancel)
 	defer stop()
-	result, err := h.service.Refine(r.Context(), scheduledActor(r), id, body.Message)
+	result, err := h.service.Refine(streamCtx, scheduledActor(r), id, body.Message)
 	if err != nil {
-		stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: "could not refine scheduled task"})
-		stream.event(map[string]any{scheduledEventType: scheduledEventDone})
+		if stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: "could not refine scheduled task"}) == nil {
+			_ = stream.event(map[string]any{scheduledEventType: scheduledEventDone})
+		}
 		return
 	}
-	h.streamDefinition(stream, result)
+	_ = h.streamDefinition(stream, result)
 }
 
-func (h *Scheduled) streamDefinition(stream *scheduledSSE, result scheduled.DefinitionResult) {
-	stream.event(map[string]any{scheduledEventType: "meta", "taskId": result.Task.ID, "conversationId": result.Task.ConversationID})
-	stream.event(map[string]any{scheduledEventType: "text", "delta": result.Refinement.Text})
-	if result.Refinement.Question != nil {
-		stream.event(map[string]any{scheduledEventType: "task_question", "question": result.Refinement.Question})
-	} else if result.Refinement.Proposal != nil {
-		stream.event(map[string]any{scheduledEventType: "task_proposal", "proposal": result.Refinement.Proposal})
+func (h *Scheduled) streamDefinition(stream *scheduledSSE, result scheduled.DefinitionResult) error {
+	if err := stream.event(map[string]any{scheduledEventType: "meta", "taskId": result.Task.ID, "conversationId": result.Task.ConversationID}); err != nil {
+		return err
 	}
-	stream.event(map[string]any{scheduledEventType: scheduledEventDone})
+	if err := stream.event(map[string]any{scheduledEventType: "text", "delta": result.Refinement.Text}); err != nil {
+		return err
+	}
+	if result.Refinement.Question != nil {
+		if err := stream.event(map[string]any{scheduledEventType: "task_question", "question": result.Refinement.Question}); err != nil {
+			return err
+		}
+	} else if result.Refinement.Proposal != nil {
+		if err := stream.event(map[string]any{scheduledEventType: "task_proposal", "proposal": result.Refinement.Proposal}); err != nil {
+			return err
+		}
+	}
+	return stream.event(map[string]any{scheduledEventType: scheduledEventDone})
 }
 
 type scheduledSSE struct {
-	mu sync.Mutex
-	w  http.ResponseWriter
-	rc *http.ResponseController
+	mu     sync.Mutex
+	w      http.ResponseWriter
+	rc     *http.ResponseController
+	cancel context.CancelFunc
+	err    error
+	bytes  int
 }
 
-func beginScheduledStream(w http.ResponseWriter) (*scheduledSSE, func()) {
+func beginScheduledStream(w http.ResponseWriter, cancel context.CancelFunc) (*scheduledSSE, func()) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	stream := &scheduledSSE{w: w, rc: http.NewResponseController(w)}
+	stream := &scheduledSSE{w: w, rc: http.NewResponseController(w), cancel: cancel}
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	go func() {
@@ -184,31 +207,81 @@ func beginScheduledStream(w http.ResponseWriter) (*scheduledSSE, func()) {
 			case <-done:
 				return
 			case <-ticker.C:
-				stream.keepalive()
+				if err := stream.keepalive(); err != nil {
+					return
+				}
 			}
 		}
 	}()
-	return stream, func() { close(done); <-stopped; _ = stream.rc.Flush() }
-}
-
-func (s *scheduledSSE) event(event any) {
-	b, err := json.Marshal(event)
-	if err == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		_, _ = fmt.Fprintf(s.w, "data: %s\n\n", b)
-		_ = s.rc.Flush()
+	var once sync.Once
+	return stream, func() {
+		once.Do(func() {
+			close(done)
+			<-stopped
+			stream.mu.Lock()
+			defer stream.mu.Unlock()
+			if stream.err == nil {
+				_ = stream.failLocked(stream.rc.Flush())
+			}
+		})
 	}
 }
 
-func (s *scheduledSSE) keepalive() {
+func (s *scheduledSSE) event(event any) error {
+	b, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	return s.write(fmt.Appendf(nil, "data: %s\n\n", b))
+}
+
+func (s *scheduledSSE) keepalive() error {
+	return s.write([]byte(": keepalive\n\n"))
+}
+
+func (s *scheduledSSE) write(payload []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = fmt.Fprint(s.w, ": keepalive\n\n")
-	_ = s.rc.Flush()
+	if s.err != nil {
+		return s.err
+	}
+	if s.bytes+len(payload) > maxScheduledSSEBytes {
+		return s.failLocked(errors.New("scheduled SSE response exceeds limit"))
+	}
+	n, err := s.w.Write(payload)
+	s.bytes += n
+	if err != nil {
+		return s.failLocked(err)
+	}
+	if n != len(payload) {
+		return s.failLocked(io.ErrShortWrite)
+	}
+	return s.failLocked(s.rc.Flush())
+}
+
+func (s *scheduledSSE) failLocked(err error) error {
+	if err == nil {
+		return nil
+	}
+	if s.err == nil {
+		s.err = err
+		s.cancel()
+	}
+	return s.err
+}
+
+func (h *Scheduled) ready(w http.ResponseWriter) bool {
+	if h == nil || h.service == nil {
+		RespondError(w, http.StatusInternalServerError, "scheduled service unavailable")
+		return false
+	}
+	return true
 }
 
 func (h *Scheduled) List(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	u := auth.UserFromContext(r.Context())
 	result, err := h.service.List(r.Context(), u.ID)
 	if err != nil {
@@ -223,6 +296,9 @@ func (h *Scheduled) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Scheduled) Detail(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	u := auth.UserFromContext(r.Context())
 	result, err := h.service.Detail(r.Context(), u.ID, chi.URLParam(r, "id"))
 	if err != nil {
@@ -237,6 +313,9 @@ func (h *Scheduled) Detail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Scheduled) Confirm(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	var body struct {
 		ExpectedVersion int `json:"expectedVersion"`
 	}
@@ -253,6 +332,9 @@ func (h *Scheduled) Confirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Scheduled) Patch(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	var body struct {
 		State string `json:"state"`
 	}
@@ -280,6 +362,9 @@ func (h *Scheduled) Patch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Scheduled) Delete(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	u := auth.UserFromContext(r.Context())
 	if err := h.service.Delete(r.Context(), u.ID, chi.URLParam(r, "id")); err != nil {
 		h.writeLifecycleError(w, err)
@@ -289,6 +374,9 @@ func (h *Scheduled) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Scheduled) RunNow(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	u := auth.UserFromContext(r.Context())
 	run, err := h.service.RunNow(r.Context(), u.ID, chi.URLParam(r, "id"))
 	if err != nil {
@@ -299,6 +387,9 @@ func (h *Scheduled) RunNow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Scheduled) MarkRead(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
 	u := auth.UserFromContext(r.Context())
 	if err := h.service.MarkRead(r.Context(), u.ID, chi.URLParam(r, "id")); err != nil {
 		h.writeLifecycleError(w, err)

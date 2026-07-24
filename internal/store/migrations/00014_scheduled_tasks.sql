@@ -8,7 +8,7 @@ CREATE TABLE scheduled_tasks (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     conversation_id      UUID NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
-    version              INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    version              INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
     name                 TEXT NOT NULL DEFAULT '',
     kind                 TEXT NOT NULL CHECK (kind IN ('reminder', 'data', 'monitoring')),
     state                TEXT NOT NULL CHECK (state IN ('draft', 'active', 'paused', 'completed', 'failed', 'deleted')),
@@ -41,7 +41,8 @@ CREATE TABLE scheduled_task_runs (
     started_at     TIMESTAMPTZ,
     finished_at    TIMESTAMPTZ,
     result         TEXT NOT NULL DEFAULT '',
-    error          TEXT NOT NULL DEFAULT '',
+    error          TEXT NOT NULL DEFAULT ''
+                   CHECK (char_length(error) <= 64 AND error ~ '^[a-z0-9_-]*$'),
     unread         BOOLEAN NOT NULL DEFAULT FALSE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (task_id, occurrence_key)
@@ -54,6 +55,9 @@ CREATE INDEX idx_scheduled_tasks_due ON scheduled_tasks(next_run_at)
 CREATE INDEX idx_scheduled_task_runs_task_created ON scheduled_task_runs(task_id, created_at DESC);
 CREATE INDEX idx_scheduled_task_runs_unread ON scheduled_task_runs(task_id)
     WHERE unread;
+CREATE UNIQUE INDEX idx_scheduled_task_runs_one_pending_manual
+    ON scheduled_task_runs(task_id)
+    WHERE state = 'pending' AND occurrence_key LIKE 'manual:%';
 
 -- +goose Down
 DROP TABLE scheduled_task_runs;

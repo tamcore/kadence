@@ -2,6 +2,7 @@ package scheduled
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,8 +39,11 @@ type TaskStore interface {
 	GetByID(context.Context, string, int64) (model.ScheduledTask, error)
 	ListByUser(context.Context, int64) ([]model.ScheduledTask, error)
 	Update(context.Context, model.ScheduledTask, int64) (model.ScheduledTask, error)
+	BeginDraftRevision(context.Context, string, int64) (model.ScheduledTask, error)
+	SaveProposal(context.Context, model.ScheduledTask, int64, int) (model.ScheduledTask, error)
+	ConfirmProposal(context.Context, string, int64, int, time.Time) (model.ScheduledTask, error)
 	SoftDelete(context.Context, string, int64) error
-	CreateRun(context.Context, int64, model.ScheduledTaskRun) (model.ScheduledTaskRun, error)
+	RunNow(context.Context, int64, string, string, time.Time) (model.ScheduledTaskRun, error)
 	ListRuns(context.Context, string, int64) ([]model.ScheduledTaskRun, error)
 	MarkRead(context.Context, string, int64) error
 	UnreadCount(context.Context, int64) (int, error)
@@ -113,7 +117,7 @@ func (s *Service) Create(ctx context.Context, actor Actor, message string) (Defi
 	if err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: create draft: %w", err)
 	}
-	return s.refine(ctx, actor, task, message)
+	return s.Refine(ctx, actor, task.ID, message)
 }
 
 // Refine adds one user message to an owner-scoped draft task's definition
@@ -125,17 +129,18 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 	if err := s.ready(); err != nil {
 		return DefinitionResult{}, err
 	}
-	task, err := s.deps.Tasks.GetByID(ctx, taskID, actor.ID)
+	task, err := s.deps.Tasks.BeginDraftRevision(ctx, taskID, actor.ID)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+			return DefinitionResult{}, ErrInvalidTransition
+		}
 		return DefinitionResult{}, err
-	}
-	if task.State != model.ScheduledTaskStateDraft {
-		return DefinitionResult{}, ErrInvalidTransition
 	}
 	return s.refine(ctx, actor, task, message)
 }
 
 func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledTask, message string) (DefinitionResult, error) {
+	revision := task.Version
 	if _, err := s.deps.Messages.Add(ctx, task.ConversationID, model.MsgRoleUser, strings.TrimSpace(message)); err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: save user message: %w", err)
 	}
@@ -147,21 +152,21 @@ func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledT
 	if err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: resolve visible tools: %w", err)
 	}
-	nextVersion := task.Version
-	if task.CompiledPrompt != "" {
-		nextVersion++
-	}
-	refinement, err := s.deps.Compiler.Refine(ctx, historyForCompiler(history), tools, nextVersion)
+	refinement, err := s.deps.Compiler.Refine(ctx, historyForCompiler(history), tools, task.Version)
 	if err != nil {
 		return DefinitionResult{}, err
 	}
-	if _, err := s.deps.Messages.Add(ctx, task.ConversationID, model.MsgRoleAssistant, refinement.Text); err != nil {
+	if _, err := s.deps.Messages.Add(ctx, task.ConversationID, model.MsgRoleAssistant, assistantAudit(refinement)); err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: save assistant message: %w", err)
 	}
 	if refinement.Proposal != nil {
 		task = applyProposal(task, *refinement.Proposal)
-		updated, err := s.deps.Tasks.Update(ctx, task, actor.ID)
+		task.Version = revision
+		updated, err := s.deps.Tasks.SaveProposal(ctx, task, actor.ID, revision)
 		if err != nil {
+			if errors.Is(err, store.ErrStaleScheduledProposal) {
+				return DefinitionResult{}, ErrStaleProposal
+			}
 			return DefinitionResult{}, fmt.Errorf("scheduled: save proposal: %w", err)
 		}
 		task = updated
@@ -169,7 +174,18 @@ func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledT
 	return DefinitionResult{Task: task, Refinement: refinement}, nil
 }
 
+func assistantAudit(refinement Refinement) string {
+	if refinement.Proposal == nil {
+		return refinement.Text
+	}
+	proposal, _ := json.Marshal(refinement.Proposal)
+	return refinement.Text + "\n\nScheduled proposal audit: " + string(proposal)
+}
+
 func (s *Service) Confirm(ctx context.Context, actor Actor, taskID string, expectedVersion int) (model.ScheduledTask, error) {
+	if err := s.ready(); err != nil {
+		return model.ScheduledTask{}, err
+	}
 	task, err := s.deps.Tasks.GetByID(ctx, taskID, actor.ID)
 	if err != nil {
 		return model.ScheduledTask{}, err
@@ -182,16 +198,17 @@ func (s *Service) Confirm(ctx context.Context, actor Actor, taskID string, expec
 	if err != nil {
 		return model.ScheduledTask{}, err
 	}
-	task.State = model.ScheduledTaskStateActive
-	task.NextRunAt = &next
-	updated, err := s.deps.Tasks.Update(ctx, task, actor.ID)
-	if errors.Is(err, store.ErrActiveTaskLimit) {
-		return model.ScheduledTask{}, err
+	confirmed, err := s.deps.Tasks.ConfirmProposal(ctx, taskID, actor.ID, expectedVersion, next)
+	if errors.Is(err, store.ErrStaleScheduledProposal) {
+		return model.ScheduledTask{}, ErrStaleProposal
 	}
-	return updated, err
+	return confirmed, err
 }
 
 func (s *Service) List(ctx context.Context, userID int64) (ListResult, error) {
+	if err := s.ready(); err != nil {
+		return ListResult{}, err
+	}
 	tasks, err := s.deps.Tasks.ListByUser(ctx, userID)
 	if err != nil {
 		return ListResult{}, err
@@ -204,6 +221,9 @@ func (s *Service) List(ctx context.Context, userID int64) (ListResult, error) {
 }
 
 func (s *Service) Detail(ctx context.Context, userID int64, taskID string) (Detail, error) {
+	if err := s.ready(); err != nil {
+		return Detail{}, err
+	}
 	task, err := s.deps.Tasks.GetByID(ctx, taskID, userID)
 	if err != nil {
 		return Detail{}, err
@@ -216,6 +236,9 @@ func (s *Service) Detail(ctx context.Context, userID int64, taskID string) (Deta
 }
 
 func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model.ScheduledTask, error) {
+	if err := s.ready(); err != nil {
+		return model.ScheduledTask{}, err
+	}
 	task, err := s.deps.Tasks.GetByID(ctx, taskID, userID)
 	if err != nil {
 		return model.ScheduledTask{}, err
@@ -228,6 +251,9 @@ func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model
 }
 
 func (s *Service) Resume(ctx context.Context, userID int64, taskID string) (model.ScheduledTask, error) {
+	if err := s.ready(); err != nil {
+		return model.ScheduledTask{}, err
+	}
 	task, err := s.deps.Tasks.GetByID(ctx, taskID, userID)
 	if err != nil {
 		return model.ScheduledTask{}, err
@@ -244,37 +270,30 @@ func (s *Service) Resume(ctx context.Context, userID int64, taskID string) (mode
 }
 
 func (s *Service) Delete(ctx context.Context, userID int64, taskID string) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
 	return s.deps.Tasks.SoftDelete(ctx, taskID, userID)
 }
 
 // RunNow records a distinct pending manual occurrence and marks the confirmed
 // task due. The execution worker will claim this target in a later phase.
 func (s *Service) RunNow(ctx context.Context, userID int64, taskID string) (model.ScheduledTaskRun, error) {
-	task, err := s.deps.Tasks.GetByID(ctx, taskID, userID)
-	if err != nil {
+	if err := s.ready(); err != nil {
 		return model.ScheduledTaskRun{}, err
-	}
-	if (task.State != model.ScheduledTaskStateActive && task.State != model.ScheduledTaskStatePaused) || task.CompiledPrompt == "" {
-		return model.ScheduledTaskRun{}, ErrInvalidTransition
 	}
 	now := s.deps.Now().UTC()
-	run, err := s.deps.Tasks.CreateRun(ctx, userID, model.ScheduledTaskRun{
-		TaskID: task.ID, OccurrenceKey: "manual:" + uuid.NewString(), ScheduledFor: now, State: model.ScheduledTaskRunStatePending,
-	})
-	if err != nil {
-		return model.ScheduledTaskRun{}, err
+	run, err := s.deps.Tasks.RunNow(ctx, userID, taskID, "manual:"+uuid.NewString(), now)
+	if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+		return model.ScheduledTaskRun{}, ErrInvalidTransition
 	}
-	task.NextRunAt = &now
-	if task.State == model.ScheduledTaskStatePaused {
-		task.State = model.ScheduledTaskStateActive
-	}
-	if _, err := s.deps.Tasks.Update(ctx, task, userID); err != nil {
-		return model.ScheduledTaskRun{}, err
-	}
-	return run, nil
+	return run, err
 }
 
 func (s *Service) MarkRead(ctx context.Context, userID int64, taskID string) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
 	return s.deps.Tasks.MarkRead(ctx, taskID, userID)
 }
 
@@ -297,7 +316,7 @@ func draftTask(actor Actor, conversationID string) model.ScheduledTask {
 	if timezone == "" {
 		timezone = "UTC"
 	}
-	return model.ScheduledTask{UserID: actor.ID, ConversationID: conversationID, Version: 1,
+	return model.ScheduledTask{UserID: actor.ID, ConversationID: conversationID,
 		Kind: string(TaskKindReminder), State: model.ScheduledTaskStateDraft, Timezone: timezone,
 		ExecutionMode: string(ExecutionModeStatic), DeliveryPolicy: string(DeliveryPolicyAlways), InitialRun: string(InitialRunWait)}
 }

@@ -484,6 +484,9 @@ func (c Config) validateScheduled() error {
 	if !c.ScheduledEnabled {
 		return nil
 	}
+	if strings.TrimSpace(c.LLMAPIKey) == "" {
+		return errors.New("KADENCE_LLM_API_KEY is required when Scheduled is enabled")
+	}
 	if c.ScheduledWorkerMaxTokens <= 0 {
 		return errors.New("KADENCE_SCHEDULED_WORKER_MAX_TOKENS must be a positive integer when Scheduled is enabled")
 	}

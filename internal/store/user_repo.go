@@ -140,11 +140,11 @@ func (r *UserRepository) UpdateUser(ctx context.Context, id int64, username, ema
 // location, and about-me text. location and aboutMe are stored as NULL when
 // empty (so a cleared field round-trips to ""); non-empty values overwrite
 // any prior one. Returns ErrEmailTaken if email collides with another user.
-func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe string) error {
+func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe, timezone string) error {
 	_, err := r.pool.Exec(ctx,
-		`UPDATE users SET display_name = $1, email = $2, unit_system = $3, location = NULLIF($4, ''), about_me = NULLIF($5, '')
-		 WHERE id = $6`,
-		displayName, email, unitSystem, location, aboutMe, id)
+		`UPDATE users SET display_name = $1, email = $2, unit_system = $3, location = NULLIF($4, ''), about_me = NULLIF($5, ''), timezone = $6
+		 WHERE id = $7`,
+		displayName, email, unitSystem, location, aboutMe, timezone, id)
 	if isUniqueViolation(err) {
 		return ErrEmailTaken
 	}

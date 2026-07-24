@@ -44,7 +44,7 @@ type MsgLister interface {
 // ScheduledConversationPauser preserves the definition/audit relationship
 // when a linked Scheduled conversation is removed from the ordinary chat UI.
 type ScheduledConversationPauser interface {
-	PauseByConversation(ctx context.Context, conversationID string, userID int64) error
+	PauseByConversation(ctx context.Context, conversationID string, userID int64) (bool, error)
 }
 
 // Chat handles the chat + conversation HTTP endpoints.
@@ -245,19 +245,15 @@ func (h *Chat) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.scheduled != nil {
-		conversation, err := h.convs.GetByID(r.Context(), id, u.ID)
+		linked, err := h.scheduled.PauseByConversation(r.Context(), id, u.ID)
 		if err != nil {
-			RespondError(w, http.StatusNotFound, "conversation not found")
+			RespondError(w, http.StatusInternalServerError, "could not pause scheduled task")
 			return
 		}
-		if conversation.Kind == model.ConversationKindScheduled {
+		if linked {
 			// scheduled_tasks.conversation_id is intentionally RESTRICT. Keep
 			// this Scheduled thread soft-preserved after pausing its live task so
 			// definitions and immutable runs remain auditable.
-			if err := h.scheduled.PauseByConversation(r.Context(), id, u.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
-				RespondError(w, http.StatusInternalServerError, "could not pause scheduled task")
-				return
-			}
 			RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 			return
 		}
