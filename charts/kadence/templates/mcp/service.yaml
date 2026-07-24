@@ -17,6 +17,12 @@ spec:
     targetPort: 8080
     protocol: TCP
     name: http
+  {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
+  - port: 8081
+    targetPort: 8081
+    protocol: TCP
+    name: file-bridge
+  {{- end }}
   selector:
     {{- include "kadence.selectorLabels" $root | nindent 4 }}
     app.kubernetes.io/component: mcp

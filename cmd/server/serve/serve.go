@@ -21,6 +21,7 @@ import (
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/crypto"
 	"github.com/tamcore/kadence/internal/embed"
+	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/provider"
@@ -185,6 +186,7 @@ func Run() error {
 		}
 
 		var mcpTools chat.MCPTools // nil interface = disabled
+		var fitAnalyzer *fitactivity.Analyzer
 
 		var userSrc mcp.UserServerSource
 		var userRepo *store.UserServerRepo
@@ -221,6 +223,12 @@ func Run() error {
 				deps.MCP = handlers.NewMCP(poller, nil, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled(), cfg.UserMCPMaxServers)
 			}
 		}
+		if cfg.FITEnabled() {
+			fitAnalyzer = fitactivity.NewAnalyzer(
+				cfg.FITDownloadTool, cfg.FITBridgeURL, cfg.FITBridgeAuthUser,
+				cfg.FITBridgeAuthPass, int64(cfg.FITMaxBytes),
+			)
+		}
 		skills, err := skill.Load()
 		if err != nil {
 			return fmt.Errorf("load skills: %w", err)
@@ -239,7 +247,7 @@ func Run() error {
 			MCPMaxTools:         cfg.MCPMaxTools,
 			ContextBudgetTokens: cfg.LLMContextBudgetTokens,
 		}, chat.Deps{
-			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
+			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills, FIT: fitAnalyzer,
 			Secrets: broker,
 		})
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)

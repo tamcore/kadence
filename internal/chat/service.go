@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/chat/skill"
+	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/secret"
@@ -90,6 +91,7 @@ const estBytesPerToken = 4
 const defaultContextBudgetTokens = 32000
 const loadSkillToolName = "kadence__load_skill"
 const credsToolName = "kadence__request_credentials" // #nosec G101 -- a tool name, not a credential
+const analyzeGarminFITToolName = "kadence__analyze_garmin_fit"
 
 // maxCredentialFields bounds how many fields a request_credentials tool call
 // may ask for in a single call (mirrors internal/secret's own cap; enforced
@@ -177,6 +179,7 @@ type Service struct {
 	now           func() time.Time
 	skills        *skill.Registry
 	secrets       *secret.Broker
+	fitAnalyzer   *fitactivity.Analyzer
 }
 
 // Deps carries the chat Service's dependencies. Guardrail, RAG, MCP, Skills,
@@ -195,6 +198,7 @@ type Deps struct {
 	// disables the feature entirely: the tool is not offered and no
 	// substitution/redaction runs.
 	Secrets *secret.Broker
+	FIT     *fitactivity.Analyzer
 }
 
 // NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
@@ -220,8 +224,9 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
 		maxIterations: maxIterations, maxTools: maxTools, contextBudget: contextBudget, now: now,
-		skills:  deps.Skills,
-		secrets: deps.Secrets,
+		skills:      deps.Skills,
+		secrets:     deps.Secrets,
+		fitAnalyzer: deps.FIT,
 	}
 }
 
@@ -692,6 +697,9 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 	if s.secrets != nil {
 		tools = append(tools, s.credsTool())
 	}
+	if s.fitAnalyzer != nil && mcpSnap != nil {
+		tools = append(tools, provider.ToolDefinition{Name: analyzeGarminFITToolName, Description: "Download and analyze one activity FIT file by activity_id. Returns a compact metric summary and splits, never GPS records.", Parameters: json.RawMessage(`{"type":"object","properties":{"activity_id":{"type":"integer"}},"required":["activity_id"]}`)})
+	}
 	return tools
 }
 
@@ -753,6 +761,9 @@ func (s *Service) dispatchTool(
 	if s.secrets != nil && tc.Name == credsToolName {
 		return s.handleRequestCredentials(streamCtx, userID, tc, sink)
 	}
+	if s.fitAnalyzer != nil && tc.Name == analyzeGarminFITToolName {
+		return s.handleFITAnalysis(ctx, mcpSnap, tc, sink)
+	}
 	if s.skills != nil {
 		if tc.Name == loadSkillToolName {
 			return s.handleLoadSkill(tc, sink)
@@ -763,6 +774,34 @@ func (s *Service) dispatchTool(
 		}
 	}
 	return s.runToolCall(ctx, userID, mcpSnap, tc, redactor, sink)
+}
+
+func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot, tc provider.ToolCall, sink EventSink) provider.Message {
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Flush()
+	var args struct {
+		ActivityID int64 `json:"activity_id"`
+	}
+	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil || args.ActivityID <= 0 || mcpSnap == nil {
+		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
+		_ = sink.Flush()
+		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: activity_id must be a positive integer"}
+	}
+	activity, err := s.fitAnalyzer.Analyze(ctx, mcpSnap, args.ActivityID)
+	if err != nil {
+		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
+		_ = sink.Flush()
+		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: could not analyze FIT activity"}
+	}
+	data, err := json.Marshal(activity)
+	if err != nil {
+		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
+		_ = sink.Flush()
+		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: could not encode activity analysis"}
+	}
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusDone})
+	_ = sink.Flush()
+	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: string(data)}
 }
 
 // credentialRequestArgs is the parsed request_credentials tool-call payload.
