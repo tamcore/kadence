@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/muktihari/fit/decoder"
+	"github.com/muktihari/fit/profile/basetype"
 	"github.com/muktihari/fit/profile/mesgdef"
 	"github.com/muktihari/fit/profile/typedef"
 	"github.com/muktihari/fit/profile/untyped/mesgnum"
@@ -130,39 +132,83 @@ func (c *activityCollector) OnMesg(mesg proto.Message) {
 }
 
 func summaryFrom(session *mesgdef.Session) Summary {
+	elapsedSeconds := finiteMetric(session.TotalElapsedTimeScaled())
+	timerSeconds := finiteMetric(session.TotalTimerTimeScaled())
+	distanceMeters := finiteMetric(session.TotalDistanceScaled())
+	averageSpeed := firstFiniteMetric(session.AvgSpeedScaled(), session.EnhancedAvgSpeedScaled())
+	if averageSpeed == 0 && distanceMeters > 0 && timerSeconds > 0 {
+		averageSpeed = distanceMeters / timerSeconds
+	}
+
 	return Summary{
 		Sport:                  session.Sport.String(),
 		StartTime:              session.StartTime,
-		ElapsedSeconds:         session.TotalElapsedTimeScaled(),
-		TimerSeconds:           session.TotalTimerTimeScaled(),
-		DistanceMeters:         session.TotalDistanceScaled(),
-		Calories:               session.TotalCalories,
-		AverageSpeedMetersPerS: session.AvgSpeedScaled(),
-		MaximumSpeedMetersPerS: session.MaxSpeedScaled(),
-		AverageHeartRateBPM:    session.AvgHeartRate,
-		MaximumHeartRateBPM:    session.MaxHeartRate,
-		AverageCadenceRPM:      session.AvgCadence,
+		ElapsedSeconds:         elapsedSeconds,
+		TimerSeconds:           timerSeconds,
+		DistanceMeters:         distanceMeters,
+		Calories:               validUint16(session.TotalCalories),
+		AverageSpeedMetersPerS: averageSpeed,
+		MaximumSpeedMetersPerS: firstFiniteMetric(session.MaxSpeedScaled(), session.EnhancedMaxSpeedScaled()),
+		AverageHeartRateBPM:    validUint8(session.AvgHeartRate),
+		MaximumHeartRateBPM:    validUint8(session.MaxHeartRate),
+		AverageCadenceRPM:      validUint8(session.AvgCadence),
 	}
 }
 
 func splitFrom(lap *mesgdef.Lap) Split {
-	distanceMeters := lap.TotalDistanceScaled()
+	elapsedSeconds := finiteMetric(lap.TotalElapsedTimeScaled())
+	timerSeconds := finiteMetric(lap.TotalTimerTimeScaled())
+	distanceMeters := finiteMetric(lap.TotalDistanceScaled())
 	paceSecondsPerKilometer := 0.0
 	if distanceMeters > 0 {
-		paceSecondsPerKilometer = lap.TotalTimerTimeScaled() * 1000 / distanceMeters
+		paceSecondsPerKilometer = timerSeconds * 1000 / distanceMeters
+	}
+	averageSpeed := firstFiniteMetric(lap.AvgSpeedScaled(), lap.EnhancedAvgSpeedScaled())
+	if averageSpeed == 0 && distanceMeters > 0 && timerSeconds > 0 {
+		averageSpeed = distanceMeters / timerSeconds
 	}
 
 	return Split{
 		StartTime:                      lap.StartTime,
-		ElapsedSeconds:                 lap.TotalElapsedTimeScaled(),
-		TimerSeconds:                   lap.TotalTimerTimeScaled(),
+		ElapsedSeconds:                 elapsedSeconds,
+		TimerSeconds:                   timerSeconds,
 		DistanceMeters:                 distanceMeters,
-		Calories:                       lap.TotalCalories,
-		AverageSpeedMetersPerS:         lap.AvgSpeedScaled(),
-		MaximumSpeedMetersPerS:         lap.MaxSpeedScaled(),
+		Calories:                       validUint16(lap.TotalCalories),
+		AverageSpeedMetersPerS:         averageSpeed,
+		MaximumSpeedMetersPerS:         firstFiniteMetric(lap.MaxSpeedScaled(), lap.EnhancedMaxSpeedScaled()),
 		AveragePaceSecondsPerKilometer: paceSecondsPerKilometer,
-		AverageHeartRateBPM:            lap.AvgHeartRate,
-		MaximumHeartRateBPM:            lap.MaxHeartRate,
-		AverageCadenceRPM:              lap.AvgCadence,
+		AverageHeartRateBPM:            validUint8(lap.AvgHeartRate),
+		MaximumHeartRateBPM:            validUint8(lap.MaxHeartRate),
+		AverageCadenceRPM:              validUint8(lap.AvgCadence),
 	}
+}
+
+func finiteMetric(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return value
+}
+
+func firstFiniteMetric(values ...float64) float64 {
+	for _, value := range values {
+		if !math.IsNaN(value) && !math.IsInf(value, 0) {
+			return value
+		}
+	}
+	return 0
+}
+
+func validUint8(value uint8) uint8 {
+	if value == basetype.Uint8Invalid {
+		return 0
+	}
+	return value
+}
+
+func validUint16(value uint16) uint16 {
+	if value == basetype.Uint16Invalid {
+		return 0
+	}
+	return value
 }
