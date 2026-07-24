@@ -35,6 +35,7 @@ type fakeProfileUsers struct {
 	// with, so tests can assert trimming happened before the call.
 	lastLocation string
 	lastAboutMe  string
+	lastTimezone string
 }
 
 func (f *fakeProfileUsers) GetByID(_ context.Context, _ int64) (model.User, error) {
@@ -45,6 +46,11 @@ func (f *fakeProfileUsers) UpdateProfile(_ context.Context, _ int64, _, _, _, lo
 	f.lastLocation = location
 	f.lastAboutMe = aboutMe
 	return f.updateErr
+}
+
+func (f *fakeProfileUsers) UpdateTimezone(_ context.Context, _ int64, timezone string) error {
+	f.lastTimezone = timezone
+	return nil
 }
 
 func (f *fakeProfileUsers) UpdatePassword(_ context.Context, _ int64, _ string) error {
@@ -190,6 +196,22 @@ func TestProfile_Update_ResponseIncludesLocationAndAboutMe(t *testing.T) {
 	}
 	if env.Data.Location != testLocation || env.Data.AboutMe != testAboutMe {
 		t.Fatalf("DTO round-trip missing location/aboutMe: %s", rec.Body.String())
+	}
+}
+
+func TestProfile_UpdateTimezoneValidatesAndPersistsIANAValue(t *testing.T) {
+	users := &fakeProfileUsers{user: model.User{ID: 1, Username: testUsername, Email: testEmail}}
+	h := handlers.NewProfile(users, &fakeProfileSessions{}, config.Config{ScheduledEnabled: true})
+	valid := `{"displayName":"A","email":"` + testEmail + `","unitSystem":"metric","timezone":"Europe/Berlin"}`
+	if code := doAuthedPatch(t, h.Update, valid); code != http.StatusOK {
+		t.Fatalf("valid timezone status=%d", code)
+	}
+	if users.lastTimezone != "Europe/Berlin" {
+		t.Fatalf("timezone persisted as %q", users.lastTimezone)
+	}
+	invalid := `{"displayName":"A","email":"` + testEmail + `","unitSystem":"metric","timezone":"not-a-zone"}`
+	if code := doAuthedPatch(t, h.Update, invalid); code != http.StatusBadRequest {
+		t.Fatalf("invalid timezone status=%d", code)
 	}
 }
 

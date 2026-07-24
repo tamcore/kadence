@@ -66,7 +66,8 @@ func TestMigration00014RoundTrip(t *testing.T) {
 
 func assertScheduledSchema(t *testing.T, ctx context.Context, db *sql.DB, wantPresent bool) {
 	t.Helper()
-	for _, name := range []string{"scheduled_tasks", "scheduled_task_runs"} {
+	const scheduledTasksTable = "scheduled_tasks"
+	for _, name := range []string{scheduledTasksTable, "scheduled_task_runs"} {
 		var exists bool
 		if err := db.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", name, err)
@@ -81,6 +82,10 @@ func assertScheduledSchema(t *testing.T, ctx context.Context, db *sql.DB, wantPr
 	}{
 		{table: "users", name: "timezone"},
 		{table: "conversations", name: "kind"},
+		{table: scheduledTasksTable, name: "delivery_policy"},
+		{table: scheduledTasksTable, name: "initial_run"},
+		{table: scheduledTasksTable, name: "stop_condition"},
+		{table: scheduledTasksTable, name: "static_message"},
 	} {
 		var exists bool
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS (

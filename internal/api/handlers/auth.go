@@ -42,21 +42,23 @@ func NewAuth(cfg config.Config, users AuthUsers, sessions AuthSessions) *Auth {
 }
 
 type publicUser struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"username"`
-	Email       string `json:"email"`
-	Role        string `json:"role"`
-	DisplayName string `json:"displayName"`
-	UnitSystem  string `json:"unitSystem"`
-	Location    string `json:"location"`
-	AboutMe     string `json:"aboutMe"`
+	ID               int64  `json:"id"`
+	Username         string `json:"username"`
+	Email            string `json:"email"`
+	Role             string `json:"role"`
+	DisplayName      string `json:"displayName"`
+	UnitSystem       string `json:"unitSystem"`
+	Location         string `json:"location"`
+	AboutMe          string `json:"aboutMe"`
+	Timezone         string `json:"timezone"`
+	ScheduledEnabled bool   `json:"scheduledEnabled"`
 }
 
-func toPublic(u model.User) publicUser {
+func toPublicWithConfig(u model.User, cfg config.Config) publicUser {
 	return publicUser{
 		ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role,
 		DisplayName: u.DisplayName, UnitSystem: u.UnitSystem,
-		Location: u.Location, AboutMe: u.AboutMe,
+		Location: u.Location, AboutMe: u.AboutMe, Timezone: u.Timezone, ScheduledEnabled: cfg.ScheduledEnabled,
 	}
 }
 
@@ -118,7 +120,7 @@ func startSession(w http.ResponseWriter, r *http.Request, cfg config.Config, ses
 		return publicUser{}, err
 	}
 	setSessionCookie(w, cfg, id, expiresAt)
-	return toPublic(u), nil
+	return toPublicWithConfig(u, cfg), nil
 }
 
 // setSessionCookie writes the session cookie with the exact name and
@@ -148,5 +150,5 @@ func (h *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 // CurrentUser returns the authenticated user from context.
 func (h *Auth) CurrentUser(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
-	RespondJSON(w, http.StatusOK, toPublic(*u))
+	RespondJSON(w, http.StatusOK, toPublicWithConfig(*u, h.cfg))
 }

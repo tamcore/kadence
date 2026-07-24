@@ -25,6 +25,7 @@ import (
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/reindex"
+	"github.com/tamcore/kadence/internal/scheduled"
 	"github.com/tamcore/kadence/internal/secret"
 	"github.com/tamcore/kadence/internal/store"
 	"github.com/tamcore/kadence/internal/webauthn"
@@ -206,8 +207,9 @@ func Run() error {
 		if sErr != nil {
 			slog.Warn("failed to parse MCP env, continuing without env tools", "err", sErr)
 		}
+		var registry *mcp.Registry
 		if len(servers) > 0 || userSrc != nil {
-			registry := mcp.NewRegistry(servers, mcpHTTPClient, userSrc)
+			registry = mcp.NewRegistry(servers, mcpHTTPClient, userSrc)
 			mcpTools = mcpToolsAdapter{registry}
 			slog.Info("mcp enabled", "env_servers", len(servers), "user_mcp", userSrc != nil)
 
@@ -259,7 +261,27 @@ func Run() error {
 			FITRoutes: fitRoutes,
 			Secrets:   broker,
 		})
-		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
+		if cfg.ScheduledEnabled {
+			tasks := store.NewScheduledTaskRepository(pool, cfg.ScheduledMaxActivePerUser)
+			toolsForUser := func(ctx context.Context, username string) ([]provider.ToolDefinition, error) {
+				if registry == nil {
+					return nil, nil
+				}
+				return registry.SnapshotFor(ctx, username).ToolsFor(ctx)
+			}
+			scheduledSvc := scheduled.NewService(scheduled.ServiceDeps{
+				Conversations: convs, Messages: msgs, Tasks: tasks,
+				Compiler: scheduled.NewCompiler(prov, scheduled.CompilerConfig{
+					Model: cfg.LLMModel, MaxTokens: cfg.LLMMaxTokens,
+				}),
+				ToolsForUser: toolsForUser,
+			})
+			deps.Scheduled = handlers.NewScheduled(scheduledSvc)
+			deps.Chat = handlers.NewChat(chatSvc, convs, msgs, tasks)
+			slog.Info("scheduled enabled", "max_active_per_user", cfg.ScheduledMaxActivePerUser)
+		} else {
+			deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
+		}
 		deps.Credentials = handlers.NewCredentials(broker)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {

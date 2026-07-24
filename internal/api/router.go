@@ -40,6 +40,7 @@ type Deps struct {
 	Profile     *handlers.Profile
 	SessionsAPI *handlers.Sessions
 	WebAuthn    *handlers.WebAuthn
+	Scheduled   *handlers.Scheduled
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -89,7 +90,7 @@ func isUploadRoute(r *http.Request) bool {
 
 func mountAuth(r chi.Router, deps Deps) {
 	authH := handlers.NewAuth(deps.Config, deps.Users, deps.Sessions)
-	usersH := handlers.NewUsers(deps.Users, deps.Sessions)
+	usersH := handlers.NewUsers(deps.Users, deps.Sessions, deps.Config)
 
 	secret := []byte(deps.Config.CSRFSecret)
 	if len(secret) == 0 {
@@ -143,6 +144,18 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Get("/api/conversations/{id}/messages", deps.Chat.Messages)
 			r.Patch("/api/conversations/{id}", deps.Chat.PatchConversation)
 			r.Delete("/api/conversations/{id}", deps.Chat.DeleteConversation)
+		}
+
+		if deps.Scheduled != nil {
+			r.Get("/api/scheduled/tasks", deps.Scheduled.List)
+			r.Post("/api/scheduled/tasks", deps.Scheduled.Create)
+			r.Get("/api/scheduled/tasks/{id}", deps.Scheduled.Detail)
+			r.Patch("/api/scheduled/tasks/{id}", deps.Scheduled.Patch)
+			r.Delete("/api/scheduled/tasks/{id}", deps.Scheduled.Delete)
+			r.Post("/api/scheduled/tasks/{id}/messages", deps.Scheduled.Refine)
+			r.Post("/api/scheduled/tasks/{id}/confirm", deps.Scheduled.Confirm)
+			r.Post("/api/scheduled/tasks/{id}/run", deps.Scheduled.RunNow)
+			r.Post("/api/scheduled/tasks/{id}/read", deps.Scheduled.MarkRead)
 		}
 
 		if deps.Context != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/tamcore/kadence/internal/auth"
+	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
 )
@@ -38,11 +39,16 @@ type UsersSessions interface {
 type Users struct {
 	repo     UsersRepo
 	sessions UsersSessions
+	cfg      config.Config
 }
 
 // NewUsers constructs the admin Users handler.
-func NewUsers(repo UsersRepo, sessions UsersSessions) *Users {
-	return &Users{repo: repo, sessions: sessions}
+func NewUsers(repo UsersRepo, sessions UsersSessions, cfg ...config.Config) *Users {
+	h := &Users{repo: repo, sessions: sessions}
+	if len(cfg) > 0 {
+		h.cfg = cfg[0]
+	}
+	return h
 }
 
 // List returns all users.
@@ -54,7 +60,7 @@ func (h *Users) List(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]publicUser, 0, len(all))
 	for _, u := range all {
-		out = append(out, toPublic(u))
+		out = append(out, toPublicWithConfig(u, h.cfg))
 	}
 	RespondJSON(w, http.StatusOK, out)
 }
@@ -95,7 +101,7 @@ func (h *Users) Create(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusConflict, "could not create user (username or email may already exist)")
 		return
 	}
-	RespondJSON(w, http.StatusCreated, toPublic(created))
+	RespondJSON(w, http.StatusCreated, toPublicWithConfig(created, h.cfg))
 }
 
 // Delete removes a user by id.
@@ -227,7 +233,7 @@ func (h *Users) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		h.revokeAfterPasswordReset(r, id)
 	}
-	RespondJSON(w, http.StatusOK, toPublic(updated))
+	RespondJSON(w, http.StatusOK, toPublicWithConfig(updated, h.cfg))
 }
 
 // revokeAfterPasswordReset invalidates existing logins for the target of an

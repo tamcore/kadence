@@ -134,7 +134,7 @@ func TestCompilerRefineNormalizesProposalAndTools(t *testing.T) {
 	}
 	proposal := got.Proposal
 	if proposal.Version != 4 || proposal.Name != "Daily briefing" || proposal.CompiledPrompt != "Gather a briefing for the user." ||
-		proposal.Schedule.Timezone != "UTC" || proposal.Timezone != "UTC" {
+		proposal.Schedule.Timezone != timezoneUTC || proposal.Timezone != timezoneUTC {
 		t.Fatalf("Proposal = %+v", proposal)
 	}
 	if got, want := strings.Join(proposal.AuthorizedTools, ","), "news,weather"; got != want {
