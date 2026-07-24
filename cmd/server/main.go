@@ -9,13 +9,24 @@ import (
 )
 
 func main() {
-	run := serve.Run
-	if len(os.Args) > 1 && os.Args[1] == "wait-for-db" {
-		run = serve.WaitForDB
-	}
+	run := runnerFor(os.Args[1:])
 
 	if err := run(); err != nil {
 		slog.Error("server exited with error", "err", err)
 		os.Exit(1)
+	}
+}
+
+func runnerFor(args []string) func() error {
+	if len(args) == 0 {
+		return serve.Run
+	}
+	switch args[0] {
+	case "wait-for-db":
+		return serve.WaitForDB
+	case "file-bridge":
+		return serve.RunFileBridge
+	default:
+		return serve.Run
 	}
 }
