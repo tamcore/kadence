@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+const (
+	stubMessageRoleKey    = "role"
+	stubMessageContentKey = "content"
+)
+
 func TestChatCompletionsStreamsSSEChunks(t *testing.T) {
 	reqBody := `{"model":"stub","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
@@ -64,6 +69,61 @@ func TestChatCompletionsStreamsSSEChunks(t *testing.T) {
 	}
 	if full.Len() == 0 {
 		t.Fatalf("accumulated content is empty")
+	}
+}
+
+func TestChatCompletionsRefinesScheduledTasks(t *testing.T) {
+	question := scheduledStubReply(t, []map[string]string{
+		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "Help me plan a daily training check-in"},
+	})
+	var questionBody struct {
+		AssistantText string `json:"assistantText"`
+		Question      *struct {
+			Prompt string `json:"prompt"`
+			Kind   string `json:"kind"`
+		} `json:"question"`
+	}
+	if err := json.Unmarshal([]byte(question), &questionBody); err != nil {
+		t.Fatalf("decode Scheduled question: %v\n%s", err, question)
+	}
+	if questionBody.AssistantText == "" || questionBody.Question == nil ||
+		questionBody.Question.Prompt == "" || questionBody.Question.Kind != "single_select" {
+		t.Fatalf("Scheduled question = %+v", questionBody)
+	}
+
+	proposal := scheduledStubReply(t, []map[string]string{
+		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "Help me plan a daily training check-in"},
+		{stubMessageRoleKey: "assistant", stubMessageContentKey: question},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "daily"},
+	})
+	var proposalBody struct {
+		AssistantText string `json:"assistantText"`
+		Proposal      *struct {
+			Name          string `json:"name"`
+			TaskKind      string `json:"taskKind"`
+			ExecutionMode string `json:"executionMode"`
+			StaticMessage string `json:"staticMessage"`
+		} `json:"proposal"`
+	}
+	if err := json.Unmarshal([]byte(proposal), &proposalBody); err != nil {
+		t.Fatalf("decode Scheduled proposal: %v\n%s", err, proposal)
+	}
+	if proposalBody.AssistantText == "" || proposalBody.Proposal == nil ||
+		proposalBody.Proposal.Name == "" || proposalBody.Proposal.TaskKind != "reminder" ||
+		proposalBody.Proposal.ExecutionMode != "static" || proposalBody.Proposal.StaticMessage == "" {
+		t.Fatalf("Scheduled proposal = %+v", proposalBody)
+	}
+}
+
+func TestChatCompletionsProposesStaticScheduledReminderDirectly(t *testing.T) {
+	reply := scheduledStubReply(t, []map[string]string{
+		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "Remind me to drink water tomorrow"},
+	})
+	if !strings.Contains(reply, `"proposal"`) || !strings.Contains(reply, `"Hydration reminder"`) {
+		t.Fatalf("static Scheduled reply = %s", reply)
 	}
 }
 
@@ -183,4 +243,33 @@ func extractDataFrames(t *testing.T, body string) []string {
 		frames = append(frames, strings.TrimPrefix(line, "data: "))
 	}
 	return frames
+}
+
+func scheduledStubReply(t *testing.T, messages []map[string]string) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{"model": "stub", "messages": messages, "stream": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(payload)))
+	rec := httptest.NewRecorder()
+	handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Scheduled stub status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	frames := extractDataFrames(t, rec.Body.String())
+	var reply strings.Builder
+	for _, frame := range frames {
+		if frame == "[DONE]" {
+			continue
+		}
+		var chunk chatCompletionChunk
+		if err := json.Unmarshal([]byte(frame), &chunk); err != nil {
+			t.Fatalf("decode Scheduled chunk: %v", err)
+		}
+		if len(chunk.Choices) > 0 {
+			reply.WriteString(chunk.Choices[0].Delta.Content)
+		}
+	}
+	return reply.String()
 }

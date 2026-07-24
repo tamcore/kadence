@@ -15,6 +15,17 @@ config:
   KADENCE_ENV: production
   KADENCE_LLM_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
   KADENCE_LLM_MODEL: "your-llm-model"
+  # Opt-in conversational task scheduling. The main model refines the task;
+  # these worker overrides let unattended executions use a cheaper compatible
+  # provider. Leave any override empty to inherit its KADENCE_LLM_* counterpart.
+  KADENCE_SCHEDULED_ENABLED: true
+  KADENCE_SCHEDULED_WORKER_MODEL: "your-worker-model"
+  KADENCE_SCHEDULED_WORKER_BASE_URL: "https://your-compatible-endpoint.example.com/v1"
+  KADENCE_SCHEDULED_WORKER_MAX_TOKENS: 2048
+  KADENCE_SCHEDULED_WORKER_TIMEOUT: 300s
+  KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS: 16
+  KADENCE_SCHEDULED_WORKER_CONCURRENCY: 1
+  KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER: 10
   KADENCE_EMBED_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
   # Changing the embedding model re-embeds existing RAG chunks automatically.
   # ROLLOUT RULE: don't change it in the same deploy that first ships the
@@ -31,6 +42,7 @@ config:
 secrets:
   KADENCE_CSRF_SECRET: "CHANGEME"
   KADENCE_LLM_API_KEY: "CHANGEME"
+  KADENCE_SCHEDULED_WORKER_API_KEY: "CHANGEME"
   KADENCE_EMBED_API_KEY: "CHANGEME"
   KADENCE_ADMIN_PASSWORD: "CHANGEME"
   # KADENCE_ENCRYPTION_KEY: "CHANGEME" # base64-encoded 32-byte key; generate with:

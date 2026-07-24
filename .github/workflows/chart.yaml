@@ -41,6 +41,71 @@ jobs:
               exit 1
             fi
           done
+      - name: assert Scheduled configuration wiring
+        run: |
+          helm template kadence ./charts/kadence > /tmp/rendered-scheduled-default.yaml
+          default_enabled=$(yq eval-all '[select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data | to_entries[] | select(.key == "KADENCE_SCHEDULED_ENABLED")] | length' /tmp/rendered-scheduled-default.yaml)
+          if [ "$default_enabled" != "0" ]; then
+            echo "expected default render not to enable Scheduled, got $default_enabled KADENCE_SCHEDULED_ENABLED entries"
+            exit 1
+          fi
+          default_termination_grace=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.terminationGracePeriodSeconds' /tmp/rendered-scheduled-default.yaml)
+          if [ "$default_termination_grace" != "635" ]; then
+            echo "expected default Scheduled termination grace period to be 635 seconds, got '$default_termination_grace'"
+            exit 1
+          fi
+
+          helm template kadence ./charts/kadence \
+            --set config.KADENCE_SCHEDULED_ENABLED=true \
+            --set-string config.KADENCE_SCHEDULED_WORKER_MODEL=scheduled-worker-model \
+            --set-string config.KADENCE_SCHEDULED_WORKER_BASE_URL=https://worker.example.com/v1 \
+            --set config.KADENCE_SCHEDULED_WORKER_MAX_TOKENS=1024 \
+            --set-string config.KADENCE_SCHEDULED_WORKER_TIMEOUT=90s \
+            --set config.KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS=8 \
+            --set config.KADENCE_SCHEDULED_WORKER_CONCURRENCY=2 \
+            --set config.KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER=4 \
+            --set-string secrets.KADENCE_SCHEDULED_WORKER_API_KEY=scheduled-worker-key \
+            > /tmp/rendered-scheduled-enabled.yaml
+          for expected in \
+            KADENCE_SCHEDULED_ENABLED=true \
+            KADENCE_SCHEDULED_WORKER_MODEL=scheduled-worker-model \
+            KADENCE_SCHEDULED_WORKER_BASE_URL=https://worker.example.com/v1 \
+            KADENCE_SCHEDULED_WORKER_MAX_TOKENS=1024 \
+            KADENCE_SCHEDULED_WORKER_TIMEOUT=90s \
+            KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS=8 \
+            KADENCE_SCHEDULED_WORKER_CONCURRENCY=2 \
+            KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER=4; do
+            key=${expected%%=*}
+            want=${expected#*=}
+            actual=$(yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"kadence-config\") | .data.$key" /tmp/rendered-scheduled-enabled.yaml)
+            if [ "$actual" != "$want" ]; then
+              echo "expected enabled Scheduled ConfigMap $key=$want, got '$actual'"
+              exit 1
+            fi
+          done
+          enabled_key=$(yq eval-all 'select(.kind == "Secret" and .metadata.name == "kadence-secret") | .stringData.KADENCE_SCHEDULED_WORKER_API_KEY' /tmp/rendered-scheduled-enabled.yaml)
+          enabled_key_in_config=$(yq eval-all '[select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data | to_entries[] | select(.key == "KADENCE_SCHEDULED_WORKER_API_KEY")] | length' /tmp/rendered-scheduled-enabled.yaml)
+          replicas=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.replicas' /tmp/rendered-scheduled-enabled.yaml)
+          if [ "$enabled_key" != "scheduled-worker-key" ] || [ "$enabled_key_in_config" != "0" ] || [ "$replicas" != "2" ]; then
+            echo "expected worker key only in Secret and app replicas=2; got secret-key='$enabled_key' config-key-count=$enabled_key_in_config replicas=$replicas"
+            exit 1
+          fi
+
+          helm template kadence ./charts/kadence \
+            --set config.KADENCE_SCHEDULED_ENABLED=true \
+            --set-string config.KADENCE_LLM_MODEL=primary-model \
+            --set-string config.KADENCE_LLM_BASE_URL=https://primary.example.com/v1 \
+            --set-string secrets.KADENCE_LLM_API_KEY=primary-api-key \
+            > /tmp/rendered-scheduled-fallback.yaml
+          fallback_model=$(yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data.KADENCE_LLM_MODEL' /tmp/rendered-scheduled-fallback.yaml)
+          fallback_base_url=$(yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data.KADENCE_LLM_BASE_URL' /tmp/rendered-scheduled-fallback.yaml)
+          fallback_api_key=$(yq eval-all 'select(.kind == "Secret" and .metadata.name == "kadence-secret") | .stringData.KADENCE_LLM_API_KEY' /tmp/rendered-scheduled-fallback.yaml)
+          fallback_worker_config=$(yq eval-all '[select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data | to_entries[] | select(.key == "KADENCE_SCHEDULED_WORKER_MODEL" or .key == "KADENCE_SCHEDULED_WORKER_BASE_URL")] | length' /tmp/rendered-scheduled-fallback.yaml)
+          fallback_worker_key=$(yq eval-all '[select(.kind == "Secret" and .metadata.name == "kadence-secret") | .stringData | to_entries[] | select(.key == "KADENCE_SCHEDULED_WORKER_API_KEY")] | length' /tmp/rendered-scheduled-fallback.yaml)
+          if [ "$fallback_model" != "primary-model" ] || [ "$fallback_base_url" != "https://primary.example.com/v1" ] || [ "$fallback_api_key" != "primary-api-key" ] || [ "$fallback_worker_config" != "0" ] || [ "$fallback_worker_key" != "0" ]; then
+            echo "expected optional worker model/base/key to be omitted so Scheduled falls back to the main provider; got main-model='$fallback_model' main-base='$fallback_base_url' main-key='$fallback_api_key' worker-config-count=$fallback_worker_config worker-key-count=$fallback_worker_key"
+            exit 1
+          fi
       - name: assert markitdown basicAuth password is sticky across renders
         run: |
           # With markitdown enabled and a fixed basicAuth.password, two consecutive

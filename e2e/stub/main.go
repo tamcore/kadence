@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,76 @@ const (
 // chatContentTokens are the deterministic content deltas streamed back for
 // every chat completion request, regardless of the request body.
 var chatContentTokens = []string{"This is ", "a test ", "coaching reply."}
+
+const (
+	messageRoleSystem       = "system"
+	messageRoleUser         = "user"
+	scheduledCompilerPrompt = "You refine one Scheduled task from the complete conversation."
+	scheduledQuestionReply  = `{
+		"assistantText": "Let’s tailor the check-in to your routine.",
+		"question": {
+			"id": "cadence",
+			"prompt": "How often should the check-in run?",
+			"kind": "single_select",
+			"options": [
+				{"label": "Daily", "value": "daily"},
+				{"label": "Weekly", "value": "weekly"}
+			],
+			"allowCustom": false,
+			"optional": false
+		}
+	}`
+	scheduledProposalReply = `{
+		"assistantText": "Your daily training check-in is ready to schedule.",
+		"proposal": {
+			"version": 0,
+			"name": "Daily training check-in",
+			"taskKind": "reminder",
+			"compiledPrompt": "Prompt the user to review the day’s training and recovery.",
+			"executionMode": "static",
+			"schedule": {
+				"dtStart": "2040-01-02T08:00:00Z",
+				"rrule": "FREQ=DAILY",
+				"timezone": "UTC"
+			},
+			"timezone": "UTC",
+			"authorizedTools": [],
+			"deliveryPolicy": "always",
+			"initialRun": "wait",
+			"stopCondition": "",
+			"staticMessage": "Take a moment to review today’s training and recovery."
+		}
+	}`
+	scheduledReminderReply = `{
+		"assistantText": "Your hydration reminder is ready to schedule.",
+		"proposal": {
+			"version": 0,
+			"name": "Hydration reminder",
+			"taskKind": "reminder",
+			"compiledPrompt": "Remind the user to drink water.",
+			"executionMode": "static",
+			"schedule": {
+				"at": "2040-01-02T15:04:05Z",
+				"timezone": "UTC"
+			},
+			"timezone": "UTC",
+			"authorizedTools": [],
+			"deliveryPolicy": "always",
+			"initialRun": "wait",
+			"stopCondition": "",
+			"staticMessage": "Time to drink some water."
+		}
+	}`
+)
+
+type chatCompletionRequest struct {
+	Messages []chatCompletionRequestMessage `json:"messages"`
+}
+
+type chatCompletionRequestMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
 // chatCompletionChunk mirrors the shape the openai-go/v3 stream decoder
 // consumes (see internal/provider/openaicompat_test.go): a "choices" array
@@ -80,10 +151,19 @@ func handler() http.Handler {
 	return mux
 }
 
-// handleChatCompletions streams a deterministic chat.completion.chunk SSE
-// response: a few content-bearing chunks followed by a terminating
-// "data: [DONE]" frame. Auth and the request body are ignored.
-func handleChatCompletions(w http.ResponseWriter, _ *http.Request) {
+// handleChatCompletions streams deterministic chat or Scheduled compiler
+// content followed by a terminating "data: [DONE]" frame.
+func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	var req chatCompletionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	tokens := chatContentTokens
+	if reply, ok := scheduledReply(req.Messages); ok {
+		tokens = []string{reply}
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -91,7 +171,7 @@ func handleChatCompletions(w http.ResponseWriter, _ *http.Request) {
 
 	flusher, canFlush := w.(http.Flusher)
 
-	for _, token := range chatContentTokens {
+	for _, token := range tokens {
 		chunk := chatCompletionChunk{
 			Choices: []chatCompletionChunkChoice{
 				{Delta: chatCompletionChunkDelta{Content: token}},
@@ -113,6 +193,33 @@ func handleChatCompletions(w http.ResponseWriter, _ *http.Request) {
 	if canFlush {
 		flusher.Flush()
 	}
+}
+
+func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
+	var compilerRequest bool
+	var firstUser string
+	userMessages := 0
+	for _, message := range messages {
+		if message.Role == messageRoleSystem && strings.Contains(message.Content, scheduledCompilerPrompt) {
+			compilerRequest = true
+		}
+		if message.Role == messageRoleUser {
+			userMessages++
+			if firstUser == "" {
+				firstUser = message.Content
+			}
+		}
+	}
+	if !compilerRequest {
+		return "", false
+	}
+	if strings.Contains(strings.ToLower(firstUser), "drink water") {
+		return scheduledReminderReply, true
+	}
+	if userMessages > 1 {
+		return scheduledProposalReply, true
+	}
+	return scheduledQuestionReply, true
 }
 
 // writeSSEChunk marshals v and writes it as a single "data: <json>\n\n" SSE
