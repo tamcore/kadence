@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testDatabaseURL is a placeholder DSN used across tests that only need
@@ -305,6 +306,90 @@ func TestGuardrailSeparateBackend(t *testing.T) {
 	cfg := Load()
 	if cfg.ResolvedGuardrailModel() != "cheap-model" || cfg.ResolvedGuardrailBaseURL() != "https://guard.example/v1" || cfg.ResolvedGuardrailAPIKey() != "guard-key" {
 		t.Fatalf("resolvers should use guardrail-specific values: %+v", cfg)
+	}
+}
+
+func TestScheduledDefaultsDisabled(t *testing.T) {
+	t.Setenv("KADENCE_SCHEDULED_ENABLED", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_MODEL", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_BASE_URL", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_API_KEY", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_MAX_TOKENS", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_TIMEOUT", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_CONCURRENCY", "")
+	t.Setenv("KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER", "")
+
+	cfg := Load()
+	if cfg.ScheduledEnabled {
+		t.Fatal("ScheduledEnabled = true, want false by default")
+	}
+	if cfg.ScheduledWorkerModel != "" || cfg.ScheduledWorkerBaseURL != "" || cfg.ScheduledWorkerAPIKey != "" {
+		t.Fatalf("scheduled worker overrides = %+v, want empty raw overrides", cfg)
+	}
+	if cfg.ScheduledWorkerMaxTokens != 2048 || cfg.ScheduledWorkerTimeout != 300*time.Second ||
+		cfg.ScheduledWorkerMaxIterations != 16 || cfg.ScheduledWorkerConcurrency != 1 || cfg.ScheduledMaxActivePerUser != 10 {
+		t.Fatalf("scheduled defaults = %+v", cfg)
+	}
+	if err := validConfig().Validate(); err != nil {
+		t.Fatalf("zero-value scheduled settings should be valid while disabled: %v", err)
+	}
+}
+
+func TestScheduledWorkerResolversFallBackToLLM(t *testing.T) {
+	t.Setenv("KADENCE_LLM_MODEL", "main-model")
+	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
+	t.Setenv("KADENCE_LLM_API_KEY", "main-key")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_MODEL", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_BASE_URL", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_API_KEY", "")
+
+	cfg := Load()
+	if cfg.ResolvedScheduledWorkerModel() != "main-model" ||
+		cfg.ResolvedScheduledWorkerBaseURL() != "https://main.example/v1" ||
+		cfg.ResolvedScheduledWorkerAPIKey() != "main-key" {
+		t.Fatalf("scheduled worker resolvers should fall back to LLM values: %+v", cfg)
+	}
+}
+
+func TestScheduledWorkerExplicitOverrides(t *testing.T) {
+	t.Setenv("KADENCE_SCHEDULED_WORKER_MODEL", "worker-model")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_BASE_URL", "https://worker.example/v1")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_API_KEY", "worker-key")
+
+	cfg := Load()
+	if cfg.ResolvedScheduledWorkerModel() != "worker-model" ||
+		cfg.ResolvedScheduledWorkerBaseURL() != "https://worker.example/v1" ||
+		cfg.ResolvedScheduledWorkerAPIKey() != "worker-key" {
+		t.Fatalf("scheduled worker resolvers should use explicit overrides: %+v", cfg)
+	}
+}
+
+func TestValidateScheduledBudgetsWhenEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "max tokens", mutate: func(c *Config) { c.ScheduledWorkerMaxTokens = 0 }},
+		{name: "timeout", mutate: func(c *Config) { c.ScheduledWorkerTimeout = 0 }},
+		{name: "iterations", mutate: func(c *Config) { c.ScheduledWorkerMaxIterations = 0 }},
+		{name: "concurrency", mutate: func(c *Config) { c.ScheduledWorkerConcurrency = 0 }},
+		{name: "active limit", mutate: func(c *Config) { c.ScheduledMaxActivePerUser = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.ScheduledEnabled = true
+			cfg.ScheduledWorkerMaxTokens = 2048
+			cfg.ScheduledWorkerTimeout = 300 * time.Second
+			cfg.ScheduledWorkerMaxIterations = 16
+			cfg.ScheduledWorkerConcurrency = 1
+			cfg.ScheduledMaxActivePerUser = 10
+			tc.mutate(&cfg)
+
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() = nil, want error for invalid scheduled setting")
+			}
+		})
 	}
 }
 

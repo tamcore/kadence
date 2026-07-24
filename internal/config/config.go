@@ -76,6 +76,19 @@ type Config struct {
 	AllowedTopics  string
 	RefusalMessage string
 
+	// Scheduled tasks are opt-in. Worker model/base/key override the primary
+	// chat provider only when set; the resolved helpers otherwise fall back to
+	// the LLM fields above.
+	ScheduledEnabled             bool
+	ScheduledWorkerModel         string
+	ScheduledWorkerBaseURL       string
+	ScheduledWorkerAPIKey        string
+	ScheduledWorkerMaxTokens     int
+	ScheduledWorkerTimeout       time.Duration
+	ScheduledWorkerMaxIterations int
+	ScheduledWorkerConcurrency   int
+	ScheduledMaxActivePerUser    int
+
 	// Embeddings / RAG. RAG is enabled iff EmbedAPIKey != "".
 	EmbedBaseURL string
 	EmbedAPIKey  string
@@ -222,6 +235,16 @@ func Load() Config {
 	cfg.DomainName = envOr("KADENCE_DOMAIN_NAME", defaultDomainName)
 	cfg.AllowedTopics = envOr("KADENCE_ALLOWED_TOPICS", defaultAllowedTopics)
 	cfg.RefusalMessage = envOr("KADENCE_REFUSAL_MESSAGE", defaultRefusalMessage)
+
+	cfg.ScheduledEnabled = envBoolOr("KADENCE_SCHEDULED_ENABLED", false)
+	cfg.ScheduledWorkerModel = os.Getenv("KADENCE_SCHEDULED_WORKER_MODEL")
+	cfg.ScheduledWorkerBaseURL = os.Getenv("KADENCE_SCHEDULED_WORKER_BASE_URL")
+	cfg.ScheduledWorkerAPIKey = os.Getenv("KADENCE_SCHEDULED_WORKER_API_KEY")
+	cfg.ScheduledWorkerMaxTokens = envIntOr("KADENCE_SCHEDULED_WORKER_MAX_TOKENS", 2048)
+	cfg.ScheduledWorkerTimeout = envDurationOr("KADENCE_SCHEDULED_WORKER_TIMEOUT", 300*time.Second)
+	cfg.ScheduledWorkerMaxIterations = envIntOr("KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS", 16)
+	cfg.ScheduledWorkerConcurrency = envIntOr("KADENCE_SCHEDULED_WORKER_CONCURRENCY", 1)
+	cfg.ScheduledMaxActivePerUser = envIntOr("KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER", 10)
 
 	cfg.EmbedBaseURL = envOr("KADENCE_EMBED_BASE_URL", "https://api.openai.com/v1")
 	cfg.EmbedAPIKey = os.Getenv("KADENCE_EMBED_API_KEY")
@@ -451,6 +474,31 @@ func (c Config) Validate() error {
 	if c.MaxBodyBytes < 0 {
 		return errors.New("KADENCE_MAX_BODY_BYTES must be a non-negative integer")
 	}
+	if err := c.validateScheduled(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) validateScheduled() error {
+	if !c.ScheduledEnabled {
+		return nil
+	}
+	if c.ScheduledWorkerMaxTokens <= 0 {
+		return errors.New("KADENCE_SCHEDULED_WORKER_MAX_TOKENS must be a positive integer when Scheduled is enabled")
+	}
+	if c.ScheduledWorkerTimeout <= 0 {
+		return errors.New("KADENCE_SCHEDULED_WORKER_TIMEOUT must be a positive duration when Scheduled is enabled")
+	}
+	if c.ScheduledWorkerMaxIterations <= 0 {
+		return errors.New("KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS must be a positive integer when Scheduled is enabled")
+	}
+	if c.ScheduledWorkerConcurrency <= 0 {
+		return errors.New("KADENCE_SCHEDULED_WORKER_CONCURRENCY must be a positive integer when Scheduled is enabled")
+	}
+	if c.ScheduledMaxActivePerUser <= 0 {
+		return errors.New("KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER must be a positive integer when Scheduled is enabled")
+	}
 	return nil
 }
 
@@ -496,6 +544,33 @@ func (c Config) ResolvedGuardrailBaseURL() string {
 func (c Config) ResolvedGuardrailAPIKey() string {
 	if c.GuardrailAPIKey != "" {
 		return c.GuardrailAPIKey
+	}
+	return c.LLMAPIKey
+}
+
+// ResolvedScheduledWorkerModel returns the worker model, falling back to the
+// primary chat model.
+func (c Config) ResolvedScheduledWorkerModel() string {
+	if c.ScheduledWorkerModel != "" {
+		return c.ScheduledWorkerModel
+	}
+	return c.LLMModel
+}
+
+// ResolvedScheduledWorkerBaseURL returns the worker base URL, falling back to
+// the primary chat base URL.
+func (c Config) ResolvedScheduledWorkerBaseURL() string {
+	if c.ScheduledWorkerBaseURL != "" {
+		return c.ScheduledWorkerBaseURL
+	}
+	return c.LLMBaseURL
+}
+
+// ResolvedScheduledWorkerAPIKey returns the worker API key, falling back to
+// the primary chat API key.
+func (c Config) ResolvedScheduledWorkerAPIKey() string {
+	if c.ScheduledWorkerAPIKey != "" {
+		return c.ScheduledWorkerAPIKey
 	}
 	return c.LLMAPIKey
 }
