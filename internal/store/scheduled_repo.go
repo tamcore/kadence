@@ -203,7 +203,8 @@ func (r *ScheduledTaskRepository) Update(ctx context.Context, task model.Schedul
 func ensureOwnedScheduledConversation(ctx context.Context, tx pgx.Tx, conversationID string, userID int64) error {
 	var found bool
 	err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1::uuid AND user_id = $2)`, conversationID, userID).Scan(&found)
+		`SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1::uuid AND user_id = $2 AND kind = $3)`,
+		conversationID, userID, model.ConversationKindScheduled).Scan(&found)
 	if err != nil {
 		return fmt.Errorf("check scheduled task conversation owner: %w", err)
 	}
@@ -242,13 +243,17 @@ func scanScheduledTaskRun(row rowScanner) (model.ScheduledTaskRun, error) {
 	return run, nil
 }
 
-// CreateRun records an occurrence. The database unique constraint makes a
-// task occurrence immutable and impossible to replay accidentally.
-func (r *ScheduledTaskRepository) CreateRun(ctx context.Context, run model.ScheduledTaskRun) (model.ScheduledTaskRun, error) {
+// CreateRun records an occurrence for a non-deleted task owned by userID. The
+// database unique constraint makes a task occurrence immutable and impossible
+// to replay accidentally.
+func (r *ScheduledTaskRepository) CreateRun(ctx context.Context, userID int64, run model.ScheduledTaskRun) (model.ScheduledTaskRun, error) {
 	created, err := scanScheduledTaskRun(r.pool.QueryRow(ctx,
 		`INSERT INTO scheduled_task_runs (task_id, occurrence_key, scheduled_for, state, started_at, finished_at, result, error, unread)
-		 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING `+scheduledTaskRunCols,
-		run.TaskID, run.OccurrenceKey, run.ScheduledFor, run.State, run.StartedAt, run.FinishedAt, run.Result, run.Error, run.Unread))
+		 SELECT task.id, $3, $4, $5, $6, $7, $8, $9, $10
+		 FROM scheduled_tasks AS task
+		 WHERE task.id = $1::uuid AND task.user_id = $2 AND task.deleted_at IS NULL
+		 RETURNING `+scheduledTaskRunCols,
+		run.TaskID, userID, run.OccurrenceKey, run.ScheduledFor, run.State, run.StartedAt, run.FinishedAt, run.Result, run.Error, run.Unread))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return model.ScheduledTaskRun{}, ErrOccurrenceTaken
