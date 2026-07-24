@@ -2,12 +2,14 @@ package fit
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
 	fitencoder "github.com/muktihari/fit/encoder"
 	"github.com/muktihari/fit/kit/datetime"
 	"github.com/muktihari/fit/profile/factory"
+	"github.com/muktihari/fit/profile/mesgdef"
 	"github.com/muktihari/fit/profile/typedef"
 	"github.com/muktihari/fit/profile/untyped/fieldnum"
 	"github.com/muktihari/fit/profile/untyped/mesgnum"
@@ -46,6 +48,31 @@ func TestDecodeReturnsActivityMetricSummaryAndLapSplits(t *testing.T) {
 func TestDecodeRejectsInvalidFIT(t *testing.T) {
 	if _, err := Decode(bytes.NewReader([]byte("not a FIT file"))); err == nil {
 		t.Fatal("Decode() error = nil, want invalid FIT error")
+	}
+}
+
+func TestDecodedMetricsAreJSONSafeWhenFITValuesAreInvalid(t *testing.T) {
+	session := mesgdef.NewSession(nil).
+		SetEnhancedAvgSpeedScaled(3.2).
+		SetEnhancedMaxSpeedScaled(4.5)
+	lap := mesgdef.NewLap(nil).
+		SetEnhancedAvgSpeedScaled(3.1).
+		SetEnhancedMaxSpeedScaled(4.2)
+	activity := Activity{
+		Summary: summaryFrom(session),
+		Splits:  []Split{splitFrom(lap)},
+	}
+
+	if _, err := json.Marshal(activity); err != nil {
+		t.Fatalf("json.Marshal() error = %v, want invalid FIT numeric sentinels normalized", err)
+	}
+	if activity.Summary.AverageSpeedMetersPerS != 3.2 || activity.Summary.MaximumSpeedMetersPerS != 4.5 {
+		t.Fatalf("summary speeds = %v/%v, want enhanced 3.2/4.5",
+			activity.Summary.AverageSpeedMetersPerS, activity.Summary.MaximumSpeedMetersPerS)
+	}
+	if activity.Splits[0].AverageSpeedMetersPerS != 3.1 || activity.Splits[0].MaximumSpeedMetersPerS != 4.2 {
+		t.Fatalf("split speeds = %v/%v, want enhanced 3.1/4.2",
+			activity.Splits[0].AverageSpeedMetersPerS, activity.Splits[0].MaximumSpeedMetersPerS)
 	}
 }
 
