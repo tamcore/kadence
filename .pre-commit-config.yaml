@@ -52,3 +52,12 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+
+      - id: gosec
+        name: gosec
+        # Same excludes as the CI gosec job (.github/workflows/security.yaml):
+        # G124 is an intentional, reviewed exception (see that file's comment).
+        entry: go tool gosec -quiet -exclude-generated -exclude=G124 ./...
+        language: system
+        types: [go]
+        pass_filenames: false
