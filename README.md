@@ -17,6 +17,9 @@ configurable — the default is endurance running.
 - **Shared corpus** — admins publish material (plans, coaching docs) visible to all.
 - **Document ingestion** — PDFs and images/screenshots → markdown → RAG.
 - **Topic guardrail** — a configurable classifier keeps chat on-domain.
+- **Scheduled coaching** — refine reminders, data checks, and monitors in a
+  chat-like flow, confirm the final instruction, then run them safely in the
+  background with optional lower-cost worker inference.
 - **Auth** — username/password with server sessions, plus **passkeys (WebAuthn)**;
   active-session management and per-user display/unit preferences.
 - **Security-first** — CSRF protection, secrets encrypted at rest (AES-256-GCM),

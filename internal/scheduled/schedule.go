@@ -17,10 +17,10 @@ var errNoOccurrence = errors.New("scheduled: no occurrence after time")
 // Schedule is either a future one-off instant or an RFC 5545 RRULE whose
 // DTSTART is interpreted in Timezone.
 type Schedule struct {
-	At       time.Time
-	DTStart  time.Time
-	RRULE    string
-	Timezone string
+	At       time.Time `json:"at,omitzero"`
+	DTStart  time.Time `json:"dtStart,omitzero"`
+	RRULE    string    `json:"rrule,omitempty"`
+	Timezone string    `json:"timezone"`
 }
 
 // ValidateTimezone loads an IANA location accepted for Scheduled tasks.

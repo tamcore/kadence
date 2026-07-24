@@ -75,6 +75,55 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_ALLOWED_TOPICS` | endurance defaults | Approved topics. |
 | `KADENCE_REFUSAL_MESSAGE` | coaching-only default | Reply sent when a message is off-topic. |
 
+## Scheduled tasks
+
+Scheduled is opt-in. The main chat model refines a user's request into a
+reviewable task definition; nothing runs until the user confirms that proposal.
+Static reminders execute without inference. Data and monitoring tasks gather
+evidence with an owner-scoped snapshot of their explicitly authorized MCP tools,
+then pass the bounded result back to the main model for the user-facing response.
+
+The worker provider overrides are resolved independently. An empty worker model,
+base URL, or API key inherits the corresponding `KADENCE_LLM_*` value, so an
+operator may move unattended gathering to a cheaper model, a different compatible
+endpoint, or both. Synthesis still uses the main model.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_SCHEDULED_ENABLED` | `false` | Enables the authenticated Scheduled API, navigation, and background worker. |
+| `KADENCE_SCHEDULED_WORKER_MODEL` | (main model) | Model used for unattended evidence gathering and tool calls. |
+| `KADENCE_SCHEDULED_WORKER_BASE_URL` | (main base URL) | Compatible provider endpoint used by the worker. |
+| `KADENCE_SCHEDULED_WORKER_API_KEY` | (main key) | Worker provider API key. Keep it in a Secret. |
+| `KADENCE_SCHEDULED_WORKER_MAX_TOKENS` | `2048` | Maximum completion tokens for each worker request. Must be positive when enabled. |
+| `KADENCE_SCHEDULED_WORKER_TIMEOUT` | `300s` | Timeout for each worker gather request. Must be a positive Go duration. |
+| `KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS` | `16` | Maximum agentic gather/tool-loop iterations per occurrence. Must be positive. |
+| `KADENCE_SCHEDULED_WORKER_CONCURRENCY` | `1` | Maximum occurrences executed concurrently by each app replica. PostgreSQL claims prevent duplicate execution across replicas. |
+| `KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER` | `10` | Maximum active tasks per owner. Draft, paused, and terminal tasks do not consume the limit. |
+
+Recurring schedules use an IANA timezone plus an RFC 5545 `DTSTART`/`RRULE` and
+must be at least one hour apart. A missed recurring occurrence coalesces to one
+catch-up run, then the task advances to the next future occurrence. A task may
+deliver after every run or only when monitoring data changes. Initial behavior can
+wait, deliver a preview, or establish a quiet monitoring baseline.
+
+Task states are `draft`, `active`, `paused`, `completed`, `failed`, and `deleted`.
+Runs are immutable records in `pending`, `running`, `no_change`, `delivered`,
+`completed`, or `failed`. Once an occurrence starts, Kadence never replays it
+automatically after a timeout, provider error, or process loss; the user may
+explicitly run the task again. Missing authorized tools pause a task immediately.
+Other failures increment the consecutive-failure count: a one-off task becomes
+`failed`, while a recurring task pauses after three consecutive failures. A
+successful run resets that count.
+
+Stale running occurrences are recovered only after the worker gather timeout plus
+the primary `KADENCE_LLM_TIMEOUT` plus 30 seconds (10 minutes 30 seconds with
+the defaults), and recovery follows the same failure policy rather than replaying
+the occurrence. Quiet `no_change` run rows are deleted after 30 days; delivered,
+completed, and failed audit rows are retained while the task exists. Deleting a
+linked Scheduled conversation pauses its live task and retains the conversation
+and audit history. Deleting a task soft-deletes the task while preserving its
+linked conversation and immutable run audit records.
+
 ## Embeddings & RAG
 
 | Variable | Default | Purpose |
@@ -208,6 +257,8 @@ complete, unchanged file successfully.
 6. A `KADENCE_FIT_ROUTE_<N>_*` group is partial, has an invalid scope or prefixed
    download-tool name, or duplicates another route's MCP server/scope.
 7. At least one FIT route is configured and `KADENCE_FIT_MAX_BYTES` is not positive.
+8. Scheduled is enabled without a primary `KADENCE_LLM_API_KEY`, or any Scheduled
+   worker budget/concurrency/active-task limit is not positive.
 
 Passkeys additionally require `KADENCE_WEBAUTHN_RP_ID` **and** `KADENCE_TRUSTED_ORIGINS`
 **and** a valid 32-byte `KADENCE_ENCRYPTION_KEY`; if the RP ID is set without the
@@ -220,6 +271,7 @@ others, startup fails with a message naming what's missing.
 | Chat | `KADENCE_LLM_API_KEY` set |
 | RAG memory | `KADENCE_EMBED_API_KEY` set |
 | Guardrail | `KADENCE_GUARDRAIL_ENABLED=true` |
+| Scheduled tasks | `KADENCE_SCHEDULED_ENABLED=true` + `KADENCE_LLM_API_KEY` |
 | Passkeys | `KADENCE_WEBAUTHN_RP_ID` + `KADENCE_TRUSTED_ORIGINS` + 32-byte `KADENCE_ENCRYPTION_KEY` |
 | User-defined MCP | `KADENCE_USER_MCP_ALLOWED_HOSTS` + 32-byte `KADENCE_ENCRYPTION_KEY` |
 | Rich ingestion | `KADENCE_MARKITDOWN_URL` set (else PDF text fast-path only) |

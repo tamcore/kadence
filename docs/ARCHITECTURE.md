@@ -21,6 +21,7 @@ internal/
   fit/               bounded FIT activity decoding (summary + splits, no GPS records)
   secret/            credential broker — one-time placeholder tokens, never logs secrets
   chat/              per-turn orchestration: guardrail → RAG → provider stream → tool loop
+  scheduled/         conversational task compiler, recurrence engine, worker + executor
   rag/               pgvector retrieval (per-user private ∪ admin public corpus)
   ingest/            document extraction pipeline (PDF fallback + markitdown-mcp)
   reindex/           background re-embed worker when the embedding model changes
@@ -65,6 +66,54 @@ Each turn runs:
 4. **Persist + embed** — the turn is stored and embedded back into RAG.
 
 Responses stream to the browser as Server-Sent Events (`ChatEvent` JSON).
+
+## Scheduled pipeline (`scheduled/`)
+
+Scheduled uses a separate owner-scoped conversation kind and a confirm-before-run
+state machine:
+
+1. The main model receives the complete bounded definition thread and either asks
+   one structured clarification question or returns a complete proposal.
+2. Each new answer atomically invalidates the prior proposal. Confirmation uses
+   the proposal version as a compare-and-swap, so stale tabs cannot activate an
+   older definition.
+3. Confirmed one-off or RFC 5545 recurring tasks become due in PostgreSQL.
+   Every app replica polls, but row-locked occurrence claims and unique occurrence
+   keys provide cross-replica at-most-once execution.
+4. Static reminders persist their fixed message without provider inference.
+   Data/monitoring tasks create a fresh immutable MCP snapshot for the task owner,
+   intersect it with the exact confirmed tool names, and gather bounded evidence
+   with the worker model. The main model synthesizes that data into the delivered
+   result.
+5. The run transition, result message, unread marker, monitoring state, and next
+   occurrence are committed atomically.
+
+Task definitions, runs, unread state, and MCP visibility are scoped by `user_id`.
+Task states are `draft`, `active`, `paused`, `completed`, `failed`, and `deleted`;
+the immutable run states are `pending`, `running`, `no_change`, `delivered`,
+`completed`, and `failed`. Recurring schedules coalesce missed occurrences into
+one catch-up run before advancing to the next future occurrence. Claiming clears
+the next due time and records a unique running occurrence, so a timeout, provider
+error, or process loss never automatically replays an occurrence. A user can
+explicitly run the task again instead.
+
+A missing confirmed tool pauses its task immediately. Other execution failures
+increment a consecutive-failure count; one-off tasks become `failed`, while
+recurring tasks pause after three consecutive failures. Successful runs reset that
+count. Deleting a linked Scheduled conversation pauses its live task and retains
+the conversation and immutable audit history. Deleting a task is a soft delete:
+its linked conversation and run records remain intact.
+
+There is no global in-memory task registry. The list API is bounded and
+priority-paginated (active, unread, paused/draft, then terminal), and definition
+messages carry a separate persistence purpose so frequent deliveries cannot evict
+compiler context. The UI supports draft replay, pause/resume, run-now, deletion,
+and readback of immutable run history.
+
+The compiler and result synthesis use the main provider. Evidence gathering can
+use independently configured worker model/base URL/key overrides, including a
+cheaper model or another compatible endpoint. Provider and MCP boundaries remain
+ordinary HTTP; the runtime has no Kubernetes dependency.
 
 ## MCP orchestration (`mcp/`)
 

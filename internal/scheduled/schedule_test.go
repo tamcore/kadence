@@ -1,6 +1,7 @@
 package scheduled_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -235,6 +236,55 @@ func TestScheduleAcceptsRRulePrefix(t *testing.T) {
 	spec := scheduled.Schedule{DTStart: now, RRULE: "RRULE:FREQ=DAILY;COUNT=1", Timezone: timezoneUTC}
 	if err := spec.Validate(now); err != nil {
 		t.Fatalf("Validate with RRULE prefix: %v", err)
+	}
+}
+
+func TestScheduleJSONOmitsUnusedRepresentation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2040, 1, 2, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		schedule   scheduled.Schedule
+		wantKeys   []string
+		unwantKeys []string
+	}{
+		{
+			name:       "one off",
+			schedule:   scheduled.Schedule{At: now, Timezone: timezoneUTC},
+			wantKeys:   []string{"at", "timezone"},
+			unwantKeys: []string{"dtStart", "rrule", "At", "DTStart", "RRULE", "Timezone"},
+		},
+		{
+			name: "recurring",
+			schedule: scheduled.Schedule{
+				DTStart:  now,
+				RRULE:    rruleDaily,
+				Timezone: timezoneUTC,
+			},
+			wantKeys:   []string{"dtStart", "rrule", "timezone"},
+			unwantKeys: []string{"at", "At", "DTStart", "RRULE", "Timezone"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tc.schedule)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatalf("Unmarshal(%s) error = %v", encoded, err)
+			}
+			for _, key := range tc.wantKeys {
+				if _, ok := fields[key]; !ok {
+					t.Errorf("Marshal() = %s, missing key %q", encoded, key)
+				}
+			}
+			for _, key := range tc.unwantKeys {
+				if _, ok := fields[key]; ok {
+					t.Errorf("Marshal() = %s, unexpected key %q", encoded, key)
+				}
+			}
+		})
 	}
 }
 

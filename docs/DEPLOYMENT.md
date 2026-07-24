@@ -145,6 +145,48 @@ Like `mcp.basicAuth`, set `markitdown.basicAuth.password` to a stable value unde
 `helm template | kubectl apply` — otherwise the password auto-generates on every
 deploy and the app and markitdown sidecar disagree on credentials until pods restart.
 
+## Scheduled tasks
+
+Scheduled is disabled by default. Enable it through the chart's existing
+environment maps:
+
+```yaml
+config:
+  KADENCE_SCHEDULED_ENABLED: true
+  KADENCE_SCHEDULED_WORKER_MODEL: economical-worker
+  KADENCE_SCHEDULED_WORKER_BASE_URL: https://compatible.example.com/v1
+  KADENCE_SCHEDULED_WORKER_MAX_TOKENS: 2048
+  KADENCE_SCHEDULED_WORKER_TIMEOUT: 300s
+  KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS: 16
+  KADENCE_SCHEDULED_WORKER_CONCURRENCY: 1
+  KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER: 10
+
+secrets:
+  KADENCE_SCHEDULED_WORKER_API_KEY: replace-me
+```
+
+The worker model/base URL/key are optional and independently inherit the main
+`KADENCE_LLM_*` values when omitted. Keep the worker key under `secrets`; the
+chart renders it only in the app Secret, never the ConfigMap.
+
+Every app replica runs a worker. `KADENCE_SCHEDULED_WORKER_CONCURRENCY` is a
+per-replica bound, while PostgreSQL row claims prevent two replicas from executing
+the same occurrence. Size provider quotas for `replicaCount × concurrency`.
+The default `terminationGracePeriodSeconds: 635` covers the default 300-second
+gather timeout, 300-second primary synthesis timeout, 30-second finalization
+margin, and five seconds of shutdown headroom. If either timeout is overridden,
+set `terminationGracePeriodSeconds` to at least
+`KADENCE_SCHEDULED_WORKER_TIMEOUT + KADENCE_LLM_TIMEOUT + 35s`. A replacement
+replica recovers a stale run only after the gather timeout plus the primary timeout
+plus 30 seconds; it records the interruption under the normal failure policy and
+does not replay the started occurrence. Migration 00015 classifies definition and
+delivery messages separately, including data written before that migration.
+
+Users can activate at most `KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER` tasks. Missing
+confirmed MCP tools or repeated execution failures pause a task for review.
+`no_change` monitoring audit rows expire after 30 days; visible results and other
+run audit records remain in PostgreSQL.
+
 ## Ingress & TLS
 
 The chart renders an nginx `Ingress` with cert-manager annotations (e.g.

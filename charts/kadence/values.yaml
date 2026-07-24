@@ -16,17 +16,14 @@ fullnameOverride: ""
 
 replicaCount: 2
 
-# terminationGracePeriodSeconds must cover the app's shutdown drain window
-# (in-flight SSE chat streams can run up to KADENCE_LLM_TIMEOUT, currently
-# bounded by shutdownTimeout=310s in cmd/server/serve/serve.go) PLUS the
-# subsequent background-goroutine drain (goroutineDrainTimeout=15s) PLUS the
-# final health-listener shutdown that runs after both of those complete —
-# 310 + 15 = 325s worst case before the health listener even starts closing.
-# 310 alone left zero margin: the kubelet would SIGKILL mid-drain the moment
-# the main server used its full budget. 335s gives ~10s of headroom for the
-# health listener's own (normally near-instant) shutdown. Only applied to
+# terminationGracePeriodSeconds must cover the app's shutdown drain window.
+# When Scheduled is enabled, that includes the longest worker occurrence:
+# KADENCE_SCHEDULED_WORKER_TIMEOUT (300s by default) + the primary
+# KADENCE_LLM_TIMEOUT (300s by default) + its 30s finalization margin. The
+# 635s default also leaves 5s of shutdown headroom. If either timeout is
+# raised, increase this value to their sum plus 35 seconds. Only applied to
 # the app Deployment (not sidecars).
-terminationGracePeriodSeconds: 335
+terminationGracePeriodSeconds: 635
 
 podDisruptionBudget:
   enabled: true
@@ -115,6 +112,18 @@ config:
   KADENCE_ENV: production
   KADENCE_LLM_BASE_URL: ""
   KADENCE_LLM_MODEL: ""
+  # Scheduled is opt-in. Definition/refinement always uses the main model.
+  # Unattended data gathering may use a cheaper compatible provider through
+  # the optional worker overrides below; empty overrides fall
+  # back independently to KADENCE_LLM_MODEL/BASE_URL and the main API key.
+  KADENCE_SCHEDULED_ENABLED: false
+  KADENCE_SCHEDULED_WORKER_MODEL: ""
+  KADENCE_SCHEDULED_WORKER_BASE_URL: ""
+  KADENCE_SCHEDULED_WORKER_MAX_TOKENS: 2048
+  KADENCE_SCHEDULED_WORKER_TIMEOUT: 300s
+  KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS: 16
+  KADENCE_SCHEDULED_WORKER_CONCURRENCY: 1
+  KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER: 10
   KADENCE_EMBED_BASE_URL: ""
   # Changing KADENCE_EMBED_MODEL re-embeds existing RAG chunks in place (no data
   # loss): on startup the app tags any untagged chunks as the current model, then
@@ -143,6 +152,9 @@ config:
 secrets:
   KADENCE_CSRF_SECRET: ""
   KADENCE_LLM_API_KEY: ""
+  # Optional Scheduled worker-provider key. Empty falls back to
+  # KADENCE_LLM_API_KEY without copying that secret into the ConfigMap.
+  KADENCE_SCHEDULED_WORKER_API_KEY: ""
   KADENCE_EMBED_API_KEY: ""
   KADENCE_ADMIN_PASSWORD: ""
   # KADENCE_ENCRYPTION_KEY: "" # base64-encoded 32-byte key; generate with:
