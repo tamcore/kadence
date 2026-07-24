@@ -17,7 +17,9 @@ describe('auth store', () => {
 			displayName: 'Alice',
 			unitSystem: 'metric',
 			location: '',
-			aboutMe: ''
+			aboutMe: '',
+			timezone: 'UTC',
+			scheduledEnabled: false
 		});
 		expect(get(currentUser)?.username).toBe('alice');
 		expect(get(isAuthenticated)).toBe(true);
@@ -33,7 +35,9 @@ describe('auth store', () => {
 			displayName: 'Alice',
 			unitSystem: 'metric',
 			location: '',
-			aboutMe: ''
+			aboutMe: '',
+			timezone: 'UTC',
+			scheduledEnabled: false
 		});
 		clearAuth();
 		expect(get(currentUser)).toBeNull();

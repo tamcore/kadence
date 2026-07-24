@@ -69,7 +69,9 @@ describe('central 401 handling', () => {
 			displayName: 'Alice',
 			unitSystem: 'metric',
 			location: '',
-			aboutMe: ''
+			aboutMe: '',
+			timezone: 'UTC',
+			scheduledEnabled: false
 		});
 		vi.stubGlobal('fetch', mockFetch(401, { data: null, error: 'unauthorized' }));
 
@@ -90,7 +92,9 @@ describe('central 401 handling', () => {
 			displayName: 'Alice',
 			unitSystem: 'metric',
 			location: '',
-			aboutMe: ''
+			aboutMe: '',
+			timezone: 'UTC',
+			scheduledEnabled: false
 		});
 		vi.stubGlobal('fetch', mockFetch(500, { data: null, error: 'boom' }));
 

@@ -30,6 +30,14 @@ vi.mock('$lib/stores/chat', async () => {
 	};
 });
 
+vi.mock('$lib/stores/scheduled', async () => {
+	const { writable } = await import('svelte/store');
+	return {
+		scheduledUnreadCount: writable(0),
+		refreshScheduled: vi.fn().mockResolvedValue(undefined)
+	};
+});
+
 vi.mock('$lib/stores/auth', async () => {
 	const { writable } = await import('svelte/store');
 	return {
@@ -50,6 +58,8 @@ vi.mock('$lib/api/client', () => ({
 
 import Sidebar from './Sidebar.svelte';
 import { conversations, conversationsRefreshError } from '$lib/stores/chat';
+import { currentUser } from '$lib/stores/auth';
+import { scheduledUnreadCount } from '$lib/stores/scheduled';
 import { page } from '$app/stores';
 
 afterEach(() => {
@@ -60,9 +70,52 @@ afterEach(() => {
 		params: { id: undefined },
 		url: { pathname: '/chat' }
 	});
+	(currentUser as unknown as { set: (v: unknown) => void }).set({
+		username: 'alice',
+		role: 'member',
+		scheduledEnabled: false
+	});
+	(scheduledUnreadCount as unknown as { set: (v: number) => void }).set(0);
 });
 
 describe('Sidebar', () => {
+	it('shows Scheduled only when enabled and marks descendant routes active', () => {
+		(currentUser as unknown as { set: (v: unknown) => void }).set({
+			username: 'alice',
+			role: 'member',
+			scheduledEnabled: true
+		});
+		(page as unknown as { set: (v: unknown) => void }).set({
+			params: { id: 'task-1' },
+			url: { pathname: '/scheduled/task-1' }
+		});
+		render(Sidebar, { props: {} });
+
+		const link = screen.getByRole('link', { name: 'Scheduled' });
+		expect(link).toHaveClass('active');
+		expect(link).toHaveAttribute('aria-current', 'page');
+	});
+
+	it('shows unread Scheduled activity and hides the entry when disabled', () => {
+		(currentUser as unknown as { set: (v: unknown) => void }).set({
+			username: 'alice',
+			role: 'member',
+			scheduledEnabled: true
+		});
+		(scheduledUnreadCount as unknown as { set: (v: number) => void }).set(4);
+		const { unmount } = render(Sidebar, { props: {} });
+		expect(screen.getByLabelText('4 unread scheduled results')).toBeInTheDocument();
+		unmount();
+
+		(currentUser as unknown as { set: (v: unknown) => void }).set({
+			username: 'alice',
+			role: 'member',
+			scheduledEnabled: false
+		});
+		render(Sidebar, { props: {} });
+		expect(screen.queryByRole('link', { name: /scheduled/i })).not.toBeInTheDocument();
+	});
+
 	it('shows empty state text when there are no conversations', () => {
 		render(Sidebar, { props: {} });
 		expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();

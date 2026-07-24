@@ -11,6 +11,7 @@
 		renameConversation
 	} from '$lib/stores/chat';
 	import { clearAuth, currentUser, isAdmin } from '$lib/stores/auth';
+	import { refreshScheduled, scheduledUnreadCount } from '$lib/stores/scheduled';
 	import { closeSidebar } from '$lib/stores/ui';
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -20,7 +21,10 @@
 
 	// The sidebar is global, so load history on every shell route (incl. home)
 	// — the start page greets with the conversation history.
-	onMount(refreshConversations);
+	onMount(() => {
+		void refreshConversations();
+		if ($currentUser?.scheduledEnabled) void refreshScheduled();
+	});
 
 	let deleteTargetId = $state<string | null>(null);
 	let renameTargetId = $state<string | null>(null);
@@ -127,6 +131,22 @@
 	</div>
 
 	<nav class="links">
+		{#if $currentUser?.scheduledEnabled}
+			<a
+				href="/scheduled"
+				class:active={$page.url.pathname.startsWith('/scheduled')}
+				aria-current={$page.url.pathname.startsWith('/scheduled') ? 'page' : undefined}
+				onclick={closeSidebar}
+			>
+				<span>Scheduled</span>
+				{#if $scheduledUnreadCount > 0}
+					<span
+						class="unread"
+						aria-label={`${$scheduledUnreadCount} unread scheduled results`}
+					>{$scheduledUnreadCount}</span>
+				{/if}
+			</a>
+		{/if}
 		<a href="/documents" onclick={closeSidebar}>Documents</a>
 		<a href="/context" onclick={closeSidebar}>Context</a>
 		<a href="/mcp" onclick={closeSidebar}>MCP</a>
@@ -270,9 +290,26 @@
 		padding-top: 8px;
 	}
 	.links a {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		text-decoration: none;
 		color: var(--text);
 		padding: 6px 4px;
+	}
+	.links a.active {
+		color: var(--accent);
+		font-weight: 600;
+	}
+	.unread {
+		display: inline-grid;
+		min-width: 1.35rem;
+		height: 1.35rem;
+		place-items: center;
+		border-radius: 999px;
+		background: var(--accent);
+		color: #fff;
+		font: 600 0.72rem/1 ui-monospace, SFMono-Regular, Consolas, monospace;
 	}
 	.footer {
 		display: flex;

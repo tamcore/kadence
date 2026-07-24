@@ -83,6 +83,14 @@ type ScheduledTaskRun struct {
 	CreatedAt     time.Time
 }
 
+// ScheduledTaskRunSummary carries the bounded per-task activity needed by
+// task lists without fetching every task's full run history.
+type ScheduledTaskRunSummary struct {
+	TaskID      string
+	UnreadCount int
+	RecentRun   *ScheduledTaskRun
+}
+
 // ClaimedScheduledTask is a task and its atomically-created running occurrence.
 type ClaimedScheduledTask struct {
 	Task     ScheduledTask

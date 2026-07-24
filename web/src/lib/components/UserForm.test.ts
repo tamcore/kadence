@@ -22,7 +22,9 @@ const existingUser = {
 	displayName: 'Bob',
 	unitSystem: 'metric' as const,
 	location: '',
-	aboutMe: ''
+	aboutMe: '',
+	timezone: 'UTC',
+	scheduledEnabled: false
 };
 
 afterEach(() => {

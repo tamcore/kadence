@@ -7,6 +7,7 @@ export interface ProfileInput {
 	unitSystem: 'metric' | 'imperial';
 	location?: string;
 	aboutMe?: string;
+	timezone: string;
 }
 
 export interface PasswordInput {

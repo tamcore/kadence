@@ -272,4 +272,31 @@ describe('/profile', () => {
 
 		expect(await screen.findByRole('alert')).toHaveTextContent('email already in use');
 	});
+
+	it('edits the IANA timezone preference through the shared profile update path', async () => {
+		listSessionsMock.mockResolvedValue([]);
+		listPasskeysMock.mockResolvedValue([]);
+		updateProfileMock.mockResolvedValueOnce({
+			id: 1,
+			username: 'u',
+			displayName: 'u',
+			email: 'u@example.com',
+			role: 'user',
+			unitSystem: 'metric',
+			timezone: 'America/New_York',
+			scheduledEnabled: true
+		});
+		render(Page);
+
+		await fireEvent.input(screen.getByLabelText(/^Timezone/), {
+			target: { value: 'America/New_York' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+
+		await waitFor(() =>
+			expect(updateProfileMock).toHaveBeenCalledWith(
+				expect.objectContaining({ timezone: 'America/New_York' })
+			)
+		);
+	});
 });

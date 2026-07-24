@@ -38,6 +38,8 @@ function testUser(overrides: Partial<User>): User {
 		unitSystem: 'metric',
 		location: '',
 		aboutMe: '',
+		timezone: 'UTC',
+		scheduledEnabled: false,
 		...overrides
 	};
 }

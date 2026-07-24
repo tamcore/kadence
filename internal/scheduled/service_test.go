@@ -3,6 +3,7 @@ package scheduled_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ const (
 	serviceTaskID         = "task-1"
 	serviceConversationID = "conv-1"
 	serviceCompiledPrompt = "prompt"
+	serviceUsernameAlice  = "alice"
 	serviceTimezoneBerlin = "Europe/Berlin"
 	serviceTimezoneUTC    = "UTC"
 )
@@ -37,10 +39,14 @@ func (f *serviceConversations) CreateWithKind(_ context.Context, userID int64, t
 }
 
 type serviceMessages struct {
-	messages  []model.Message
-	addErrAt  map[int]error
-	addCalls  int
-	listError error
+	messages   []model.Message
+	deliveries int
+	addErrAt   map[int]error
+	addCalls   int
+	listError  error
+	listLimit  int
+	listCalls  int
+	listErrAt  map[int]error
 }
 
 func (f *serviceMessages) Add(_ context.Context, conversationID, role, content string) (model.Message, error) {
@@ -52,11 +58,29 @@ func (f *serviceMessages) Add(_ context.Context, conversationID, role, content s
 	f.messages = append(f.messages, m)
 	return m, nil
 }
+func (f *serviceMessages) AddDefinition(ctx context.Context, conversationID, role, content string) (model.Message, error) {
+	return f.Add(ctx, conversationID, role, content)
+}
 func (f *serviceMessages) ListByConversation(context.Context, string) ([]model.Message, error) {
 	if f.listError != nil {
 		return nil, f.listError
 	}
 	return append([]model.Message(nil), f.messages...), nil
+}
+func (f *serviceMessages) ListRecentByConversation(_ context.Context, _ string, limit int) ([]model.Message, error) {
+	f.listCalls++
+	f.listLimit = limit
+	if err := f.listErrAt[f.listCalls]; err != nil {
+		return nil, err
+	}
+	if f.listError != nil {
+		return nil, f.listError
+	}
+	start := max(len(f.messages)-limit, 0)
+	return append([]model.Message(nil), f.messages[start:]...), nil
+}
+func (f *serviceMessages) ListRecentDefinitionByConversation(ctx context.Context, conversationID string, limit int) ([]model.Message, error) {
+	return f.ListRecentByConversation(ctx, conversationID, limit)
 }
 
 type serviceTasks struct {
@@ -75,7 +99,16 @@ type serviceTasks struct {
 	saveError      error
 	confirmError   error
 	runNowError    error
+	summaryError   error
+	summaries      []model.ScheduledTaskRunSummary
+	tasks          []model.ScheduledTask
+	unreadCount    int
+	listOffset     int
+	listLimit      int
+	summaryOffset  int
+	summaryLimit   int
 	beginCalls     int
+	beginVersion   int
 	saveVersion    int
 	confirmVersion int
 	pauseVersion   int
@@ -98,17 +131,36 @@ func (f *serviceTasks) GetByID(context.Context, string, int64) (model.ScheduledT
 	}
 	return f.task, nil
 }
-func (f *serviceTasks) ListByUser(context.Context, int64) ([]model.ScheduledTask, error) {
+func (f *serviceTasks) ListByUser(_ context.Context, _ int64, offset, limit int) ([]model.ScheduledTask, error) {
 	if f.listError != nil {
 		return nil, f.listError
 	}
+	f.listOffset, f.listLimit = offset, limit
+	if f.tasks != nil {
+		end := min(offset+limit, len(f.tasks))
+		if offset >= end {
+			return nil, nil
+		}
+		return append([]model.ScheduledTask(nil), f.tasks[offset:end]...), nil
+	}
 	return []model.ScheduledTask{f.task}, nil
 }
-func (f *serviceTasks) BeginDraftRevision(_ context.Context, _ string, userID int64) (model.ScheduledTask, error) {
+func (f *serviceTasks) ListRunSummaries(_ context.Context, _ int64, offset, limit int) ([]model.ScheduledTaskRunSummary, error) {
+	if f.summaryError != nil {
+		return nil, f.summaryError
+	}
+	f.summaryOffset, f.summaryLimit = offset, limit
+	return append([]model.ScheduledTaskRunSummary(nil), f.summaries...), nil
+}
+func (f *serviceTasks) BeginDraftRevision(_ context.Context, _ string, userID int64, expectedVersion int) (model.ScheduledTask, error) {
 	f.ownerIDs = append(f.ownerIDs, userID)
 	f.beginCalls++
+	f.beginVersion = expectedVersion
 	if f.beginError != nil {
 		return model.ScheduledTask{}, f.beginError
+	}
+	if f.task.Version != expectedVersion {
+		return model.ScheduledTask{}, store.ErrStaleScheduledProposal
 	}
 	if f.task.State != model.ScheduledTaskStateDraft && f.task.State != model.ScheduledTaskStateActive && f.task.State != model.ScheduledTaskStatePaused {
 		return model.ScheduledTask{}, store.ErrInvalidScheduledTaskState
@@ -196,7 +248,7 @@ func (f *serviceTasks) UnreadCount(context.Context, int64) (int, error) {
 	if f.unreadError != nil {
 		return 0, f.unreadError
 	}
-	return 0, nil
+	return f.unreadCount, nil
 }
 
 type serviceCompiler struct {
@@ -228,7 +280,7 @@ func TestServiceCreatesDraftBeforeRefinementAndConfirmsPersistedProposal(t *test
 	tasks := &serviceTasks{}
 	compiler := &serviceCompiler{proposal: scheduled.Proposal{Version: 1, Name: "Water", TaskKind: scheduled.TaskKindReminder, CompiledPrompt: "Remind the user to drink water", ExecutionMode: scheduled.ExecutionModeStatic, Timezone: serviceTimezoneBerlin, Schedule: scheduled.Schedule{At: now.Add(time.Hour), Timezone: serviceTimezoneBerlin}, DeliveryPolicy: scheduled.DeliveryPolicyAlways, InitialRun: scheduled.InitialRunWait, StaticMessage: "Drink water."}}
 	svc := scheduled.NewService(scheduled.ServiceDeps{Conversations: conversations, Messages: messages, Tasks: tasks, Compiler: compiler, Now: func() time.Time { return now }})
-	result, err := svc.Create(context.Background(), scheduled.Actor{ID: 7, Username: "alice", Timezone: serviceTimezoneBerlin}, "remind me")
+	result, err := svc.Create(context.Background(), scheduled.Actor{ID: 7, Username: serviceUsernameAlice, Timezone: serviceTimezoneBerlin}, "remind me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,6 +302,91 @@ func TestServiceCreatesDraftBeforeRefinementAndConfirmsPersistedProposal(t *test
 	}
 }
 
+func TestServicePersistsAndRestoresStructuredDefinitionQuestion(t *testing.T) {
+	question := &scheduled.QuestionCard{
+		ID: "topics", Prompt: "Which topics?", Kind: scheduled.QuestionKindMultiSelect,
+		Options:  []scheduled.QuestionOption{{Label: "Training", Value: "training"}},
+		Optional: true,
+	}
+	messages := &serviceMessages{}
+	tasks := &serviceTasks{task: model.ScheduledTask{
+		ID: serviceTaskID, UserID: 7, ConversationID: serviceConversationID,
+		State: model.ScheduledTaskStateDraft, Timezone: serviceTimezoneUTC,
+	}}
+	compiler := &serviceCompiler{refinement: &scheduled.Refinement{
+		Text: "Choose what matters.", Question: question,
+	}}
+	svc := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: messages,
+		Tasks: tasks, Compiler: compiler,
+	})
+
+	if _, err := svc.Refine(context.Background(), scheduled.Actor{ID: 7}, serviceTaskID, "Build a brief"); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages.messages) != 2 || !strings.Contains(messages.messages[1].Content, `"id":"topics"`) {
+		t.Fatalf("structured question was not persisted: %+v", messages.messages)
+	}
+	detail, err := svc.Detail(context.Background(), 7, serviceTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.DefinitionMessages) != 2 ||
+		detail.DefinitionMessages[0].Role != model.MsgRoleUser ||
+		detail.DefinitionMessages[0].Text != "Build a brief" ||
+		detail.DefinitionMessages[1].Text != "Choose what matters." ||
+		detail.DefinitionMessages[1].Question == nil ||
+		detail.DefinitionMessages[1].Question.ID != "topics" {
+		t.Fatalf("definition messages = %+v", detail.DefinitionMessages)
+	}
+	if messages.listLimit != 200 {
+		t.Fatalf("definition history limit = %d, want 200", messages.listLimit)
+	}
+}
+
+func TestServiceDefinitionMessageAuditVariants(t *testing.T) {
+	const (
+		validProposal = `Visible proposal.` + "\n\nScheduled proposal audit: " + `{"version":1}`
+		badQuestion   = `Broken question.` + "\n\nScheduled question audit: " + `{`
+		badProposal   = `Broken proposal.` + "\n\nScheduled proposal audit: " + `{`
+	)
+	messages := &serviceMessages{messages: []model.Message{
+		{Role: model.MsgRoleSystem, Content: "hidden"},
+		{Role: model.MsgRoleAssistant, Content: validProposal},
+		{Role: model.MsgRoleAssistant, Content: badQuestion},
+		{Role: model.MsgRoleAssistant, Content: badProposal},
+	}}
+	tasks := &serviceTasks{task: model.ScheduledTask{
+		ID: serviceTaskID, UserID: 7, ConversationID: serviceConversationID,
+		State: model.ScheduledTaskStateDraft, Timezone: serviceTimezoneUTC,
+	}}
+	svc := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: messages,
+		Tasks: tasks, Compiler: &serviceCompiler{},
+	})
+
+	detail, err := svc.Detail(context.Background(), 7, serviceTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.DefinitionMessages) != 3 ||
+		detail.DefinitionMessages[0].Text != "Visible proposal." ||
+		detail.DefinitionMessages[1].Text != badQuestion ||
+		detail.DefinitionMessages[2].Text != badProposal {
+		t.Fatalf("definition messages = %+v", detail.DefinitionMessages)
+	}
+
+	plainCompiler := &serviceCompiler{refinement: &scheduled.Refinement{Text: "Plain response."}}
+	svc = scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: &serviceMessages{},
+		Tasks: tasks, Compiler: plainCompiler,
+	})
+	result, err := svc.Refine(context.Background(), scheduled.Actor{ID: 7}, serviceTaskID, "Continue")
+	if err != nil || result.Refinement.Text != "Plain response." {
+		t.Fatalf("plain refinement = %+v, %v", result, err)
+	}
+}
+
 func TestServiceLifecycleControlsAreOwnerScopedAtStoreBoundary(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	tasks := &serviceTasks{task: model.ScheduledTask{
@@ -258,10 +395,18 @@ func TestServiceLifecycleControlsAreOwnerScopedAtStoreBoundary(t *testing.T) {
 		Timezone: serviceTimezoneUTC, OneOffAt: new(now.Add(time.Hour)), ExecutionMode: string(scheduled.ExecutionModeStatic),
 		DeliveryPolicy: string(scheduled.DeliveryPolicyAlways), InitialRun: string(scheduled.InitialRunWait),
 	}}
+	recent := model.ScheduledTaskRun{ID: 17, TaskID: serviceTaskID, State: model.ScheduledTaskRunStateDelivered}
+	tasks.summaries = []model.ScheduledTaskRunSummary{{
+		TaskID: serviceTaskID, UnreadCount: 2, RecentRun: &recent,
+	}}
 	svc := scheduled.NewService(scheduled.ServiceDeps{Conversations: &serviceConversations{}, Messages: &serviceMessages{}, Tasks: tasks, Compiler: &serviceCompiler{}, Now: func() time.Time { return now }})
-	listed, err := svc.List(context.Background(), 7)
+	listed, err := svc.List(context.Background(), 7, 0)
 	if err != nil || len(listed.Tasks) != 1 {
 		t.Fatalf("list = %+v, %v", listed, err)
+	}
+	if listed.RunSummaries[serviceTaskID].UnreadCount != 2 ||
+		listed.RunSummaries[serviceTaskID].RecentRun.ID != 17 {
+		t.Fatalf("list summaries = %+v", listed.RunSummaries)
 	}
 	detail, err := svc.Detail(context.Background(), 7, serviceTaskID)
 	if err != nil || detail.Task.ID != serviceTaskID {
@@ -287,9 +432,72 @@ func TestServiceLifecycleControlsAreOwnerScopedAtStoreBoundary(t *testing.T) {
 	}
 }
 
+func TestServiceScheduledListPaginationIsBounded(t *testing.T) {
+	tasks := &serviceTasks{unreadCount: 7}
+	for i := range 101 {
+		tasks.tasks = append(tasks.tasks, model.ScheduledTask{ID: fmt.Sprintf("task-%03d", i)})
+	}
+	svc := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: &serviceMessages{},
+		Tasks: tasks, Compiler: &serviceCompiler{},
+	})
+
+	first, err := svc.List(context.Background(), 7, 0)
+	if err != nil || len(first.Tasks) != 100 || !first.HasMore || first.NextOffset != 100 ||
+		first.Unread != 7 || tasks.listLimit != 101 || tasks.summaryLimit != 100 {
+		t.Fatalf("first page = %+v, tasks=%+v, err=%v", first, tasks, err)
+	}
+	second, err := svc.List(context.Background(), 7, first.NextOffset)
+	if err != nil || len(second.Tasks) != 1 || second.HasMore || second.NextOffset != 0 ||
+		tasks.listOffset != 100 || tasks.summaryOffset != 100 {
+		t.Fatalf("second page = %+v, tasks=%+v, err=%v", second, tasks, err)
+	}
+	if _, err := svc.List(context.Background(), 7, -1); err == nil {
+		t.Fatal("negative offset succeeded")
+	}
+}
+
+func TestServiceRejectsDefinitionBeforeFullContextWouldBeTruncated(t *testing.T) {
+	messages := &serviceMessages{deliveries: 198}
+	for i := range 199 {
+		messages.messages = append(messages.messages, model.Message{
+			Role: model.MsgRoleUser, Content: fmt.Sprintf("message-%03d", i),
+		})
+	}
+	tasks := &serviceTasks{task: model.ScheduledTask{
+		ID: serviceTaskID, UserID: 7, ConversationID: serviceConversationID,
+		State: model.ScheduledTaskStateDraft, Timezone: serviceTimezoneUTC,
+	}}
+	svc := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: messages,
+		Tasks: tasks, Compiler: &serviceCompiler{},
+	})
+
+	if _, err := svc.Refine(context.Background(), scheduled.Actor{ID: 7}, serviceTaskID, "one more"); !errors.Is(err, scheduled.ErrDefinitionLimit) {
+		t.Fatalf("limit error = %v", err)
+	}
+	if tasks.beginCalls != 0 || messages.addCalls != 0 || messages.listLimit != 201 {
+		t.Fatalf("limit mutated draft: tasks=%+v messages=%+v", tasks, messages)
+	}
+
+	messages.messages = messages.messages[:198]
+	result, err := svc.Refine(context.Background(), scheduled.Actor{ID: 7}, serviceTaskID, "final answer")
+	if err != nil || result.Refinement.Text == "" || len(messages.messages) != 200 {
+		t.Fatalf("last full-context turn = %+v, messages=%d, err=%v", result, len(messages.messages), err)
+	}
+
+	messages.messages = nil
+	tasks.task.Version = 0
+	result, err = svc.Refine(context.Background(), scheduled.Actor{ID: 7}, serviceTaskID, "edit after many deliveries")
+	if err != nil || result.Refinement.Text == "" || len(messages.messages) != 2 {
+		t.Fatalf("delivery-only history blocked refinement = %+v, definitions=%d deliveries=%d err=%v",
+			result, len(messages.messages), messages.deliveries, err)
+	}
+}
+
 func TestServiceDefinitionFailurePaths(t *testing.T) {
 	ctx := context.Background()
-	actor := scheduled.Actor{ID: 7, Username: "alice"}
+	actor := scheduled.Actor{ID: 7, Username: serviceUsernameAlice}
 	failure := errors.New("store unavailable")
 
 	t.Run("create rejects blank and missing dependencies", func(t *testing.T) {
@@ -343,6 +551,7 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 	}{
 		{name: "user message", messages: &serviceMessages{addErrAt: map[int]error{1: failure}}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}},
 		{name: "history", messages: &serviceMessages{listError: failure}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}},
+		{name: "history after user", messages: &serviceMessages{listErrAt: map[int]error{2: failure}}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}},
 		{name: "tools", messages: &serviceMessages{}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}, tools: func(context.Context, string) ([]provider.ToolDefinition, error) { return nil, failure }},
 		{name: "compiler", messages: &serviceMessages{}, tasks: &serviceTasks{}, compiler: &serviceCompiler{err: failure}},
 		{name: "assistant message", messages: &serviceMessages{addErrAt: map[int]error{2: failure}}, tasks: &serviceTasks{}, compiler: &serviceCompiler{}},
@@ -409,6 +618,26 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 	})
 }
 
+func TestServiceRefinePreflightAndStaleFailures(t *testing.T) {
+	ctx := context.Background()
+	actor := scheduled.Actor{ID: 7, Username: serviceUsernameAlice}
+	failure := errors.New("store unavailable")
+	tasks := &serviceTasks{getError: failure}
+	svc := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: &serviceMessages{},
+		Tasks: tasks, Compiler: &serviceCompiler{},
+	})
+
+	if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, failure) {
+		t.Fatalf("preflight get err=%v", err)
+	}
+	tasks.getError = nil
+	tasks.beginError = store.ErrStaleScheduledProposal
+	if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, scheduled.ErrStaleProposal) {
+		t.Fatalf("stale revision err=%v", err)
+	}
+}
+
 func TestServiceAllPublicMethodsRejectMissingDependencies(t *testing.T) {
 	ctx := context.Background()
 	svc := scheduled.NewService(scheduled.ServiceDeps{})
@@ -418,7 +647,7 @@ func TestServiceAllPublicMethodsRejectMissingDependencies(t *testing.T) {
 		call func() error
 	}{
 		{name: "confirm", call: func() error { _, err := svc.Confirm(ctx, actor, serviceTaskID, 1); return err }},
-		{name: "list", call: func() error { _, err := svc.List(ctx, actor.ID); return err }},
+		{name: "list", call: func() error { _, err := svc.List(ctx, actor.ID, 0); return err }},
 		{name: "detail", call: func() error { _, err := svc.Detail(ctx, actor.ID, serviceTaskID); return err }},
 		{name: "pause", call: func() error { _, err := svc.Pause(ctx, actor.ID, serviceTaskID); return err }},
 		{name: "resume", call: func() error { _, err := svc.Resume(ctx, actor.ID, serviceTaskID); return err }},
@@ -488,12 +717,17 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 	})
 	t.Run("list and detail return repository failures", func(t *testing.T) {
 		tasks := &serviceTasks{listError: failure}
-		if _, err := newService(tasks).List(ctx, 7); !errors.Is(err, failure) {
+		if _, err := newService(tasks).List(ctx, 7, 0); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
 		tasks.listError = nil
+		tasks.summaryError = failure
+		if _, err := newService(tasks).List(ctx, 7, 0); !errors.Is(err, failure) {
+			t.Fatal(err)
+		}
+		tasks.summaryError = nil
 		tasks.unreadError = failure
-		if _, err := newService(tasks).List(ctx, 7); !errors.Is(err, failure) {
+		if _, err := newService(tasks).List(ctx, 7, 0); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
 		tasks.unreadError = nil
@@ -505,6 +739,15 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 		tasks.task = base()
 		tasks.listRunsErr = failure
 		if _, err := newService(tasks).Detail(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
+			t.Fatal(err)
+		}
+		tasks.listRunsErr = nil
+		messages := &serviceMessages{listError: failure}
+		svc := scheduled.NewService(scheduled.ServiceDeps{
+			Conversations: &serviceConversations{}, Messages: messages,
+			Tasks: tasks, Compiler: &serviceCompiler{},
+		})
+		if _, err := svc.Detail(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
 	})

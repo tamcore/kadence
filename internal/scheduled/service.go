@@ -19,6 +19,7 @@ var (
 	ErrInvalidTransition = errors.New("scheduled: illegal task state transition")
 	ErrStaleProposal     = errors.New("scheduled: proposal version is stale or missing")
 	ErrRunInProgress     = errors.New("scheduled: task has a pending or running occurrence")
+	ErrDefinitionLimit   = errors.New("scheduled: definition refinement limit reached")
 )
 
 // ConversationStore is the narrow conversation persistence dependency needed
@@ -30,16 +31,16 @@ type ConversationStore interface {
 // MessageStore is the narrow message persistence dependency for definition
 // history. It deliberately does not expose tool-call persistence.
 type MessageStore interface {
-	Add(context.Context, string, string, string) (model.Message, error)
-	ListByConversation(context.Context, string) ([]model.Message, error)
+	AddDefinition(context.Context, string, string, string) (model.Message, error)
+	ListRecentDefinitionByConversation(context.Context, string, int) ([]model.Message, error)
 }
 
 // TaskStore keeps every lifecycle operation owner-scoped.
 type TaskStore interface {
 	Create(context.Context, model.ScheduledTask) (model.ScheduledTask, error)
 	GetByID(context.Context, string, int64) (model.ScheduledTask, error)
-	ListByUser(context.Context, int64) ([]model.ScheduledTask, error)
-	BeginDraftRevision(context.Context, string, int64) (model.ScheduledTask, error)
+	ListByUser(context.Context, int64, int, int) ([]model.ScheduledTask, error)
+	BeginDraftRevision(context.Context, string, int64, int) (model.ScheduledTask, error)
 	Pause(context.Context, string, int64, int) (model.ScheduledTask, error)
 	Resume(context.Context, string, int64, int, time.Time) (model.ScheduledTask, error)
 	SaveProposal(context.Context, model.ScheduledTask, int64, int) (model.ScheduledTask, error)
@@ -47,6 +48,7 @@ type TaskStore interface {
 	SoftDelete(context.Context, string, int64) error
 	RunNow(context.Context, int64, string, string, time.Time) (model.ScheduledTaskRun, error)
 	ListRuns(context.Context, string, int64) ([]model.ScheduledTaskRun, error)
+	ListRunSummaries(context.Context, int64, int, int) ([]model.ScheduledTaskRunSummary, error)
 	MarkRead(context.Context, string, int64) error
 	UnreadCount(context.Context, int64) (int, error)
 }
@@ -93,13 +95,23 @@ type DefinitionResult struct {
 }
 
 type Detail struct {
-	Task model.ScheduledTask
-	Runs []model.ScheduledTaskRun
+	Task               model.ScheduledTask
+	Runs               []model.ScheduledTaskRun
+	DefinitionMessages []DefinitionMessage
 }
 
 type ListResult struct {
-	Tasks  []model.ScheduledTask
-	Unread int
+	Tasks        []model.ScheduledTask
+	RunSummaries map[string]model.ScheduledTaskRunSummary
+	Unread       int
+	HasMore      bool
+	NextOffset   int
+}
+
+type DefinitionMessage struct {
+	Role     string
+	Text     string
+	Question *QuestionCard
 }
 
 // Create starts a separate Scheduled conversation and persists a valid draft
@@ -131,13 +143,26 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 	if err := s.ready(); err != nil {
 		return DefinitionResult{}, err
 	}
-	task, err := s.deps.Tasks.BeginDraftRevision(ctx, taskID, actor.ID)
+	task, err := s.deps.Tasks.GetByID(ctx, taskID, actor.ID)
+	if err != nil {
+		return DefinitionResult{}, err
+	}
+	history, err := s.deps.Messages.ListRecentDefinitionByConversation(ctx, task.ConversationID, definitionHistoryLimit+1)
+	if err != nil {
+		return DefinitionResult{}, fmt.Errorf("scheduled: load definition history: %w", err)
+	}
+	if len(history) > maxDefinitionMessagesBeforeTurn {
+		return DefinitionResult{}, ErrDefinitionLimit
+	}
+	task, err = s.deps.Tasks.BeginDraftRevision(ctx, taskID, actor.ID, task.Version)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrInvalidScheduledTaskState):
 			return DefinitionResult{}, ErrInvalidTransition
 		case errors.Is(err, store.ErrScheduledRunInProgress):
 			return DefinitionResult{}, ErrRunInProgress
+		case errors.Is(err, store.ErrStaleScheduledProposal):
+			return DefinitionResult{}, ErrStaleProposal
 		}
 		return DefinitionResult{}, err
 	}
@@ -146,10 +171,10 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 
 func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledTask, message string) (DefinitionResult, error) {
 	revision := task.Version
-	if _, err := s.deps.Messages.Add(ctx, task.ConversationID, model.MsgRoleUser, strings.TrimSpace(message)); err != nil {
+	if _, err := s.deps.Messages.AddDefinition(ctx, task.ConversationID, model.MsgRoleUser, strings.TrimSpace(message)); err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: save user message: %w", err)
 	}
-	history, err := s.deps.Messages.ListByConversation(ctx, task.ConversationID)
+	history, err := s.deps.Messages.ListRecentDefinitionByConversation(ctx, task.ConversationID, definitionHistoryLimit)
 	if err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: load definition history: %w", err)
 	}
@@ -161,7 +186,7 @@ func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledT
 	if err != nil {
 		return DefinitionResult{}, err
 	}
-	if _, err := s.deps.Messages.Add(ctx, task.ConversationID, model.MsgRoleAssistant, assistantAudit(refinement)); err != nil {
+	if _, err := s.deps.Messages.AddDefinition(ctx, task.ConversationID, model.MsgRoleAssistant, assistantAudit(refinement)); err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: save assistant message: %w", err)
 	}
 	if refinement.Proposal != nil {
@@ -179,12 +204,25 @@ func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledT
 	return DefinitionResult{Task: task, Refinement: refinement}, nil
 }
 
+const (
+	questionAuditMarker             = "\n\nScheduled question audit: "
+	proposalAuditMarker             = "\n\nScheduled proposal audit: "
+	definitionHistoryLimit          = 200
+	maxDefinitionMessagesBeforeTurn = definitionHistoryLimit - 2
+	scheduledPageSize               = 100
+)
+
 func assistantAudit(refinement Refinement) string {
-	if refinement.Proposal == nil {
+	switch {
+	case refinement.Question != nil:
+		question, _ := json.Marshal(refinement.Question)
+		return refinement.Text + questionAuditMarker + string(question)
+	case refinement.Proposal != nil:
+		proposal, _ := json.Marshal(refinement.Proposal)
+		return refinement.Text + proposalAuditMarker + string(proposal)
+	default:
 		return refinement.Text
 	}
-	proposal, _ := json.Marshal(refinement.Proposal)
-	return refinement.Text + "\n\nScheduled proposal audit: " + string(proposal)
 }
 
 func (s *Service) Confirm(ctx context.Context, actor Actor, taskID string, expectedVersion int) (model.ScheduledTask, error) {
@@ -210,19 +248,41 @@ func (s *Service) Confirm(ctx context.Context, actor Actor, taskID string, expec
 	return confirmed, err
 }
 
-func (s *Service) List(ctx context.Context, userID int64) (ListResult, error) {
+func (s *Service) List(ctx context.Context, userID int64, offset int) (ListResult, error) {
 	if err := s.ready(); err != nil {
 		return ListResult{}, err
 	}
-	tasks, err := s.deps.Tasks.ListByUser(ctx, userID)
+	if offset < 0 {
+		return ListResult{}, errors.New("scheduled: list offset must not be negative")
+	}
+	tasks, err := s.deps.Tasks.ListByUser(ctx, userID, offset, scheduledPageSize+1)
 	if err != nil {
 		return ListResult{}, err
+	}
+	hasMore := len(tasks) > scheduledPageSize
+	if hasMore {
+		tasks = tasks[:scheduledPageSize]
+	}
+	summaries, err := s.deps.Tasks.ListRunSummaries(ctx, userID, offset, scheduledPageSize)
+	if err != nil {
+		return ListResult{}, err
+	}
+	byTask := make(map[string]model.ScheduledTaskRunSummary, len(summaries))
+	for _, summary := range summaries {
+		byTask[summary.TaskID] = summary
 	}
 	unread, err := s.deps.Tasks.UnreadCount(ctx, userID)
 	if err != nil {
 		return ListResult{}, err
 	}
-	return ListResult{Tasks: tasks, Unread: unread}, nil
+	nextOffset := 0
+	if hasMore {
+		nextOffset = offset + len(tasks)
+	}
+	return ListResult{
+		Tasks: tasks, RunSummaries: byTask, Unread: unread,
+		HasMore: hasMore, NextOffset: nextOffset,
+	}, nil
 }
 
 func (s *Service) Detail(ctx context.Context, userID int64, taskID string) (Detail, error) {
@@ -237,7 +297,11 @@ func (s *Service) Detail(ctx context.Context, userID int64, taskID string) (Deta
 	if err != nil {
 		return Detail{}, err
 	}
-	return Detail{Task: task, Runs: runs}, nil
+	history, err := s.deps.Messages.ListRecentDefinitionByConversation(ctx, task.ConversationID, definitionHistoryLimit)
+	if err != nil {
+		return Detail{}, fmt.Errorf("scheduled: load definition history: %w", err)
+	}
+	return Detail{Task: task, Runs: runs, DefinitionMessages: definitionMessages(history)}, nil
 }
 
 func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model.ScheduledTask, error) {
@@ -373,6 +437,34 @@ func historyForCompiler(history []model.Message) []provider.Message {
 		}
 	}
 	return out
+}
+
+func definitionMessages(history []model.Message) []DefinitionMessage {
+	out := make([]DefinitionMessage, 0, len(history))
+	for _, message := range history {
+		if message.Role != model.MsgRoleUser && message.Role != model.MsgRoleAssistant {
+			continue
+		}
+		text, question := definitionMessageContent(message.Content)
+		out = append(out, DefinitionMessage{Role: message.Role, Text: text, Question: question})
+	}
+	return out
+}
+
+func definitionMessageContent(content string) (string, *QuestionCard) {
+	if before, encoded, ok := strings.Cut(content, questionAuditMarker); ok {
+		var question QuestionCard
+		if json.Unmarshal([]byte(encoded), &question) == nil {
+			return before, &question
+		}
+	}
+	if before, encoded, ok := strings.Cut(content, proposalAuditMarker); ok {
+		var proposal Proposal
+		if json.Unmarshal([]byte(encoded), &proposal) == nil {
+			return before, nil
+		}
+	}
+	return content, nil
 }
 
 func title(message string) string {
