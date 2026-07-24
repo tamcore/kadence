@@ -15,6 +15,7 @@ import (
 const (
 	defaultFileBridgeAddr     = ":8081"
 	defaultFileBridgeMaxBytes = 32 << 20
+	fileBridgeHealthPath      = "/healthz"
 	fileBridgePathPrefix      = "/files/"
 )
 
@@ -129,6 +130,10 @@ type fileBridgeHandler struct {
 func (h *fileBridgeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Path == fileBridgeHealthPath {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if !h.authorized(r) {

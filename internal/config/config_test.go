@@ -15,6 +15,8 @@ const testDatabaseURL = "postgres://x"
 // WebAuthn-related tests.
 const testWebAuthnRPID = "kadence.example.com"
 
+const testFITDownloadTool = "activity__download_fit"
+
 // validConfig returns a Config that passes Validate() outright: every field
 // Validate() range-checks is set to a sane positive value (mirroring Load()'s
 // defaults), so tests that exercise exactly one Validate() rule can start
@@ -29,6 +31,7 @@ func validConfig() Config {
 		RAGTopK:                5,
 		MCPMaxIterations:       16,
 		MCPMaxTools:            100,
+		FITMaxBytes:            32 << 20,
 		UploadMaxBytes:         10485760,
 		IngestChunkChars:       1000,
 	}
@@ -87,6 +90,49 @@ func TestLoadAuthFields(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestLoadFITAnalysisFields(t *testing.T) {
+	t.Setenv("KADENCE_FIT_DOWNLOAD_TOOL", testFITDownloadTool)
+	t.Setenv("KADENCE_FIT_BRIDGE_URL", "http://activity-mcp:8081")
+	t.Setenv("KADENCE_FIT_BRIDGE_AUTH_USER", "bridge-user")
+	t.Setenv("KADENCE_FIT_BRIDGE_AUTH_PASS", "bridge-pass")
+	t.Setenv("KADENCE_FIT_MAX_BYTES", "12345")
+
+	cfg := Load()
+
+	if !cfg.FITEnabled() {
+		t.Fatal("FITEnabled() = false, want true for complete FIT configuration")
+	}
+	if cfg.FITDownloadTool != testFITDownloadTool ||
+		cfg.FITBridgeURL != "http://activity-mcp:8081" ||
+		cfg.FITBridgeAuthUser != "bridge-user" ||
+		cfg.FITBridgeAuthPass != "bridge-pass" ||
+		cfg.FITMaxBytes != 12345 {
+		t.Fatalf("FIT fields not loaded: %+v", cfg)
+	}
+}
+
+func TestValidateRejectsPartialFITAnalysisConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.FITDownloadTool = testFITDownloadTool
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for partial FIT configuration")
+	}
+}
+
+func TestValidateRejectsNonPositiveFITMaxBytesWhenEnabled(t *testing.T) {
+	cfg := validConfig()
+	cfg.FITDownloadTool = testFITDownloadTool
+	cfg.FITBridgeURL = "http://activity-mcp:8081"
+	cfg.FITBridgeAuthUser = "bridge-user"
+	cfg.FITBridgeAuthPass = "bridge-pass"
+	cfg.FITMaxBytes = 0
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for non-positive FIT maximum")
 	}
 }
 

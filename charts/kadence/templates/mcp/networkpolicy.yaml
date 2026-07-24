@@ -29,6 +29,10 @@ spec:
     ports:
     - protocol: TCP
       port: 8080
+    {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
+    - protocol: TCP
+      port: 8081
+    {{- end }}
   egress:
   {{- if $server.egress }}
   {{- toYaml $server.egress | nindent 2 }}

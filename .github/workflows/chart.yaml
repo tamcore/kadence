@@ -75,6 +75,33 @@ jobs:
               exit 1
             fi
           done
+      - name: assert optional FIT analysis wiring
+        run: |
+          server_without_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds"}]'
+          server_with_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"activity__download_file"}}]'
+
+          helm template kadence ./charts/kadence --set-json "mcp.servers=$server_without_fit" > /tmp/rendered-fit-disabled.yaml
+          disabled_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-disabled.yaml)
+          disabled_service_port=$(yq eval-all '[select(.kind == "Service" and .metadata.name == "kadence-mcp-activity") | .spec.ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-disabled.yaml)
+          disabled_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_"))] | length' /tmp/rendered-fit-disabled.yaml)
+          disabled_volume=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.volumes[] | select(.name == "fit-files")] | length' /tmp/rendered-fit-disabled.yaml)
+          disabled_mounts=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | .volumeMounts[] | select(.name == "fit-files")] | length' /tmp/rendered-fit-disabled.yaml)
+          if [ "$disabled_bridge" != "0" ] || [ "$disabled_service_port" != "0" ] || [ "$disabled_app_env" != "0" ] || [ "$disabled_volume" != "0" ] || [ "$disabled_mounts" != "0" ]; then
+            echo "expected disabled fitAnalysis to render no bridge, port 8081, app FIT env, shared volume, or mounts; got bridge=$disabled_bridge port=$disabled_service_port env=$disabled_app_env volume=$disabled_volume mounts=$disabled_mounts"
+            exit 1
+          fi
+
+          helm template kadence ./charts/kadence --set-json "mcp.servers=$server_with_fit" > /tmp/rendered-fit-enabled.yaml
+          enabled_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-enabled.yaml)
+          enabled_service_port=$(yq eval-all '[select(.kind == "Service" and .metadata.name == "kadence-mcp-activity") | .spec.ports[] | select(.port == 8081 and .targetPort == 8081 and .name == "file-bridge")] | length' /tmp/rendered-fit-enabled.yaml)
+          enabled_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_"))] | length' /tmp/rendered-fit-enabled.yaml)
+          enabled_volume=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.volumes[] | select(.name == "fit-files")] | length' /tmp/rendered-fit-enabled.yaml)
+          enabled_mounts=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | .volumeMounts[] | select(.name == "fit-files" and .mountPath == "/data/fit")] | length' /tmp/rendered-fit-enabled.yaml)
+          enabled_netpol_port=$(yq eval-all '[select(.kind == "NetworkPolicy" and .metadata.name == "kadence-mcp-activity") | .spec.ingress[].ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-enabled.yaml)
+          if [ "$enabled_bridge" != "1" ] || [ "$enabled_service_port" != "1" ] || [ "$enabled_app_env" != "4" ] || [ "$enabled_volume" != "1" ] || [ "$enabled_mounts" != "2" ] || [ "$enabled_netpol_port" != "1" ]; then
+            echo "expected enabled fitAnalysis to render one bridge, Service port, shared volume, two mounts, NetworkPolicy port, and four app env vars; got bridge=$enabled_bridge port=$enabled_service_port env=$enabled_app_env volume=$enabled_volume mounts=$enabled_mounts netpol=$enabled_netpol_port"
+            exit 1
+          fi
       - name: assert NetworkPolicy presence/count matches networkPolicy gates (wave 2, issue 14)
         run: |
           # combo: postgres+markitdown+2 mcp servers (garmin, cloakbrowser), defaultDeny=false

@@ -81,9 +81,34 @@ spec:
       - name: file-bridge
         image: {{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}
         command: ["/kadence", "file-bridge"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 8081
           name: file-bridge
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: file-bridge
+          initialDelaySeconds: 2
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: file-bridge
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          {{- toYaml $root.Values.mcp.nginx.resources | nindent 10 }}
         env:
         - name: KADENCE_FILE_BRIDGE_ROOT
           value: {{ $server.fitAnalysis.downloadDir | quote }}
