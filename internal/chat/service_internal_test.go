@@ -1,11 +1,73 @@
 package chat
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/provider"
 )
+
+type fitToolSnapshot struct {
+	tools      []provider.ToolDefinition
+	callResult string
+	callErr    error
+}
+
+func (s fitToolSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
+	return s.tools, nil
+}
+
+func (s fitToolSnapshot) Call(context.Context, string, string) (string, error) {
+	return s.callResult, s.callErr
+}
+
+func (fitToolSnapshot) ToolHints() []string { return nil }
+
+type fitEventSink struct{ events []ChatEvent }
+
+func (s *fitEventSink) Send(event ChatEvent) error {
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (*fitEventSink) Flush() error { return nil }
+
+func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
+	s := NewService(nil, ServiceConfig{MCPMaxTools: 1}, Deps{
+		FIT: fitactivity.NewAnalyzer("activity__download_fit", "http://bridge", "u", "p", 1024),
+	})
+	tools := s.assembleTools(context.Background(), fitToolSnapshot{
+		tools: []provider.ToolDefinition{{Name: "activity__list"}},
+	})
+
+	if len(tools) != 1 || tools[0].Name != analyzeGarminFITToolName {
+		t.Fatalf("tools = %+v, want only %s within cap", tools, analyzeGarminFITToolName)
+	}
+}
+
+func TestFITAnalysisReturnsSafeToolError(t *testing.T) {
+	s := NewService(nil, ServiceConfig{}, Deps{
+		FIT: fitactivity.NewAnalyzer("activity__download_fit", "http://bridge", "u", "p", 1024),
+	})
+	sink := &fitEventSink{}
+	msg := s.handleFITAnalysis(
+		context.Background(),
+		fitToolSnapshot{callErr: errors.New("sensitive path /data/fit/private.fit")},
+		provider.ToolCall{ID: "call-1", Name: analyzeGarminFITToolName, Arguments: `{"activity_id":42}`},
+		sink,
+	)
+
+	if msg.Content != "error: could not analyze FIT activity" {
+		t.Fatalf("tool result = %q, want generic safe error", msg.Content)
+	}
+	if strings.Contains(msg.Content, "/data/fit") || len(sink.events) != 2 || sink.events[1].Status != toolStatusError {
+		t.Fatalf("unsafe or incomplete error handling: msg=%q events=%+v", msg.Content, sink.events)
+	}
+}
 
 // TestUnitPromptLine verifies unitPromptLine returns the imperial sentence
 // only for "imperial", falling back to metric for anything else (including

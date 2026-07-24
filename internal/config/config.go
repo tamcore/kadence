@@ -284,6 +284,10 @@ func (c Config) FITEnabled() bool {
 	return c.FITDownloadTool != "" && c.FITBridgeURL != "" && c.FITBridgeAuthUser != "" && c.FITBridgeAuthPass != ""
 }
 
+func (c Config) fitConfigured() bool {
+	return c.FITDownloadTool != "" || c.FITBridgeURL != "" || c.FITBridgeAuthUser != "" || c.FITBridgeAuthPass != ""
+}
+
 // UserMCPEnabled reports whether user-defined MCP servers can be registered:
 // a valid 32-byte encryption key AND at least one allowlisted host.
 func (c Config) UserMCPEnabled() bool {
@@ -367,6 +371,12 @@ func (c Config) Validate() error {
 	}
 	if c.MCPMaxTools <= 0 {
 		return errors.New("KADENCE_MCP_MAX_TOOLS must be a positive integer")
+	}
+	if c.fitConfigured() && !c.FITEnabled() {
+		return errors.New("KADENCE_FIT_DOWNLOAD_TOOL, KADENCE_FIT_BRIDGE_URL, KADENCE_FIT_BRIDGE_AUTH_USER, and KADENCE_FIT_BRIDGE_AUTH_PASS must be set together")
+	}
+	if c.FITEnabled() && c.FITMaxBytes <= 0 {
+		return errors.New("KADENCE_FIT_MAX_BYTES must be a positive integer when FIT analysis is enabled")
 	}
 	if c.UploadMaxBytes <= 0 {
 		return errors.New("KADENCE_UPLOAD_MAX_BYTES must be a positive integer")

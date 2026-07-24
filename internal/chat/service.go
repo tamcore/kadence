@@ -671,8 +671,8 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 		if toolsErr != nil {
 			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
 		} else {
-			// Reserve one slot per enabled built-in tool (load_skill,
-			// request_credentials) so the total never exceeds the configured cap.
+			// Reserve one slot per enabled built-in tool so the total never
+			// exceeds the configured cap.
 			mcpCap := s.maxTools
 			builtins := 0
 			if s.skills != nil {
@@ -681,8 +681,13 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 			if s.secrets != nil {
 				builtins++
 			}
+			if s.fitAnalyzer != nil {
+				builtins++
+			}
 			if mcpCap > builtins {
 				mcpCap -= builtins
+			} else {
+				mcpCap = 0
 			}
 			if len(mcpTools) > mcpCap {
 				slog.Warn("mcp tools capped", "have", len(mcpTools), "cap", mcpCap)

@@ -18,6 +18,16 @@ func TestFileBridgeDefaultAddressIsPodReachable(t *testing.T) {
 	}
 }
 
+func TestFileBridgeHealthIsUnauthenticated(t *testing.T) {
+	h := testFileBridgeHandler(t, t.TempDir(), bridgeTestMaxBytes)
+
+	res := serveBridgeRequest(h, "/healthz", false)
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+}
+
 func TestFileBridgeRequiresBasicAuth(t *testing.T) {
 	root := t.TempDir()
 	path := writeBridgeFile(t, root, "activity.fit", []byte("FIT"))

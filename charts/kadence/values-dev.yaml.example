@@ -83,6 +83,12 @@ externalDatabase:
 #       #   app-side allowlist of glob patterns (matched against the unprefixed tool
 #       #   name); unset = all tools. Lets you shorten the LLM tool list without the
 #       #   MCP server's own filtering.
+#       # fitAnalysis:
+#       #   enabled: true
+#       #   downloadDir: /data/fit
+#       #   downloadTool: garmin__download_activity_file
+#       #   Shares this ephemeral directory with an authenticated Kadence bridge.
+#       #   Configure the MCP server itself to write downloaded FIT files here.
 
 # Example markitdown-mcp ingestion sidecar (commented out). Uncomment to
 # convert uploaded documents (PDF, images, office docs) via markitdown-mcp
