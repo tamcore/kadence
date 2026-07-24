@@ -18,6 +18,7 @@ import (
 var (
 	ErrInvalidTransition = errors.New("scheduled: illegal task state transition")
 	ErrStaleProposal     = errors.New("scheduled: proposal version is stale or missing")
+	ErrRunInProgress     = errors.New("scheduled: task has a pending or running occurrence")
 )
 
 // ConversationStore is the narrow conversation persistence dependency needed
@@ -38,8 +39,9 @@ type TaskStore interface {
 	Create(context.Context, model.ScheduledTask) (model.ScheduledTask, error)
 	GetByID(context.Context, string, int64) (model.ScheduledTask, error)
 	ListByUser(context.Context, int64) ([]model.ScheduledTask, error)
-	Update(context.Context, model.ScheduledTask, int64) (model.ScheduledTask, error)
 	BeginDraftRevision(context.Context, string, int64) (model.ScheduledTask, error)
+	Pause(context.Context, string, int64, int) (model.ScheduledTask, error)
+	Resume(context.Context, string, int64, int, time.Time) (model.ScheduledTask, error)
 	SaveProposal(context.Context, model.ScheduledTask, int64, int) (model.ScheduledTask, error)
 	ConfirmProposal(context.Context, string, int64, int, time.Time) (model.ScheduledTask, error)
 	SoftDelete(context.Context, string, int64) error
@@ -131,8 +133,11 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 	}
 	task, err := s.deps.Tasks.BeginDraftRevision(ctx, taskID, actor.ID)
 	if err != nil {
-		if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+		switch {
+		case errors.Is(err, store.ErrInvalidScheduledTaskState):
 			return DefinitionResult{}, ErrInvalidTransition
+		case errors.Is(err, store.ErrScheduledRunInProgress):
+			return DefinitionResult{}, ErrRunInProgress
 		}
 		return DefinitionResult{}, err
 	}
@@ -246,8 +251,11 @@ func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model
 	if task.State != model.ScheduledTaskStateActive {
 		return model.ScheduledTask{}, ErrInvalidTransition
 	}
-	task.State = model.ScheduledTaskStatePaused
-	return s.deps.Tasks.Update(ctx, task, userID)
+	paused, err := s.deps.Tasks.Pause(ctx, taskID, userID, task.Version)
+	if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+		return model.ScheduledTask{}, ErrInvalidTransition
+	}
+	return paused, err
 }
 
 func (s *Service) Resume(ctx context.Context, userID int64, taskID string) (model.ScheduledTask, error) {
@@ -265,8 +273,11 @@ func (s *Service) Resume(ctx context.Context, userID int64, taskID string) (mode
 	if err != nil {
 		return model.ScheduledTask{}, err
 	}
-	task.State, task.NextRunAt = model.ScheduledTaskStateActive, &next
-	return s.deps.Tasks.Update(ctx, task, userID)
+	resumed, err := s.deps.Tasks.Resume(ctx, taskID, userID, task.Version, next)
+	if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+		return model.ScheduledTask{}, ErrInvalidTransition
+	}
+	return resumed, err
 }
 
 func (s *Service) Delete(ctx context.Context, userID int64, taskID string) error {

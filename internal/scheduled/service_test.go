@@ -64,7 +64,8 @@ type serviceTasks struct {
 	createError    error
 	getError       error
 	listError      error
-	updateError    error
+	pauseError     error
+	resumeError    error
 	deleteError    error
 	createRunErr   error
 	listRunsErr    error
@@ -77,6 +78,9 @@ type serviceTasks struct {
 	beginCalls     int
 	saveVersion    int
 	confirmVersion int
+	pauseVersion   int
+	resumeVersion  int
+	resumeNext     time.Time
 	ownerIDs       []int64
 }
 
@@ -100,13 +104,6 @@ func (f *serviceTasks) ListByUser(context.Context, int64) ([]model.ScheduledTask
 	}
 	return []model.ScheduledTask{f.task}, nil
 }
-func (f *serviceTasks) Update(_ context.Context, task model.ScheduledTask, _ int64) (model.ScheduledTask, error) {
-	if f.updateError != nil {
-		return model.ScheduledTask{}, f.updateError
-	}
-	f.task = task
-	return task, nil
-}
 func (f *serviceTasks) BeginDraftRevision(_ context.Context, _ string, userID int64) (model.ScheduledTask, error) {
 	f.ownerIDs = append(f.ownerIDs, userID)
 	f.beginCalls++
@@ -120,6 +117,27 @@ func (f *serviceTasks) BeginDraftRevision(_ context.Context, _ string, userID in
 	f.task.State = model.ScheduledTaskStateDraft
 	f.task.CompiledPrompt = ""
 	f.task.NextRunAt = nil
+	return f.task, nil
+}
+func (f *serviceTasks) Pause(_ context.Context, _ string, userID int64, expectedVersion int) (model.ScheduledTask, error) {
+	f.ownerIDs = append(f.ownerIDs, userID)
+	f.pauseVersion = expectedVersion
+	if f.pauseError != nil {
+		return model.ScheduledTask{}, f.pauseError
+	}
+	f.task.State = model.ScheduledTaskStatePaused
+	f.task.NextRunAt = nil
+	return f.task, nil
+}
+func (f *serviceTasks) Resume(_ context.Context, _ string, userID int64, expectedVersion int, next time.Time) (model.ScheduledTask, error) {
+	f.ownerIDs = append(f.ownerIDs, userID)
+	f.resumeVersion = expectedVersion
+	f.resumeNext = next
+	if f.resumeError != nil {
+		return model.ScheduledTask{}, f.resumeError
+	}
+	f.task.State = model.ScheduledTaskStateActive
+	f.task.NextRunAt = &next
 	return f.task, nil
 }
 func (f *serviceTasks) SaveProposal(_ context.Context, task model.ScheduledTask, userID int64, expectedVersion int) (model.ScheduledTask, error) {
@@ -300,6 +318,10 @@ func TestServiceDefinitionFailurePaths(t *testing.T) {
 		}
 		if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, failure) {
 			t.Fatalf("begin err=%v", err)
+		}
+		tasks.beginError = store.ErrScheduledRunInProgress
+		if _, err := svc.Refine(ctx, actor, serviceTaskID, "answer"); !errors.Is(err, scheduled.ErrRunInProgress) {
+			t.Fatalf("run conflict err=%v", err)
 		}
 		tasks.beginError = nil
 		tasks.task = model.ScheduledTask{ID: serviceTaskID, State: model.ScheduledTaskStateCompleted}
@@ -497,16 +519,20 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		tasks.task.State = model.ScheduledTaskStateActive
-		tasks.updateError = failure
+		tasks.pauseError = failure
 		if _, err := newService(tasks).Pause(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
+		}
+		tasks.pauseError = store.ErrInvalidScheduledTaskState
+		if _, err := newService(tasks).Pause(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrInvalidTransition) {
+			t.Fatalf("stale pause err=%v", err)
 		}
 		tasks.getError = failure
 		if _, err := newService(tasks).Resume(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
 		tasks.getError = nil
-		tasks.updateError = nil
+		tasks.pauseError = nil
 		tasks.task = base()
 		if _, err := newService(tasks).Resume(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrInvalidTransition) {
 			t.Fatal(err)
@@ -523,18 +549,42 @@ func TestServiceLifecycleFailurePaths(t *testing.T) {
 		}
 		tasks.task = base()
 		tasks.task.State = model.ScheduledTaskStatePaused
-		tasks.updateError = failure
+		tasks.resumeError = failure
 		if _, err := newService(tasks).Resume(ctx, 7, serviceTaskID); !errors.Is(err, failure) {
 			t.Fatal(err)
 		}
-		tasks.updateError = nil
+		tasks.resumeError = store.ErrInvalidScheduledTaskState
+		if _, err := newService(tasks).Resume(ctx, 7, serviceTaskID); !errors.Is(err, scheduled.ErrInvalidTransition) {
+			t.Fatalf("stale resume err=%v", err)
+		}
+		tasks.resumeError = nil
 		tasks.task = base()
 		tasks.task.State = model.ScheduledTaskStatePaused
 		tasks.task.OneOffAt = nil
 		tasks.task.DTStart = new(now)
 		tasks.task.RRULE = "FREQ=DAILY"
-		if _, err := newService(tasks).Resume(ctx, 7, serviceTaskID); err != nil {
+		original := tasks.task
+		resumed, err := newService(tasks).Resume(ctx, 7, serviceTaskID)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if tasks.resumeVersion != original.Version || !tasks.resumeNext.Equal(now.Add(24*time.Hour)) {
+			t.Fatalf("resume CAS version=%d next=%v", tasks.resumeVersion, tasks.resumeNext)
+		}
+		if resumed.Version != original.Version || resumed.CompiledPrompt != original.CompiledPrompt ||
+			resumed.Name != original.Name || resumed.RRULE != original.RRULE {
+			t.Fatalf("resume overwrote definition: before=%+v after=%+v", original, resumed)
+		}
+		tasks.task = base()
+		tasks.task.State = model.ScheduledTaskStateActive
+		original = tasks.task
+		paused, err := newService(tasks).Pause(ctx, 7, serviceTaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tasks.pauseVersion != original.Version || paused.Version != original.Version ||
+			paused.CompiledPrompt != original.CompiledPrompt || paused.Name != original.Name {
+			t.Fatalf("pause overwrote definition: before=%+v after=%+v", original, paused)
 		}
 	})
 	t.Run("run now and simple operations propagate failures", func(t *testing.T) {
