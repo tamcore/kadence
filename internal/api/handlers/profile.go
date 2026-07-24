@@ -21,8 +21,7 @@ import (
 // profileUsers is the user persistence the profile handler needs.
 type profileUsers interface {
 	GetByID(ctx context.Context, id int64) (model.User, error)
-	UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe string) error
-	UpdateTimezone(ctx context.Context, id int64, timezone string) error
+	UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe, timezone string) error
 	UpdatePassword(ctx context.Context, id int64, passwordHash string) error
 }
 
@@ -100,15 +99,11 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.users.UpdateProfile(r.Context(), u.ID, strings.TrimSpace(in.DisplayName), email, in.UnitSystem, location, aboutMe); err != nil {
+	if err := h.users.UpdateProfile(r.Context(), u.ID, strings.TrimSpace(in.DisplayName), email, in.UnitSystem, location, aboutMe, timezone); err != nil {
 		if errors.Is(err, store.ErrEmailTaken) {
 			RespondError(w, http.StatusConflict, "that email is already in use")
 			return
 		}
-		RespondError(w, http.StatusInternalServerError, "could not update profile")
-		return
-	}
-	if err := h.users.UpdateTimezone(r.Context(), u.ID, timezone); err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not update profile")
 		return
 	}

@@ -42,15 +42,11 @@ func (f *fakeProfileUsers) GetByID(_ context.Context, _ int64) (model.User, erro
 	return f.user, nil
 }
 
-func (f *fakeProfileUsers) UpdateProfile(_ context.Context, _ int64, _, _, _, location, aboutMe string) error {
+func (f *fakeProfileUsers) UpdateProfile(_ context.Context, _ int64, _, _, _, location, aboutMe, timezone string) error {
 	f.lastLocation = location
 	f.lastAboutMe = aboutMe
-	return f.updateErr
-}
-
-func (f *fakeProfileUsers) UpdateTimezone(_ context.Context, _ int64, timezone string) error {
 	f.lastTimezone = timezone
-	return nil
+	return f.updateErr
 }
 
 func (f *fakeProfileUsers) UpdatePassword(_ context.Context, _ int64, _ string) error {

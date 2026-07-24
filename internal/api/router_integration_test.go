@@ -88,9 +88,10 @@ func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
-		Users:    users,
-		Sessions: sessions,
-		Config:   config.Config{CSRFSecret: testCSRFSecret},
+		Users:     users,
+		Sessions:  sessions,
+		Config:    config.Config{CSRFSecret: testCSRFSecret},
+		Scheduled: handlers.NewScheduled(nil),
 	}))
 	defer srv.Close()
 	jar := &cookieJar{}
@@ -102,6 +103,18 @@ func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	}
 	jar.capture(resp)
 	_ = resp.Body.Close()
+
+	scheduledReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/scheduled/tasks", strings.NewReader(`{"message":"x"}`))
+	scheduledReq.Header.Set("Content-Type", "application/json")
+	jar.apply(scheduledReq)
+	scheduledResp, err := http.DefaultClient.Do(scheduledReq)
+	if err != nil {
+		t.Fatalf("scheduled request: %v", err)
+	}
+	_ = scheduledResp.Body.Close()
+	if scheduledResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("authenticated Scheduled POST without CSRF status=%d, want 403", scheduledResp.StatusCode)
+	}
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/session", nil)
 	jar.apply(req)

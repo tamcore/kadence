@@ -379,6 +379,7 @@ func TestValidateScheduledBudgetsWhenEnabled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.ScheduledEnabled = true
+			cfg.LLMAPIKey = "compiler-key"
 			cfg.ScheduledWorkerMaxTokens = 2048
 			cfg.ScheduledWorkerTimeout = 300 * time.Second
 			cfg.ScheduledWorkerMaxIterations = 16
@@ -390,6 +391,25 @@ func TestValidateScheduledBudgetsWhenEnabled(t *testing.T) {
 				t.Fatal("Validate() = nil, want error for invalid scheduled setting")
 			}
 		})
+	}
+}
+
+func TestValidateScheduledRequiresPrimaryCompilerConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.ScheduledEnabled = true
+	cfg.ScheduledWorkerMaxTokens = 2048
+	cfg.ScheduledWorkerTimeout = 300 * time.Second
+	cfg.ScheduledWorkerMaxIterations = 16
+	cfg.ScheduledWorkerConcurrency = 1
+	cfg.ScheduledMaxActivePerUser = 10
+	cfg.ScheduledWorkerAPIKey = "worker-only-key"
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_LLM_API_KEY") {
+		t.Fatalf("Validate() err=%v, want missing primary compiler key", err)
+	}
+	cfg.LLMAPIKey = "primary-key"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with primary compiler key: %v", err)
 	}
 }
 
