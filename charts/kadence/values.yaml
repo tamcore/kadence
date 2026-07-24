@@ -210,10 +210,12 @@ externalDatabase:
 #               emptyDir at /dev/shm — required for Chromium-based servers
 #               (Playwright/cloakbrowser) which crash on the default 64Mi shm
 #   fitAnalysis (optional) enables transient FIT-file analysis for this server:
-#               {enabled, downloadDir, downloadTool}. downloadTool is the fully
-#               qualified app-side tool name (`<server>__<tool>`). The MCP
-#               container and an authenticated Kadence bridge share downloadDir
-#               via emptyDir; the app deletes each file after a successful fetch.
+#               {enabled, downloadDir, downloadTool}. downloadTool is the
+#               unprefixed MCP tool name; Kadence resolves the effective server
+#               prefix from each user's MCP snapshot. The MCP container and an
+#               authenticated Kadence bridge share downloadDir via emptyDir; the
+#               app deletes each file after a successful fetch. Any number of
+#               user-scoped MCP servers may enable this independently.
 #   egress      (optional, requires networkPolicy.enabled) raw NetworkPolicy
 #               `egress` rule list that REPLACES this server's default
 #               egress. The default (every MCP server, not just

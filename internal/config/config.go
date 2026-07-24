@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -121,12 +122,9 @@ type Config struct {
 	// Empty means no custom CA: MCP traffic uses mcp-go's default HTTP
 	// client (plaintext http, or https verified against the system trust
 	// store).
-	MCPCAFile         string
-	FITDownloadTool   string
-	FITBridgeURL      string
-	FITBridgeAuthUser string
-	FITBridgeAuthPass string
-	FITMaxBytes       int
+	MCPCAFile   string
+	FITRoutes   []FITRoute
+	FITMaxBytes int
 
 	// User-defined MCP servers. EncryptionKey is a 32-byte key (KADENCE_ENCRYPTION_KEY,
 	// base64-encoded) used to encrypt stored per-user MCP server credentials.
@@ -143,6 +141,7 @@ type Config struct {
 	// of silently treating it as unset. Left nil (no problem) by any Config
 	// literal built directly rather than via Load(), e.g. in tests.
 	encryptionKeyErr error
+	fitRoutesErr     error
 
 	// Rate limiting (per-IP, sliding window). 0 disables the respective limiter.
 	// RateLimitGlobal caps all /api requests; RateLimitAuth caps the
@@ -178,6 +177,17 @@ const (
 	defaultRefusalMessage = "I'm your coaching assistant, so I can only help with training, workouts, " +
 		"recovery, nutrition, and race prep. What would you like to work on?"
 )
+
+// FITRoute binds one transient FIT bridge to the exact env-configured MCP
+// server and scope that owns its download directory.
+type FITRoute struct {
+	ServerName     string
+	ServerScope    string
+	DownloadTool   string
+	BridgeURL      string
+	BridgeAuthUser string
+	BridgeAuthPass string
+}
 
 // Load reads configuration from the environment, applying defaults.
 func Load() Config {
@@ -231,10 +241,7 @@ func Load() Config {
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 16)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
 	cfg.MCPCAFile = os.Getenv("KADENCE_MCP_CA_FILE")
-	cfg.FITDownloadTool = os.Getenv("KADENCE_FIT_DOWNLOAD_TOOL")
-	cfg.FITBridgeURL = os.Getenv("KADENCE_FIT_BRIDGE_URL")
-	cfg.FITBridgeAuthUser = os.Getenv("KADENCE_FIT_BRIDGE_AUTH_USER")
-	cfg.FITBridgeAuthPass = os.Getenv("KADENCE_FIT_BRIDGE_AUTH_PASS")
+	cfg.FITRoutes, cfg.fitRoutesErr = loadFITRoutes(os.Environ())
 	cfg.FITMaxBytes = envIntOr("KADENCE_FIT_MAX_BYTES", 32<<20)
 
 	key, keyErr := decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
@@ -281,11 +288,65 @@ func (c Config) RAGEnabled() bool { return c.EmbedAPIKey != "" }
 func (c Config) MarkitdownEnabled() bool { return c.MarkitdownURL != "" }
 
 func (c Config) FITEnabled() bool {
-	return c.FITDownloadTool != "" && c.FITBridgeURL != "" && c.FITBridgeAuthUser != "" && c.FITBridgeAuthPass != ""
+	return len(c.FITRoutes) > 0
 }
 
-func (c Config) fitConfigured() bool {
-	return c.FITDownloadTool != "" || c.FITBridgeURL != "" || c.FITBridgeAuthUser != "" || c.FITBridgeAuthPass != ""
+const fitRouteEnvPrefix = "KADENCE_FIT_ROUTE_"
+
+type fitRouteBuilder struct {
+	route FITRoute
+}
+
+var fitRouteEnvFields = []struct {
+	suffix string
+	apply  func(*FITRoute, string)
+}{
+	{"_BRIDGE_AUTH_USER", func(r *FITRoute, value string) { r.BridgeAuthUser = value }},
+	{"_BRIDGE_AUTH_PASS", func(r *FITRoute, value string) { r.BridgeAuthPass = value }},
+	{"_DOWNLOAD_TOOL", func(r *FITRoute, value string) { r.DownloadTool = value }},
+	{"_SERVER_SCOPE", func(r *FITRoute, value string) { r.ServerScope = value }},
+	{"_SERVER_NAME", func(r *FITRoute, value string) { r.ServerName = value }},
+	{"_BRIDGE_URL", func(r *FITRoute, value string) { r.BridgeURL = value }},
+}
+
+func loadFITRoutes(environ []string) ([]FITRoute, error) {
+	groups := make(map[int]*fitRouteBuilder)
+	for _, entry := range environ {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || !strings.HasPrefix(key, fitRouteEnvPrefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(key, fitRouteEnvPrefix)
+		for _, field := range fitRouteEnvFields {
+			indexText, matched := strings.CutSuffix(rest, field.suffix)
+			if !matched {
+				continue
+			}
+			index, err := strconv.Atoi(indexText)
+			if err != nil || index < 0 {
+				return nil, fmt.Errorf("invalid FIT route index %q", indexText)
+			}
+			builder := groups[index]
+			if builder == nil {
+				builder = &fitRouteBuilder{}
+				groups[index] = builder
+			}
+			field.apply(&builder.route, value)
+			break
+		}
+	}
+
+	indexes := make([]int, 0, len(groups))
+	for index := range groups {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+
+	routes := make([]FITRoute, 0, len(indexes))
+	for _, index := range indexes {
+		routes = append(routes, groups[index].route)
+	}
+	return routes, nil
 }
 
 // UserMCPEnabled reports whether user-defined MCP servers can be registered:
@@ -372,8 +433,11 @@ func (c Config) Validate() error {
 	if c.MCPMaxTools <= 0 {
 		return errors.New("KADENCE_MCP_MAX_TOOLS must be a positive integer")
 	}
-	if c.fitConfigured() && !c.FITEnabled() {
-		return errors.New("KADENCE_FIT_DOWNLOAD_TOOL, KADENCE_FIT_BRIDGE_URL, KADENCE_FIT_BRIDGE_AUTH_USER, and KADENCE_FIT_BRIDGE_AUTH_PASS must be set together")
+	if c.fitRoutesErr != nil {
+		return fmt.Errorf("FIT routes are invalid: %w", c.fitRoutesErr)
+	}
+	if err := validateFITRoutes(c.FITRoutes); err != nil {
+		return err
 	}
 	if c.FITEnabled() && c.FITMaxBytes <= 0 {
 		return errors.New("KADENCE_FIT_MAX_BYTES must be a positive integer when FIT analysis is enabled")
@@ -386,6 +450,28 @@ func (c Config) Validate() error {
 	}
 	if c.MaxBodyBytes < 0 {
 		return errors.New("KADENCE_MAX_BODY_BYTES must be a non-negative integer")
+	}
+	return nil
+}
+
+func validateFITRoutes(routes []FITRoute) error {
+	seen := make(map[string]struct{}, len(routes))
+	for i, route := range routes {
+		if strings.TrimSpace(route.ServerName) == "" ||
+			(route.ServerScope != "GLOBAL" && !strings.HasPrefix(route.ServerScope, "USER_")) ||
+			strings.TrimPrefix(route.ServerScope, "USER_") == "" ||
+			strings.TrimSpace(route.DownloadTool) == "" ||
+			strings.Contains(route.DownloadTool, "__") ||
+			strings.TrimSpace(route.BridgeURL) == "" ||
+			strings.TrimSpace(route.BridgeAuthUser) == "" ||
+			strings.TrimSpace(route.BridgeAuthPass) == "" {
+			return fmt.Errorf("FIT route %d must set a server name, valid scope, unprefixed download tool, bridge URL, and bridge credentials", i)
+		}
+		key := route.ServerName + "\x00" + route.ServerScope
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate FIT route for MCP server %s/%s", route.ServerName, route.ServerScope)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }

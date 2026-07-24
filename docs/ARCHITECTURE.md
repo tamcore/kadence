@@ -18,6 +18,7 @@ internal/
   provider/          LLM client abstraction (OpenAI-compatible; streaming + tool calls)
   embed/             embedding backend abstraction (OpenAI-compatible)
   mcp/               remote MCP server registry: env contract, scoping, tool filtering
+  fit/               bounded FIT activity decoding (summary + splits, no GPS records)
   secret/            credential broker — one-time placeholder tokens, never logs secrets
   chat/              per-turn orchestration: guardrail → RAG → provider stream → tool loop
   rag/               pgvector retrieval (per-user private ∪ admin public corpus)
@@ -58,8 +59,9 @@ Each turn runs:
    user's private memory plus the admin public corpus.
 3. **Assemble + stream** — build the context (system prompt stamped with the current
    date and the user's unit preference) and stream from the provider, running an
-   **MCP tool loop**: the model requests a tool → the app dispatches it to the right
-   MCP client → the result is fed back → repeat, up to a configured iteration cap.
+   **tool loop**: the model requests a remote MCP or narrow Kadence-native tool → the
+   app dispatches it → the result is fed back → repeat, up to a configured iteration
+   cap.
 4. **Persist + embed** — the turn is stored and embedded back into RAG.
 
 Responses stream to the browser as Server-Sent Events (`ChatEvent` JSON).
@@ -67,8 +69,10 @@ Responses stream to the browser as Server-Sent Events (`ChatEvent` JSON).
 ## MCP orchestration (`mcp/`)
 
 MCP servers are **remote and network-transport only** (`streamable-http` / `sse`) —
-there is no in-process tool registry. On startup the registry scans the environment
-for a fixed contract and builds one client per server:
+there is no in-process MCP server. Kadence may expose narrow native orchestration
+tools, but those still use the user's remote MCP snapshot for external operations.
+On startup the registry scans the environment for a fixed contract and builds one
+client per server:
 
 ```
 MCP_<NAME>_<SCOPE>_URL          # http(s) endpoint
@@ -87,6 +91,34 @@ App-side tool filtering (globs against the unprefixed tool name) keeps tool list
 short and independent of each server's own filtering. TLS to MCP servers is optional
 (`KADENCE_MCP_CA_FILE` for a custom CA); the deployed sidecars add basic auth and
 network isolation on top.
+
+## Native FIT analysis (`fit/`)
+
+When FIT analysis is configured, Kadence adds
+`kadence__analyze_garmin_fit(activity_id)` to the model's tool set. It deliberately
+bridges two separate pod filesystems instead of assuming an MCP download path is
+local to the app:
+
+1. Kadence matches configured FIT routes against the exact MCP server name and
+   scope visible in the current user's snapshot. It combines that server's effective
+   alias/name prefix with the route's unprefixed download tool.
+2. The MCP server writes the `.fit` file into an ephemeral `emptyDir` shared only
+   with a Kadence `file-bridge` sidecar and returns its path.
+3. The app reduces that result to a direct-child `.fit` basename and fetches it from
+   the private bridge over HTTP Basic authentication. With chart NetworkPolicy
+   enabled, port 8081 is permitted only between the app and the selected MCP pod.
+4. The bridge serves only regular, unchanged files confined beneath its configured
+   root. After a complete successful transfer it deletes the same file.
+5. `internal/fit` decodes the file in memory into metric-labelled activity and lap
+   summaries. Reads are capped at 32 MiB, output at 100 splits, and record samples,
+   GPS positions, and arbitrary developer data are discarded.
+
+The raw FIT file is never stored in Postgres or RAG. Failures exposed to the model
+are generic; operational logs contain only a bounded failure stage, never the raw
+path or file contents. Any number of user-scoped MCP servers may have independent
+FIT routes. A user sees only routes belonging to MCP servers in their snapshot; if
+more than one is visible, the native tool requires a `source` chosen from those
+servers' effective prefixes.
 
 ## RAG & ingestion
 
@@ -139,6 +171,9 @@ All timestamps are UTC. Migrations are embedded SQL run by `goose` on startup
   at dispatch time and redacted from logs and transcripts.
 - **MCP isolation** — each MCP server is deployed behind a basic-auth nginx sidecar,
   reachable only from the main app by NetworkPolicy, optionally over TLS.
+- **FIT-file isolation** — transient FIT files live in a per-pod `emptyDir`; the
+  authenticated bridge accepts only direct `.fit` filenames and deletes a file
+  after a complete successful transfer.
 
 See [CONFIGURATION.md](CONFIGURATION.md) for the environment variables referenced
 here, and [DEPLOYMENT.md](DEPLOYMENT.md) for how the chart renders all of this.

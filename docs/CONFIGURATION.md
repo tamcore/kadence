@@ -1,9 +1,11 @@
 # Configuration
 
-Kadence is configured **entirely through environment variables** (prefix
-`KADENCE_*`), loaded once at startup by `config.Load()`. There are no config files
-or command-line flags. `config.Validate()` fails fast on startup for invalid
-combinations (see [Validation](#validation)).
+Kadence's main server is configured **entirely through environment variables**
+(prefix `KADENCE_*`), loaded once at startup by `config.Load()`. There are no config
+files or main-server command-line flags. `config.Validate()` fails fast on startup
+for invalid combinations (see [Validation](#validation)). The internal
+`file-bridge` subcommand also uses environment variables; Helm supplies them
+automatically when FIT analysis is enabled.
 
 Values shown are the built-in defaults; `—` means unset/empty.
 
@@ -151,9 +153,51 @@ MCP_GARMIN_GLOBAL_TOOLS=get_activit*,*_workout
 In a Helm deployment these are rendered for you from `mcp.servers[]` — see
 [DEPLOYMENT.md](DEPLOYMENT.md).
 
+## Native FIT analysis
+
+One or more numbered route groups enable the native
+`kadence__analyze_garmin_fit(activity_id)` tool. `<N>` is a non-negative integer;
+gaps are allowed. Each complete group binds a private bridge to one exact
+environment-configured MCP server and scope.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_FIT_ROUTE_<N>_SERVER_NAME` | — | Exact MCP env server name, for example `GARMIN1`. |
+| `KADENCE_FIT_ROUTE_<N>_SERVER_SCOPE` | — | Exact MCP scope: `GLOBAL` or `USER_<username>`. |
+| `KADENCE_FIT_ROUTE_<N>_DOWNLOAD_TOOL` | — | Unprefixed MCP tool name, for example `download_activity_file`. It must accept `{"activity_id": <positive integer>}`, write a `.fit` file into the bridge's shared directory, and return a path or JSON containing `path`/`file_path`. Kadence resolves the effective alias/name prefix from the current user's MCP snapshot. |
+| `KADENCE_FIT_ROUTE_<N>_BRIDGE_URL` | — | Base URL of this route's private file bridge, for example `http://kadence-mcp-garmin1:8081`. |
+| `KADENCE_FIT_ROUTE_<N>_BRIDGE_AUTH_USER` | — | HTTP Basic-auth username for this route's bridge. |
+| `KADENCE_FIT_ROUTE_<N>_BRIDGE_AUTH_PASS` | — | HTTP Basic-auth password for this route's bridge. |
+| `KADENCE_FIT_MAX_BYTES` | `33554432` (32 MiB) | App-side bridge-response cap. Must be positive when FIT analysis is enabled. The decoder independently hard-caps FIT input at 32 MiB, so raising this value does not raise the decoder limit. |
+
+The native tool consumes one slot from `KADENCE_MCP_MAX_TOOLS`. Its output is
+bounded to an activity summary and at most 100 lap splits; raw records, GPS
+positions, and arbitrary FIT developer data are not returned. Routes are filtered
+per chat snapshot, so two users may each have an independent MCP pod and bridge with
+the same effective alias. When one user can see multiple FIT routes, the native tool
+adds a required `source` enum containing only that user's effective MCP prefixes.
+
+### File-bridge subcommand
+
+The `kadence file-bridge` helper runs beside the selected MCP server. These settings
+are normally rendered by `mcp.servers[].fitAnalysis`; they are documented for
+non-Helm deployments and troubleshooting.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_FILE_BRIDGE_ADDR` | `:8081` | Bridge listener address. `GET /healthz` is unauthenticated; file requests use `GET /files/<name>.fit`. |
+| `KADENCE_FILE_BRIDGE_ROOT` | — (required) | Shared directory containing downloaded FIT files. Only direct-child regular `.fit` files are served. |
+| `KADENCE_FILE_BRIDGE_AUTH_USER` | — (required) | HTTP Basic-auth username. |
+| `KADENCE_FILE_BRIDGE_AUTH_PASS` | — (required) | HTTP Basic-auth password. |
+| `KADENCE_FILE_BRIDGE_MAX_BYTES` | `33554432` (32 MiB) | Maximum file size served by the bridge; must be positive. |
+
+The bridge rejects traversal, subdirectories, symlinks, non-regular files, changed
+file identities, and oversized files. It removes a file only after transferring the
+complete, unchanged file successfully.
+
 ## Validation
 
-`config.Validate()` rejects startup when:
+`config.Validate()` notably rejects startup when:
 
 1. `KADENCE_DATABASE_URL` is empty.
 2. `KADENCE_ENV` is prod/production but `KADENCE_CSRF_SECRET` is empty.
@@ -161,6 +205,9 @@ In a Helm deployment these are rendered for you from `mcp.servers[]` — see
    32-byte key.
 4. `KADENCE_RATE_LIMIT_GLOBAL` or `KADENCE_RATE_LIMIT_AUTH` is negative.
 5. `KADENCE_LLM_CONTEXT_BUDGET` is not a positive integer.
+6. A `KADENCE_FIT_ROUTE_<N>_*` group is partial, has an invalid scope or prefixed
+   download-tool name, or duplicates another route's MCP server/scope.
+7. At least one FIT route is configured and `KADENCE_FIT_MAX_BYTES` is not positive.
 
 Passkeys additionally require `KADENCE_WEBAUTHN_RP_ID` **and** `KADENCE_TRUSTED_ORIGINS`
 **and** a valid 32-byte `KADENCE_ENCRYPTION_KEY`; if the RP ID is set without the
@@ -176,3 +223,4 @@ others, startup fails with a message naming what's missing.
 | Passkeys | `KADENCE_WEBAUTHN_RP_ID` + `KADENCE_TRUSTED_ORIGINS` + 32-byte `KADENCE_ENCRYPTION_KEY` |
 | User-defined MCP | `KADENCE_USER_MCP_ALLOWED_HOSTS` + 32-byte `KADENCE_ENCRYPTION_KEY` |
 | Rich ingestion | `KADENCE_MARKITDOWN_URL` set (else PDF text fast-path only) |
+| Native FIT analysis | At least one complete `KADENCE_FIT_ROUTE_<N>_*` group |

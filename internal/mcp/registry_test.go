@@ -18,6 +18,7 @@ import (
 
 const (
 	testGarminName       = "GARMIN"
+	testGarminAlias      = "garmin"
 	testUserPhilippScope = userScopePrefix + "philipp"
 	testGetToolsPattern  = "get_*"
 	testCloakBrowserName = "CLOAKBROWSER"
@@ -122,6 +123,26 @@ func TestRegistry_ToolsForAndCall(t *testing.T) {
 	}
 	if !strings.Contains(result, "activities") {
 		t.Fatalf("result missing 'activities': %s", result)
+	}
+}
+
+func TestUserSnapshotServerPrefixRespectsUserScope(t *testing.T) {
+	reg := NewRegistry([]Server{
+		{Name: "GARMIN1", Scope: "USER_alice", Alias: testGarminAlias},
+		{Name: "GARMIN2", Scope: "USER_bob", Alias: testGarminAlias},
+	}, nil, nil)
+
+	alice := reg.SnapshotFor(t.Context(), "alice")
+	if prefix, ok := alice.ServerPrefix("GARMIN1", "USER_alice"); !ok || prefix != testGarminAlias {
+		t.Fatalf("alice prefix = %q, %v; want garmin, true", prefix, ok)
+	}
+	if prefix, ok := alice.ServerPrefix("GARMIN2", "USER_bob"); ok || prefix != "" {
+		t.Fatalf("alice resolved bob route: prefix = %q, %v", prefix, ok)
+	}
+
+	bob := reg.SnapshotFor(t.Context(), "bob")
+	if prefix, ok := bob.ServerPrefix("GARMIN2", "USER_bob"); !ok || prefix != testGarminAlias {
+		t.Fatalf("bob prefix = %q, %v; want garmin, true", prefix, ok)
 	}
 }
 

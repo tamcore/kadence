@@ -59,6 +59,10 @@ type MCPUserSnapshot interface {
 	ToolHints() []string
 }
 
+type mcpServerPrefixResolver interface {
+	ServerPrefix(name, scope string) (string, bool)
+}
+
 // ServiceConfig carries model params + system prompt.
 type ServiceConfig struct {
 	Model            string
@@ -92,6 +96,8 @@ const defaultContextBudgetTokens = 32000
 const loadSkillToolName = "kadence__load_skill"
 const credsToolName = "kadence__request_credentials" // #nosec G101 -- a tool name, not a credential
 const analyzeGarminFITToolName = "kadence__analyze_garmin_fit"
+const fitAnalysisErrorMessage = "error: could not analyze FIT activity"
+const jsonSchemaType = "type"
 
 // maxCredentialFields bounds how many fields a request_credentials tool call
 // may ask for in a single call (mirrors internal/secret's own cap; enforced
@@ -179,7 +185,19 @@ type Service struct {
 	now           func() time.Time
 	skills        *skill.Registry
 	secrets       *secret.Broker
-	fitAnalyzer   *fitactivity.Analyzer
+	fitRoutes     []FITRoute
+}
+
+// FITRoute binds one bridge to the exact MCP server/scope whose pod owns the
+// shared download directory. DownloadTool is the unprefixed MCP tool name.
+type FITRoute struct {
+	ServerName     string
+	ServerScope    string
+	DownloadTool   string
+	BridgeURL      string
+	BridgeAuthUser string
+	BridgeAuthPass string
+	MaxBytes       int64
 }
 
 // Deps carries the chat Service's dependencies. Guardrail, RAG, MCP, Skills,
@@ -197,8 +215,8 @@ type Deps struct {
 	// placeholder substitution at MCP dispatch, and secret redaction. Nil
 	// disables the feature entirely: the tool is not offered and no
 	// substitution/redaction runs.
-	Secrets *secret.Broker
-	FIT     *fitactivity.Analyzer
+	Secrets   *secret.Broker
+	FITRoutes []FITRoute
 }
 
 // NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
@@ -224,10 +242,40 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
 		maxIterations: maxIterations, maxTools: maxTools, contextBudget: contextBudget, now: now,
-		skills:      deps.Skills,
-		secrets:     deps.Secrets,
-		fitAnalyzer: deps.FIT,
+		skills:    deps.Skills,
+		secrets:   deps.Secrets,
+		fitRoutes: append([]FITRoute(nil), deps.FITRoutes...),
 	}
+}
+
+type resolvedFITRoute struct {
+	source       string
+	downloadTool string
+	analyzer     *fitactivity.Analyzer
+}
+
+func (s *Service) fitRoutesForSnapshot(mcpSnap MCPUserSnapshot) []resolvedFITRoute {
+	resolver, ok := mcpSnap.(mcpServerPrefixResolver)
+	if !ok {
+		return nil
+	}
+	routes := make([]resolvedFITRoute, 0, len(s.fitRoutes))
+	for _, route := range s.fitRoutes {
+		prefix, visible := resolver.ServerPrefix(route.ServerName, route.ServerScope)
+		if !visible {
+			continue
+		}
+		downloadTool := prefix + "__" + route.DownloadTool
+		routes = append(routes, resolvedFITRoute{
+			source:       prefix,
+			downloadTool: downloadTool,
+			analyzer: fitactivity.NewAnalyzer(
+				downloadTool, route.BridgeURL, route.BridgeAuthUser,
+				route.BridgeAuthPass, route.MaxBytes,
+			),
+		})
+	}
+	return routes
 }
 
 // unitPromptLine returns the system-prompt sentence telling the model which
@@ -666,6 +714,8 @@ func (s *Service) completeIfTruncated(
 // request_credentials) plus the built-in tools themselves.
 func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []provider.ToolDefinition {
 	var tools []provider.ToolDefinition
+	fitRoutes := s.fitRoutesForSnapshot(mcpSnap)
+	fitEnabled := len(fitRoutes) > 0
 	if mcpSnap != nil {
 		mcpTools, toolsErr := mcpSnap.ToolsFor(ctx)
 		if toolsErr != nil {
@@ -681,7 +731,7 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 			if s.secrets != nil {
 				builtins++
 			}
-			if s.fitAnalyzer != nil {
+			if fitEnabled {
 				builtins++
 			}
 			if mcpCap > builtins {
@@ -702,10 +752,43 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 	if s.secrets != nil {
 		tools = append(tools, s.credsTool())
 	}
-	if s.fitAnalyzer != nil && mcpSnap != nil {
-		tools = append(tools, provider.ToolDefinition{Name: analyzeGarminFITToolName, Description: "Download and analyze one activity FIT file by activity_id. Returns a compact metric summary and splits, never GPS records.", Parameters: json.RawMessage(`{"type":"object","properties":{"activity_id":{"type":"integer"}},"required":["activity_id"]}`)})
+	if fitEnabled && mcpSnap != nil {
+		tools = append(tools, fitToolDefinition(fitRoutes))
 	}
 	return tools
+}
+
+func fitToolDefinition(routes []resolvedFITRoute) provider.ToolDefinition {
+	definition := provider.ToolDefinition{
+		Name:        analyzeGarminFITToolName,
+		Description: "Download and analyze one activity FIT file by activity_id. Returns a compact metric summary and splits, never GPS records.",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"activity_id":{"type":"integer"}},"required":["activity_id"]}`),
+	}
+	if len(routes) <= 1 {
+		return definition
+	}
+
+	sources := make([]string, 0, len(routes))
+	for _, route := range routes {
+		sources = append(sources, route.source)
+	}
+	schema := map[string]any{
+		jsonSchemaType: "object",
+		"properties": map[string]any{
+			"activity_id": map[string]any{jsonSchemaType: "integer"},
+			"source": map[string]any{
+				jsonSchemaType: "string",
+				"enum":         sources,
+				"description":  "FIT-capable MCP source to use",
+			},
+		},
+		"required": []string{"activity_id", "source"},
+	}
+	if data, err := json.Marshal(schema); err == nil {
+		definition.Parameters = data
+		definition.Description += " Select the source when more than one FIT-capable MCP is available."
+	}
+	return definition
 }
 
 // credsTool builds the built-in request_credentials tool definition.
@@ -766,7 +849,7 @@ func (s *Service) dispatchTool(
 	if s.secrets != nil && tc.Name == credsToolName {
 		return s.handleRequestCredentials(streamCtx, userID, tc, sink)
 	}
-	if s.fitAnalyzer != nil && tc.Name == analyzeGarminFITToolName {
+	if len(s.fitRoutes) > 0 && tc.Name == analyzeGarminFITToolName {
 		return s.handleFITAnalysis(ctx, mcpSnap, tc, sink)
 	}
 	if s.skills != nil {
@@ -785,19 +868,41 @@ func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
 	_ = sink.Flush()
 	var args struct {
-		ActivityID int64 `json:"activity_id"`
+		ActivityID int64  `json:"activity_id"`
+		Source     string `json:"source"`
 	}
 	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil || args.ActivityID <= 0 || mcpSnap == nil {
 		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
 		_ = sink.Flush()
 		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: activity_id must be a positive integer"}
 	}
-	activity, err := s.fitAnalyzer.Analyze(ctx, mcpSnap, args.ActivityID)
+
+	var analyzer *fitactivity.Analyzer
+	if routes := s.fitRoutesForSnapshot(mcpSnap); len(routes) > 0 {
+		switch {
+		case args.Source != "":
+			for _, route := range routes {
+				if route.source == args.Source {
+					analyzer = route.analyzer
+					break
+				}
+			}
+		case len(routes) == 1:
+			analyzer = routes[0].analyzer
+		}
+	}
+	if analyzer == nil {
+		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
+		_ = sink.Flush()
+		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: no FIT source is available"}
+	}
+
+	activity, err := analyzer.Analyze(ctx, mcpSnap, args.ActivityID)
 	if err != nil {
 		slog.Warn("FIT analysis failed", "stage", fitactivity.FailureStage(err))
 		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
 		_ = sink.Flush()
-		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: could not analyze FIT activity"}
+		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: fitAnalysisErrorMessage}
 	}
 	data, err := json.Marshal(activity)
 	if err != nil {

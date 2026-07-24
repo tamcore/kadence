@@ -86,7 +86,7 @@ externalDatabase:
 #       # fitAnalysis:
 #       #   enabled: true
 #       #   downloadDir: /data/fit
-#       #   downloadTool: garmin__download_activity_file
+#       #   downloadTool: download_activity_file
 #       #   Shares this ephemeral directory with an authenticated Kadence bridge.
 #       #   Configure the MCP server itself to write downloaded FIT files here.
 
