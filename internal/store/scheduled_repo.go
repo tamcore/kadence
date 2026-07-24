@@ -683,15 +683,163 @@ func (r *ScheduledTaskRepository) ClaimDue(ctx context.Context, now time.Time, l
 		if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET last_run_at = next_run_at, next_run_at = NULL, updated_at = $1 WHERE id = $2::uuid`, now, task.ID); err != nil {
 			return nil, fmt.Errorf("advance claimed scheduled task: %w", err)
 		}
+		firstRun := task.LastRunAt == nil
+		var username string
+		if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, task.UserID).Scan(&username); err != nil {
+			return nil, fmt.Errorf("resolve scheduled task owner: %w", err)
+		}
 		task.LastRunAt = new(run.ScheduledFor)
 		task.NextRunAt = nil
 		task.UpdatedAt = now
-		claimed = append(claimed, model.ClaimedScheduledTask{Task: task, Run: run})
+		claimed = append(claimed, model.ClaimedScheduledTask{Task: task, Run: run, FirstRun: firstRun, Username: username})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit scheduled claim: %w", err)
 	}
 	return claimed, nil
+}
+
+// FinishSuccess atomically completes a still-running occurrence, optionally
+// inserts its linked assistant delivery, resets failures, persists monitoring
+// state, and advances the task.
+func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success model.ScheduledExecutionSuccess) error {
+	if success.RunState != model.ScheduledTaskRunStateNoChange &&
+		success.RunState != model.ScheduledTaskRunStateDelivered &&
+		success.RunState != model.ScheduledTaskRunStateCompleted {
+		return errors.New("store: invalid scheduled success run state")
+	}
+	if success.TaskState != model.ScheduledTaskStateActive && success.TaskState != model.ScheduledTaskStateCompleted {
+		return errors.New("store: invalid scheduled success task state")
+	}
+	if len(success.Content) > maxScheduledResultBytes {
+		return errors.New("store: scheduled result too large")
+	}
+	if !json.Valid(success.MonitoringState) || len(success.MonitoringState) > maxScheduledMonitoringStateBytes {
+		return errors.New("store: invalid scheduled monitoring state")
+	}
+	visible := success.RunState == model.ScheduledTaskRunStateDelivered || success.RunState == model.ScheduledTaskRunStateCompleted
+	if visible != success.Unread || visible != (success.Content != "") {
+		return errors.New("store: inconsistent scheduled delivery")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin scheduled success: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var taskID, conversationID, currentTaskState string
+	err = tx.QueryRow(ctx,
+		`SELECT task.id::text, task.conversation_id::text, task.state
+		 FROM scheduled_task_runs AS run
+		 JOIN scheduled_tasks AS task ON task.id = run.task_id
+		 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
+		 FOR UPDATE OF run, task`,
+		success.RunID, success.UserID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &conversationID, &currentTaskState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock scheduled success: %w", err)
+	}
+	if success.ConversationID != conversationID {
+		return ErrNotFound
+	}
+	taskState := success.TaskState
+	nextRunAt := success.NextRunAt
+	if currentTaskState != model.ScheduledTaskStateActive {
+		taskState = currentTaskState
+		nextRunAt = nil
+	}
+	if visible {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO messages (conversation_id, role, content) VALUES ($1::uuid, $2, $3)`,
+			conversationID, model.MsgRoleAssistant, success.Content); err != nil {
+			return fmt.Errorf("insert scheduled delivery: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE scheduled_task_runs SET state = $1, result = $2, unread = $3, finished_at = NOW()
+		 WHERE id = $4 AND state = $5`,
+		success.RunState, success.Content, success.Unread, success.RunID, model.ScheduledTaskRunStateRunning); err != nil {
+		return fmt.Errorf("finish scheduled success run: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE scheduled_tasks SET state = $1, monitoring_state = $2::jsonb,
+		   consecutive_failures = 0, next_run_at = $3, updated_at = NOW()
+		 WHERE id = $4::uuid`,
+		taskState, success.MonitoringState, nextRunAt, taskID); err != nil {
+		return fmt.Errorf("finish scheduled success task: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit scheduled success: %w", err)
+	}
+	return nil
+}
+
+// FinishFailure atomically fails only a still-running owner-scoped occurrence,
+// stores a bounded public code, increments failures, and advances or pauses the
+// task without exposing a partial delivery.
+func (r *ScheduledTaskRepository) FinishFailure(ctx context.Context, failure model.ScheduledExecutionFailure) error {
+	code := sanitizeScheduledFailureCode(failure.Code)
+	if code == "" {
+		code = defaultScheduledFailureCode
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin scheduled execution failure: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var taskID, currentTaskState string
+	var failures int
+	err = tx.QueryRow(ctx,
+		`SELECT task.id::text, task.state, task.consecutive_failures
+		 FROM scheduled_task_runs AS run
+		 JOIN scheduled_tasks AS task ON task.id = run.task_id
+		 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
+		 FOR UPDATE OF run, task`,
+		failure.RunID, failure.UserID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &currentTaskState, &failures)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock scheduled execution failure: %w", err)
+	}
+	taskState := failure.TaskState
+	nextRunAt := failure.NextRunAt
+	nextFailures := failures
+	if failure.IncrementFailures {
+		nextFailures++
+	}
+	if failure.Pause || (failure.IncrementFailures && nextFailures >= 3) {
+		taskState = model.ScheduledTaskStatePaused
+		nextRunAt = nil
+	}
+	if currentTaskState != model.ScheduledTaskStateActive {
+		taskState = currentTaskState
+		nextRunAt = nil
+	}
+	if taskState != model.ScheduledTaskStateActive &&
+		taskState != model.ScheduledTaskStatePaused &&
+		taskState != model.ScheduledTaskStateCompleted &&
+		taskState != model.ScheduledTaskStateFailed &&
+		taskState != model.ScheduledTaskStateDeleted {
+		return errors.New("store: invalid scheduled failure task state")
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE scheduled_task_runs SET state = $1, error = $2, finished_at = NOW()
+		 WHERE id = $3 AND state = $4`,
+		model.ScheduledTaskRunStateFailed, code, failure.RunID, model.ScheduledTaskRunStateRunning); err != nil {
+		return fmt.Errorf("finish scheduled failed run: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE scheduled_tasks SET consecutive_failures = $1, state = $2, next_run_at = $3, updated_at = NOW()
+		 WHERE id = $4::uuid`,
+		nextFailures, taskState, nextRunAt, taskID); err != nil {
+		return fmt.Errorf("finish scheduled failed task: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit scheduled execution failure: %w", err)
+	}
+	return nil
 }
 
 // MarkDelivered completes a running run with a user-visible result.
@@ -793,8 +941,10 @@ func (r *ScheduledTaskRepository) RecordFailure(ctx context.Context, runID, user
 }
 
 const (
-	defaultScheduledFailureCode = "execution_failed"
-	maxScheduledFailureCodeLen  = 64
+	defaultScheduledFailureCode      = "execution_failed"
+	maxScheduledFailureCodeLen       = 64
+	maxScheduledResultBytes          = 64 << 10
+	maxScheduledMonitoringStateBytes = 32 << 10
 )
 
 func sanitizeScheduledFailureCode(code string) string {

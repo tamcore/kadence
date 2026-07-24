@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/chat/skill"
-	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/secret"
@@ -186,6 +185,7 @@ type Service struct {
 	skills        *skill.Registry
 	secrets       *secret.Broker
 	fitRoutes     []FITRoute
+	toolCatalog   *UnattendedCatalog
 }
 
 // FITRoute binds one bridge to the exact MCP server/scope whose pod owns the
@@ -242,40 +242,11 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
 		maxIterations: maxIterations, maxTools: maxTools, contextBudget: contextBudget, now: now,
-		skills:    deps.Skills,
-		secrets:   deps.Secrets,
-		fitRoutes: append([]FITRoute(nil), deps.FITRoutes...),
+		skills:      deps.Skills,
+		secrets:     deps.Secrets,
+		fitRoutes:   append([]FITRoute(nil), deps.FITRoutes...),
+		toolCatalog: NewUnattendedCatalog(deps.MCP, deps.FITRoutes),
 	}
-}
-
-type resolvedFITRoute struct {
-	source       string
-	downloadTool string
-	analyzer     *fitactivity.Analyzer
-}
-
-func (s *Service) fitRoutesForSnapshot(mcpSnap MCPUserSnapshot) []resolvedFITRoute {
-	resolver, ok := mcpSnap.(mcpServerPrefixResolver)
-	if !ok {
-		return nil
-	}
-	routes := make([]resolvedFITRoute, 0, len(s.fitRoutes))
-	for _, route := range s.fitRoutes {
-		prefix, visible := resolver.ServerPrefix(route.ServerName, route.ServerScope)
-		if !visible {
-			continue
-		}
-		downloadTool := prefix + "__" + route.DownloadTool
-		routes = append(routes, resolvedFITRoute{
-			source:       prefix,
-			downloadTool: downloadTool,
-			analyzer: fitactivity.NewAnalyzer(
-				downloadTool, route.BridgeURL, route.BridgeAuthUser,
-				route.BridgeAuthPass, route.MaxBytes,
-			),
-		})
-	}
-	return routes
 }
 
 // unitPromptLine returns the system-prompt sentence telling the model which
@@ -496,8 +467,13 @@ func (s *Service) resolveConversation(ctx context.Context, userID int64, convers
 // token sizing further down in Stream.
 func (s *Service) resolveMCPAndSystemPrompt(ctx context.Context, uc UserContext) (MCPUserSnapshot, string) {
 	var mcpSnap MCPUserSnapshot
-	if s.mcp != nil && s.mcp.Enabled() {
-		mcpSnap = s.mcp.SnapshotFor(ctx, uc.Username)
+	if s.toolCatalog != nil {
+		snapshot, err := s.toolCatalog.SnapshotFor(ctx, uc.Username)
+		if err != nil {
+			slog.Warn("tool snapshot failed, proceeding", "err", err)
+		} else {
+			mcpSnap = snapshot
+		}
 	}
 
 	systemPrompt := s.systemPrompt(uc)
@@ -507,6 +483,10 @@ func (s *Service) resolveMCPAndSystemPrompt(ctx context.Context, uc UserContext)
 		}
 	}
 	return mcpSnap, systemPrompt
+}
+
+func (s *Service) fitRoutesForSnapshot(mcpSnap MCPUserSnapshot) []resolvedFITRoute {
+	return resolveFITRoutes(mcpSnap, s.fitRoutes)
 }
 
 // assembleRAGInserts retrieves RAG context for userText and, if any notes
@@ -714,13 +694,22 @@ func (s *Service) completeIfTruncated(
 // request_credentials) plus the built-in tools themselves.
 func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []provider.ToolDefinition {
 	var tools []provider.ToolDefinition
-	fitRoutes := s.fitRoutesForSnapshot(mcpSnap)
+	fitRoutes := resolveFITRoutes(mcpSnap, s.fitRoutes)
 	fitEnabled := len(fitRoutes) > 0
 	if mcpSnap != nil {
 		mcpTools, toolsErr := mcpSnap.ToolsFor(ctx)
 		if toolsErr != nil {
 			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
 		} else {
+			if fitEnabled {
+				filtered := mcpTools[:0]
+				for _, definition := range mcpTools {
+					if definition.Name != analyzeGarminFITToolName {
+						filtered = append(filtered, definition)
+					}
+				}
+				mcpTools = filtered
+			}
 			// Reserve one slot per enabled built-in tool so the total never
 			// exceeds the configured cap.
 			mcpCap := s.maxTools
@@ -752,7 +741,7 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 	if s.secrets != nil {
 		tools = append(tools, s.credsTool())
 	}
-	if fitEnabled && mcpSnap != nil {
+	if fitEnabled {
 		tools = append(tools, fitToolDefinition(fitRoutes))
 	}
 	return tools
@@ -849,9 +838,6 @@ func (s *Service) dispatchTool(
 	if s.secrets != nil && tc.Name == credsToolName {
 		return s.handleRequestCredentials(streamCtx, userID, tc, sink)
 	}
-	if len(s.fitRoutes) > 0 && tc.Name == analyzeGarminFITToolName {
-		return s.handleFITAnalysis(ctx, mcpSnap, tc, sink)
-	}
 	if s.skills != nil {
 		if tc.Name == loadSkillToolName {
 			return s.handleLoadSkill(tc, sink)
@@ -867,52 +853,23 @@ func (s *Service) dispatchTool(
 func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot, tc provider.ToolCall, sink EventSink) provider.Message {
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
 	_ = sink.Flush()
-	var args struct {
-		ActivityID int64  `json:"activity_id"`
-		Source     string `json:"source"`
+	snapshot := &UnattendedSnapshot{
+		mcp:       mcpSnap,
+		allowed:   map[string]struct{}{analyzeGarminFITToolName: {}},
+		fitRoutes: resolveFITRoutes(mcpSnap, s.fitRoutes),
 	}
-	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil || args.ActivityID <= 0 || mcpSnap == nil {
-		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
-		_ = sink.Flush()
-		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: activity_id must be a positive integer"}
-	}
-
-	var analyzer *fitactivity.Analyzer
-	if routes := s.fitRoutesForSnapshot(mcpSnap); len(routes) > 0 {
-		switch {
-		case args.Source != "":
-			for _, route := range routes {
-				if route.source == args.Source {
-					analyzer = route.analyzer
-					break
-				}
-			}
-		case len(routes) == 1:
-			analyzer = routes[0].analyzer
+	out, err := snapshot.Call(ctx, tc.Name, tc.Arguments)
+	status := toolStatusDone
+	if err != nil {
+		status = toolStatusError
+		out = err.Error()
+		if !strings.HasPrefix(out, "error:") {
+			out = "error: " + out
 		}
 	}
-	if analyzer == nil {
-		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
-		_ = sink.Flush()
-		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: no FIT source is available"}
-	}
-
-	activity, err := analyzer.Analyze(ctx, mcpSnap, args.ActivityID)
-	if err != nil {
-		slog.Warn("FIT analysis failed", "stage", fitactivity.FailureStage(err))
-		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
-		_ = sink.Flush()
-		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: fitAnalysisErrorMessage}
-	}
-	data, err := json.Marshal(activity)
-	if err != nil {
-		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
-		_ = sink.Flush()
-		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: could not encode activity analysis"}
-	}
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusDone})
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
 	_ = sink.Flush()
-	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: string(data)}
+	return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: out}
 }
 
 // credentialRequestArgs is the parsed request_credentials tool-call payload.

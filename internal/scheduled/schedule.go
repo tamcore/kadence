@@ -10,6 +10,8 @@ import (
 	"github.com/teambition/rrule-go"
 )
 
+const defaultTimezoneUTC = "UTC"
+
 var errNoOccurrence = errors.New("scheduled: no occurrence after time")
 
 // Schedule is either a future one-off instant or an RFC 5545 RRULE whose
@@ -23,7 +25,7 @@ type Schedule struct {
 
 // ValidateTimezone loads an IANA location accepted for Scheduled tasks.
 func ValidateTimezone(name string) (*time.Location, error) {
-	if name != "UTC" && !strings.Contains(name, "/") {
+	if name != defaultTimezoneUTC && !strings.Contains(name, "/") {
 		return nil, fmt.Errorf("scheduled: timezone %q is not an IANA timezone", name)
 	}
 	location, err := time.LoadLocation(name)

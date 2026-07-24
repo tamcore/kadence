@@ -325,7 +325,7 @@ func (s *Service) availableTools(ctx context.Context, username string) ([]provid
 func draftTask(actor Actor, conversationID string) model.ScheduledTask {
 	timezone := actor.Timezone
 	if timezone == "" {
-		timezone = "UTC"
+		timezone = defaultTimezoneUTC
 	}
 	return model.ScheduledTask{UserID: actor.ID, ConversationID: conversationID,
 		Kind: string(TaskKindReminder), State: model.ScheduledTaskStateDraft, Timezone: timezone,

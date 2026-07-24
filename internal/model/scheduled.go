@@ -85,6 +85,34 @@ type ScheduledTaskRun struct {
 
 // ClaimedScheduledTask is a task and its atomically-created running occurrence.
 type ClaimedScheduledTask struct {
-	Task ScheduledTask
-	Run  ScheduledTaskRun
+	Task     ScheduledTask
+	Run      ScheduledTaskRun
+	FirstRun bool
+	Username string
+}
+
+// ScheduledExecutionSuccess is the atomic persistence request for one
+// successful claimed occurrence.
+type ScheduledExecutionSuccess struct {
+	RunID           int64
+	UserID          int64
+	ConversationID  string
+	RunState        string
+	TaskState       string
+	Content         string
+	Unread          bool
+	MonitoringState json.RawMessage
+	NextRunAt       *time.Time
+}
+
+// ScheduledExecutionFailure is the atomic persistence request for one failed
+// claimed occurrence.
+type ScheduledExecutionFailure struct {
+	RunID             int64
+	UserID            int64
+	Code              string
+	Pause             bool
+	IncrementFailures bool
+	TaskState         string
+	NextRunAt         *time.Time
 }

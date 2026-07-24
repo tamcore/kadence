@@ -239,6 +239,7 @@ func Run() error {
 				})
 			}
 		}
+		unattendedTools := chat.NewUnattendedCatalog(mcpTools, fitRoutes)
 		skills, err := skill.Load()
 		if err != nil {
 			return fmt.Errorf("load skills: %w", err)
@@ -264,10 +265,11 @@ func Run() error {
 		if cfg.ScheduledEnabled {
 			tasks := store.NewScheduledTaskRepository(pool, cfg.ScheduledMaxActivePerUser)
 			toolsForUser := func(ctx context.Context, username string) ([]provider.ToolDefinition, error) {
-				if registry == nil {
-					return nil, nil
+				snapshot, err := unattendedTools.SnapshotFor(ctx, username)
+				if err != nil {
+					return nil, err
 				}
-				return registry.SnapshotFor(ctx, username).ToolsFor(ctx)
+				return snapshot.ToolsFor(ctx)
 			}
 			scheduledSvc := scheduled.NewService(scheduled.ServiceDeps{
 				Conversations: convs, Messages: msgs, Tasks: tasks,
