@@ -2,30 +2,54 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
-	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
+)
+
+const (
+	testFITServerOne    = "GARMIN1"
+	testFITServerTwo    = "GARMIN2"
+	testFITDownloadTool = "download_activity_file"
+	testFITBridgeOne    = "http://garmin1:8081"
+	testFITBridgeTwo    = "http://garmin2:8081"
+	testFITBobPassword  = "bob-pass"
+	testFITAlias        = "garmin"
+	testFITGlobalScope  = "GLOBAL"
+	testFITAliceScope   = "USER_alice"
+	testFITBobScope     = "USER_bob"
 )
 
 type fitToolSnapshot struct {
 	tools      []provider.ToolDefinition
 	callResult string
 	callErr    error
+	prefixes   map[string]string
+	calledTool *string
 }
 
 func (s fitToolSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
 	return s.tools, nil
 }
 
-func (s fitToolSnapshot) Call(context.Context, string, string) (string, error) {
+func (s fitToolSnapshot) Call(_ context.Context, toolName, _ string) (string, error) {
+	if s.calledTool != nil {
+		*s.calledTool = toolName
+	}
 	return s.callResult, s.callErr
 }
 
 func (fitToolSnapshot) ToolHints() []string { return nil }
+
+func (s fitToolSnapshot) ServerPrefix(name, scope string) (string, bool) {
+	prefix, ok := s.prefixes[name+"\x00"+scope]
+	return prefix, ok
+}
 
 type fitEventSink struct{ events []ChatEvent }
 
@@ -36,12 +60,155 @@ func (s *fitEventSink) Send(event ChatEvent) error {
 
 func (*fitEventSink) Flush() error { return nil }
 
+func TestFITRoutesForSnapshotSelectsExactUserScopedMCP(t *testing.T) {
+	s := NewService(nil, ServiceConfig{}, Deps{
+		FITRoutes: []FITRoute{
+			{
+				ServerName: testFITServerOne, ServerScope: testFITAliceScope,
+				DownloadTool: testFITDownloadTool, BridgeURL: testFITBridgeOne,
+				BridgeAuthUser: "u", BridgeAuthPass: "alice-pass", MaxBytes: 1024,
+			},
+			{
+				ServerName: testFITServerTwo, ServerScope: testFITBobScope,
+				DownloadTool: testFITDownloadTool, BridgeURL: testFITBridgeTwo,
+				BridgeAuthUser: "u", BridgeAuthPass: testFITBobPassword, MaxBytes: 1024,
+			},
+		},
+	})
+
+	routes := s.fitRoutesForSnapshot(fitToolSnapshot{prefixes: map[string]string{
+		testFITServerTwo + "\x00" + testFITBobScope: testFITAlias,
+	}})
+	if len(routes) != 1 {
+		t.Fatalf("len(routes) = %d, want only bob's route", len(routes))
+	}
+	if routes[0].source != testFITAlias || routes[0].downloadTool != "garmin__download_activity_file" {
+		t.Fatalf("resolved route = %+v, want bob's effective download tool", routes[0])
+	}
+}
+
+func TestAssembleToolsOffersFITOnlyForVisibleUserRoute(t *testing.T) {
+	s := NewService(nil, ServiceConfig{MCPMaxTools: 4}, Deps{
+		FITRoutes: []FITRoute{
+			{
+				ServerName: testFITServerOne, ServerScope: testFITAliceScope,
+				DownloadTool: testFITDownloadTool, BridgeURL: testFITBridgeOne,
+				BridgeAuthUser: "u", BridgeAuthPass: "alice-pass", MaxBytes: 1024,
+			},
+			{
+				ServerName: testFITServerTwo, ServerScope: testFITBobScope,
+				DownloadTool: testFITDownloadTool, BridgeURL: testFITBridgeTwo,
+				BridgeAuthUser: "u", BridgeAuthPass: testFITBobPassword, MaxBytes: 1024,
+			},
+		},
+	})
+
+	aliceTools := s.assembleTools(context.Background(), fitToolSnapshot{prefixes: map[string]string{
+		testFITServerOne + "\x00" + testFITAliceScope: testFITAlias,
+	}})
+	if !hasToolNamed(aliceTools, analyzeGarminFITToolName) {
+		t.Fatalf("alice tools = %+v, want native FIT tool", aliceTools)
+	}
+
+	otherTools := s.assembleTools(context.Background(), fitToolSnapshot{})
+	if hasToolNamed(otherTools, analyzeGarminFITToolName) {
+		t.Fatalf("unrelated user tools = %+v, FIT route leaked across scope", otherTools)
+	}
+}
+
+func TestAssembleToolsRequiresSourceWhenMultipleFITRoutesAreVisible(t *testing.T) {
+	s := NewService(nil, ServiceConfig{MCPMaxTools: 4}, Deps{
+		FITRoutes: []FITRoute{
+			{
+				ServerName: testFITServerOne, ServerScope: testFITGlobalScope,
+				DownloadTool: testFITDownloadTool, BridgeURL: "http://garmin1:8081",
+				BridgeAuthUser: "u", BridgeAuthPass: "p1", MaxBytes: 1024,
+			},
+			{
+				ServerName: testFITServerTwo, ServerScope: testFITAliceScope,
+				DownloadTool: testFITDownloadTool, BridgeURL: testFITBridgeTwo,
+				BridgeAuthUser: "u", BridgeAuthPass: "p2", MaxBytes: 1024,
+			},
+		},
+	})
+	tools := s.assembleTools(context.Background(), fitToolSnapshot{prefixes: map[string]string{
+		testFITServerOne + "\x00" + testFITGlobalScope: testFITAlias,
+		testFITServerTwo + "\x00" + testFITAliceScope:  "garmin2",
+	}})
+
+	var fitTool provider.ToolDefinition
+	for _, tool := range tools {
+		if tool.Name == analyzeGarminFITToolName {
+			fitTool = tool
+			break
+		}
+	}
+	var schema struct {
+		Properties struct {
+			Source struct {
+				Enum []string `json:"enum"`
+			} `json:"source"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(fitTool.Parameters, &schema); err != nil {
+		t.Fatalf("decode FIT tool schema: %v", err)
+	}
+	if !slices.Equal(schema.Properties.Source.Enum, []string{testFITAlias, "garmin2"}) ||
+		!slices.Contains(schema.Required, "source") {
+		t.Fatalf("FIT tool schema = %+v, want required source enum", schema)
+	}
+}
+
+func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
+	s := NewService(nil, ServiceConfig{}, Deps{
+		FITRoutes: []FITRoute{{
+			ServerName: testFITServerTwo, ServerScope: testFITBobScope,
+			DownloadTool: testFITDownloadTool, BridgeURL: "http://127.0.0.1:1",
+			BridgeAuthUser: "u", BridgeAuthPass: testFITBobPassword, MaxBytes: 1024,
+		}},
+	})
+	var calledTool string
+	snapshot := fitToolSnapshot{
+		prefixes:   map[string]string{testFITServerTwo + "\x00" + testFITBobScope: testFITAlias},
+		callResult: `{"path":"/data/fit/activity.fit"}`,
+		calledTool: &calledTool,
+	}
+
+	msg := s.handleFITAnalysis(
+		context.Background(),
+		snapshot,
+		provider.ToolCall{ID: "call-1", Name: analyzeGarminFITToolName, Arguments: `{"activity_id":42}`},
+		&fitEventSink{},
+	)
+
+	if calledTool != "garmin__download_activity_file" {
+		t.Fatalf("called tool = %q, want bob's visible download tool", calledTool)
+	}
+	if msg.Content != fitAnalysisErrorMessage {
+		t.Fatalf("tool result = %q, want safe decode failure", msg.Content)
+	}
+}
+
+func hasToolNamed(tools []provider.ToolDefinition, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
 	s := NewService(nil, ServiceConfig{MCPMaxTools: 1}, Deps{
-		FIT: fitactivity.NewAnalyzer("activity__download_fit", "http://bridge", "u", "p", 1024),
+		FITRoutes: []FITRoute{{
+			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: "download_fit",
+			BridgeURL: "http://bridge", BridgeAuthUser: "u", BridgeAuthPass: "p", MaxBytes: 1024,
+		}},
 	})
 	tools := s.assembleTools(context.Background(), fitToolSnapshot{
-		tools: []provider.ToolDefinition{{Name: "activity__list"}},
+		tools:    []provider.ToolDefinition{{Name: "activity__list"}},
+		prefixes: map[string]string{"ACTIVITY\x00GLOBAL": "activity"},
 	})
 
 	if len(tools) != 1 || tools[0].Name != analyzeGarminFITToolName {
@@ -51,17 +218,23 @@ func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
 
 func TestFITAnalysisReturnsSafeToolError(t *testing.T) {
 	s := NewService(nil, ServiceConfig{}, Deps{
-		FIT: fitactivity.NewAnalyzer("activity__download_fit", "http://bridge", "u", "p", 1024),
+		FITRoutes: []FITRoute{{
+			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: "download_fit",
+			BridgeURL: "http://bridge", BridgeAuthUser: "u", BridgeAuthPass: "p", MaxBytes: 1024,
+		}},
 	})
 	sink := &fitEventSink{}
 	msg := s.handleFITAnalysis(
 		context.Background(),
-		fitToolSnapshot{callErr: errors.New("sensitive path /data/fit/private.fit")},
+		fitToolSnapshot{
+			callErr:  errors.New("sensitive path /data/fit/private.fit"),
+			prefixes: map[string]string{"ACTIVITY\x00GLOBAL": "activity"},
+		},
 		provider.ToolCall{ID: "call-1", Name: analyzeGarminFITToolName, Arguments: `{"activity_id":42}`},
 		sink,
 	)
 
-	if msg.Content != "error: could not analyze FIT activity" {
+	if msg.Content != fitAnalysisErrorMessage {
 		t.Fatalf("tool result = %q, want generic safe error", msg.Content)
 	}
 	if strings.Contains(msg.Content, "/data/fit") || len(sink.events) != 2 || sink.events[1].Status != toolStatusError {

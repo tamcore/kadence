@@ -21,7 +21,6 @@ import (
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/crypto"
 	"github.com/tamcore/kadence/internal/embed"
-	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/provider"
@@ -75,6 +74,10 @@ func (a mcpSnapshotAdapter) Call(ctx context.Context, toolName, argsJSON string)
 
 func (a mcpSnapshotAdapter) ToolHints() []string {
 	return a.snap.ToolHints()
+}
+
+func (a mcpSnapshotAdapter) ServerPrefix(name, scope string) (string, bool) {
+	return a.snap.ServerPrefix(name, scope)
 }
 
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
@@ -186,7 +189,7 @@ func Run() error {
 		}
 
 		var mcpTools chat.MCPTools // nil interface = disabled
-		var fitAnalyzer *fitactivity.Analyzer
+		var fitRoutes []chat.FITRoute
 
 		var userSrc mcp.UserServerSource
 		var userRepo *store.UserServerRepo
@@ -224,10 +227,15 @@ func Run() error {
 			}
 		}
 		if cfg.FITEnabled() {
-			fitAnalyzer = fitactivity.NewAnalyzer(
-				cfg.FITDownloadTool, cfg.FITBridgeURL, cfg.FITBridgeAuthUser,
-				cfg.FITBridgeAuthPass, int64(cfg.FITMaxBytes),
-			)
+			fitRoutes = make([]chat.FITRoute, 0, len(cfg.FITRoutes))
+			for _, route := range cfg.FITRoutes {
+				fitRoutes = append(fitRoutes, chat.FITRoute{
+					ServerName: route.ServerName, ServerScope: route.ServerScope,
+					DownloadTool: route.DownloadTool, BridgeURL: route.BridgeURL,
+					BridgeAuthUser: route.BridgeAuthUser, BridgeAuthPass: route.BridgeAuthPass,
+					MaxBytes: int64(cfg.FITMaxBytes),
+				})
+			}
 		}
 		skills, err := skill.Load()
 		if err != nil {
@@ -247,8 +255,9 @@ func Run() error {
 			MCPMaxTools:         cfg.MCPMaxTools,
 			ContextBudgetTokens: cfg.LLMContextBudgetTokens,
 		}, chat.Deps{
-			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills, FIT: fitAnalyzer,
-			Secrets: broker,
+			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
+			FITRoutes: fitRoutes,
+			Secrets:   broker,
 		})
 		deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
 		deps.Credentials = handlers.NewCredentials(broker)

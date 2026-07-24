@@ -78,12 +78,12 @@ jobs:
       - name: assert optional FIT analysis wiring
         run: |
           server_without_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds"}]'
-          server_with_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"activity__download_file"}}]'
+          server_with_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}}]'
 
           helm template kadence ./charts/kadence --set-json "mcp.servers=$server_without_fit" > /tmp/rendered-fit-disabled.yaml
           disabled_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-disabled.yaml)
           disabled_service_port=$(yq eval-all '[select(.kind == "Service" and .metadata.name == "kadence-mcp-activity") | .spec.ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-disabled.yaml)
-          disabled_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_"))] | length' /tmp/rendered-fit-disabled.yaml)
+          disabled_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_ROUTE_"))] | length' /tmp/rendered-fit-disabled.yaml)
           disabled_volume=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.volumes[] | select(.name == "fit-files")] | length' /tmp/rendered-fit-disabled.yaml)
           disabled_mounts=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | .volumeMounts[] | select(.name == "fit-files")] | length' /tmp/rendered-fit-disabled.yaml)
           disabled_app_egress=$(yq eval-all '[select(.kind == "NetworkPolicy" and .metadata.name == "kadence") | .spec.egress[] | select(.to[0].podSelector.matchLabels."app.kubernetes.io/component" == "mcp") | .ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-disabled.yaml)
@@ -95,13 +95,28 @@ jobs:
           helm template kadence ./charts/kadence --set-json "mcp.servers=$server_with_fit" > /tmp/rendered-fit-enabled.yaml
           enabled_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-enabled.yaml)
           enabled_service_port=$(yq eval-all '[select(.kind == "Service" and .metadata.name == "kadence-mcp-activity") | .spec.ports[] | select(.port == 8081 and .targetPort == 8081 and .name == "file-bridge")] | length' /tmp/rendered-fit-enabled.yaml)
-          enabled_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_"))] | length' /tmp/rendered-fit-enabled.yaml)
+          enabled_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_ROUTE_"))] | length' /tmp/rendered-fit-enabled.yaml)
           enabled_volume=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.volumes[] | select(.name == "fit-files")] | length' /tmp/rendered-fit-enabled.yaml)
           enabled_mounts=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | .volumeMounts[] | select(.name == "fit-files" and .mountPath == "/data/fit")] | length' /tmp/rendered-fit-enabled.yaml)
           enabled_mcp_ingress=$(yq eval-all '[select(.kind == "NetworkPolicy" and .metadata.name == "kadence-mcp-activity") | .spec.ingress[].ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-enabled.yaml)
           enabled_app_egress=$(yq eval-all '[select(.kind == "NetworkPolicy" and .metadata.name == "kadence") | .spec.egress[] | select(.to[0].podSelector.matchLabels."app.kubernetes.io/component" == "mcp") | .ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-enabled.yaml)
-          if [ "$enabled_bridge" != "1" ] || [ "$enabled_service_port" != "1" ] || [ "$enabled_app_env" != "4" ] || [ "$enabled_volume" != "1" ] || [ "$enabled_mounts" != "2" ] || [ "$enabled_mcp_ingress" != "1" ] || [ "$enabled_app_egress" != "1" ]; then
-            echo "expected enabled fitAnalysis to render one bridge, Service port, shared volume, two mounts, MCP ingress 8081, app egress 8081, and four app env vars; got bridge=$enabled_bridge port=$enabled_service_port env=$enabled_app_env volume=$enabled_volume mounts=$enabled_mounts mcp-ingress=$enabled_mcp_ingress app-egress=$enabled_app_egress"
+          if [ "$enabled_bridge" != "1" ] || [ "$enabled_service_port" != "1" ] || [ "$enabled_app_env" != "6" ] || [ "$enabled_volume" != "1" ] || [ "$enabled_mounts" != "2" ] || [ "$enabled_mcp_ingress" != "1" ] || [ "$enabled_app_egress" != "1" ]; then
+            echo "expected enabled fitAnalysis to render one bridge, Service port, shared volume, two mounts, MCP ingress 8081, app egress 8081, and six app route env vars; got bridge=$enabled_bridge port=$enabled_service_port env=$enabled_app_env volume=$enabled_volume mounts=$enabled_mounts mcp-ingress=$enabled_mcp_ingress app-egress=$enabled_app_egress"
+            exit 1
+          fi
+
+          servers_with_user_fit='[
+            {"name":"activity1","scope":{"user":"alice"},"alias":"activity","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}},
+            {"name":"activity2","scope":{"user":"bob"},"alias":"activity","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}}
+          ]'
+          helm template kadence ./charts/kadence --set-json "mcp.servers=$servers_with_user_fit" > /tmp/rendered-fit-multi-user.yaml
+          multi_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.labels."app.kubernetes.io/component" == "mcp") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-multi-user.yaml)
+          multi_service_port=$(yq eval-all '[select(.kind == "Service" and .metadata.labels."app.kubernetes.io/component" == "mcp") | .spec.ports[] | select(.port == 8081)] | length' /tmp/rendered-fit-multi-user.yaml)
+          multi_app_env=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_ROUTE_"))] | length' /tmp/rendered-fit-multi-user.yaml)
+          multi_app_env_unique=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_ROUTE_")) | .name' /tmp/rendered-fit-multi-user.yaml | sort -u | wc -l | tr -d ' ')
+          multi_prefixed_download_tool=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name | test("^KADENCE_FIT_ROUTE_.*_DOWNLOAD_TOOL$")) | select(.value | contains("__"))] | length' /tmp/rendered-fit-multi-user.yaml)
+          if [ "$multi_bridge" != "2" ] || [ "$multi_service_port" != "2" ] || [ "$multi_app_env" != "12" ] || [ "$multi_app_env_unique" != "12" ] || [ "$multi_prefixed_download_tool" != "0" ]; then
+            echo "expected two user-scoped FIT servers to render two bridges, two Service ports, and twelve unique route env vars with unprefixed download tools; got bridge=$multi_bridge port=$multi_service_port env=$multi_app_env unique=$multi_app_env_unique prefixed-tools=$multi_prefixed_download_tool"
             exit 1
           fi
       - name: assert NetworkPolicy presence/count matches networkPolicy gates (wave 2, issue 14)

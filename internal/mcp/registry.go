@@ -113,6 +113,20 @@ func (u *UserSnapshot) ToolHints() []string {
 	return u.reg.toolHints(u.username, u.servers)
 }
 
+// ServerPrefix returns the effective tool-name prefix for one exact
+// env-configured MCP server when that server is visible in this user's snapshot.
+// It accounts for aliases and per-user collision fallback in the same way as
+// ToolsFor and Call.
+func (u *UserSnapshot) ServerPrefix(name, scope string) (string, bool) {
+	applicable, prefixes := applicableServersWithPrefixes(u.username, u.servers)
+	for i, server := range applicable {
+		if server.Name == name && server.Scope == scope {
+			return prefixes[i], true
+		}
+	}
+	return "", false
+}
+
 // applicableServers returns env servers plus the user's own DB servers.
 func (r *Registry) applicableServers(ctx context.Context, username string) []Server {
 	out := append([]Server(nil), r.servers...)

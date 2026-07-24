@@ -9,13 +9,17 @@ import (
 
 // testDatabaseURL is a placeholder DSN used across tests that only need
 // Validate() to see a non-empty DatabaseURL.
-const testDatabaseURL = "postgres://x"
+const (
+	testDatabaseURL     = "postgres://x"
+	testFITServerOne    = "GARMIN1"
+	testFITDownloadTool = "download_activity_file"
+	testFITAliceScope   = "USER_alice"
+	testFITBridgeOne    = "http://garmin1:8081"
+)
 
 // testWebAuthnRPID is a placeholder WebAuthn Relying Party ID used across
 // WebAuthn-related tests.
 const testWebAuthnRPID = "kadence.example.com"
-
-const testFITDownloadTool = "activity__download_fit"
 
 // validConfig returns a Config that passes Validate() outright: every field
 // Validate() range-checks is set to a sane positive value (mirroring Load()'s
@@ -93,42 +97,90 @@ func TestLoadAuthFields(t *testing.T) {
 	}
 }
 
-func TestLoadFITAnalysisFields(t *testing.T) {
-	t.Setenv("KADENCE_FIT_DOWNLOAD_TOOL", testFITDownloadTool)
-	t.Setenv("KADENCE_FIT_BRIDGE_URL", "http://activity-mcp:8081")
-	t.Setenv("KADENCE_FIT_BRIDGE_AUTH_USER", "bridge-user")
-	t.Setenv("KADENCE_FIT_BRIDGE_AUTH_PASS", "bridge-pass")
+func TestLoadFITAnalysisMaxBytes(t *testing.T) {
 	t.Setenv("KADENCE_FIT_MAX_BYTES", "12345")
 
 	cfg := Load()
 
-	if !cfg.FITEnabled() {
-		t.Fatal("FITEnabled() = false, want true for complete FIT configuration")
-	}
-	if cfg.FITDownloadTool != testFITDownloadTool ||
-		cfg.FITBridgeURL != "http://activity-mcp:8081" ||
-		cfg.FITBridgeAuthUser != "bridge-user" ||
-		cfg.FITBridgeAuthPass != "bridge-pass" ||
-		cfg.FITMaxBytes != 12345 {
-		t.Fatalf("FIT fields not loaded: %+v", cfg)
+	if cfg.FITMaxBytes != 12345 {
+		t.Fatalf("FITMaxBytes = %d, want 12345", cfg.FITMaxBytes)
 	}
 }
 
-func TestValidateRejectsPartialFITAnalysisConfiguration(t *testing.T) {
-	cfg := validConfig()
-	cfg.FITDownloadTool = testFITDownloadTool
+func TestLoadFITAnalysisRoutesForMultipleUsers(t *testing.T) {
+	t.Setenv("KADENCE_FIT_ROUTE_0_SERVER_NAME", testFITServerOne)
+	t.Setenv("KADENCE_FIT_ROUTE_0_SERVER_SCOPE", testFITAliceScope)
+	t.Setenv("KADENCE_FIT_ROUTE_0_DOWNLOAD_TOOL", testFITDownloadTool)
+	t.Setenv("KADENCE_FIT_ROUTE_0_BRIDGE_URL", testFITBridgeOne)
+	t.Setenv("KADENCE_FIT_ROUTE_0_BRIDGE_AUTH_USER", "bridge-user")
+	t.Setenv("KADENCE_FIT_ROUTE_0_BRIDGE_AUTH_PASS", "alice-pass")
+	t.Setenv("KADENCE_FIT_ROUTE_1_SERVER_NAME", "GARMIN2")
+	t.Setenv("KADENCE_FIT_ROUTE_1_SERVER_SCOPE", "USER_bob")
+	t.Setenv("KADENCE_FIT_ROUTE_1_DOWNLOAD_TOOL", testFITDownloadTool)
+	t.Setenv("KADENCE_FIT_ROUTE_1_BRIDGE_URL", "http://garmin2:8081")
+	t.Setenv("KADENCE_FIT_ROUTE_1_BRIDGE_AUTH_USER", "bridge-user")
+	t.Setenv("KADENCE_FIT_ROUTE_1_BRIDGE_AUTH_PASS", "bob-pass")
 
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() = nil, want error for partial FIT configuration")
+	cfg := Load()
+
+	if len(cfg.FITRoutes) != 2 {
+		t.Fatalf("len(FITRoutes) = %d, want 2", len(cfg.FITRoutes))
+	}
+	if got := cfg.FITRoutes[0]; got.ServerName != testFITServerOne || got.ServerScope != testFITAliceScope ||
+		got.DownloadTool != testFITDownloadTool || got.BridgeURL != testFITBridgeOne ||
+		got.BridgeAuthPass != "alice-pass" {
+		t.Fatalf("FITRoutes[0] = %+v, want alice route", got)
+	}
+	if got := cfg.FITRoutes[1]; got.ServerName != "GARMIN2" || got.ServerScope != "USER_bob" ||
+		got.DownloadTool != testFITDownloadTool || got.BridgeURL != "http://garmin2:8081" ||
+		got.BridgeAuthPass != "bob-pass" {
+		t.Fatalf("FITRoutes[1] = %+v, want bob route", got)
+	}
+	if !cfg.FITEnabled() {
+		t.Fatal("FITEnabled() = false, want true with two complete routes")
+	}
+}
+
+func TestValidateRejectsPartialFITAnalysisRoute(t *testing.T) {
+	cfg := validConfig()
+	cfg.FITRoutes = []FITRoute{{
+		ServerName:   testFITServerOne,
+		ServerScope:  testFITAliceScope,
+		DownloadTool: testFITDownloadTool,
+		BridgeURL:    testFITBridgeOne,
+	}}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "FIT route 0") {
+		t.Fatalf("Validate() = %v, want indexed partial FIT route error", err)
+	}
+}
+
+func TestValidateRejectsDuplicateFITServerRoute(t *testing.T) {
+	cfg := validConfig()
+	route := FITRoute{
+		ServerName:     testFITServerOne,
+		ServerScope:    testFITAliceScope,
+		DownloadTool:   testFITDownloadTool,
+		BridgeURL:      testFITBridgeOne,
+		BridgeAuthUser: "u",
+		BridgeAuthPass: "p",
+	}
+	cfg.FITRoutes = []FITRoute{route, route}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "duplicate FIT route") {
+		t.Fatalf("Validate() = %v, want duplicate FIT route error", err)
 	}
 }
 
 func TestValidateRejectsNonPositiveFITMaxBytesWhenEnabled(t *testing.T) {
 	cfg := validConfig()
-	cfg.FITDownloadTool = testFITDownloadTool
-	cfg.FITBridgeURL = "http://activity-mcp:8081"
-	cfg.FITBridgeAuthUser = "bridge-user"
-	cfg.FITBridgeAuthPass = "bridge-pass"
+	cfg.FITRoutes = []FITRoute{{
+		ServerName: testFITServerOne, ServerScope: testFITAliceScope,
+		DownloadTool: testFITDownloadTool, BridgeURL: testFITBridgeOne,
+		BridgeAuthUser: "bridge-user", BridgeAuthPass: "bridge-pass",
+	}}
 	cfg.FITMaxBytes = 0
 
 	if err := cfg.Validate(); err == nil {

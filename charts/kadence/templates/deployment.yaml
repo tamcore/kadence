@@ -69,7 +69,7 @@ spec:
           name: health
         env:
         {{- include "kadence.dbEnv" . | nindent 8 }}
-        {{- range $server := .Values.mcp.servers }}
+        {{- range $fitRouteIndex, $server := .Values.mcp.servers }}
         {{- $prefix := include "kadence.mcp.envPrefix" (dict "root" $ "server" $server) }}
         {{- $svc := include "kadence.mcp.fullname" (dict "root" $ "server" $server) }}
         {{- $secret := $.Values.mcp.basicAuth.existingSecret | default (include "kadence.mcp.authSecretName" $) }}
@@ -95,13 +95,18 @@ spec:
           value: {{ . | quote }}
         {{- end }}
         {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
-        - name: KADENCE_FIT_DOWNLOAD_TOOL
+        {{- $fitRoutePrefix := printf "KADENCE_FIT_ROUTE_%d" $fitRouteIndex }}
+        - name: {{ $fitRoutePrefix }}_SERVER_NAME
+          value: {{ upper $server.name | quote }}
+        - name: {{ $fitRoutePrefix }}_SERVER_SCOPE
+          value: {{ include "kadence.mcp.scopeToken" (dict "root" $ "server" $server) | quote }}
+        - name: {{ $fitRoutePrefix }}_DOWNLOAD_TOOL
           value: {{ $server.fitAnalysis.downloadTool | quote }}
-        - name: KADENCE_FIT_BRIDGE_URL
+        - name: {{ $fitRoutePrefix }}_BRIDGE_URL
           value: {{ printf "http://%s:8081" $svc | quote }}
-        - name: KADENCE_FIT_BRIDGE_AUTH_USER
+        - name: {{ $fitRoutePrefix }}_BRIDGE_AUTH_USER
           valueFrom: { secretKeyRef: { name: {{ $secret }}, key: username } }
-        - name: KADENCE_FIT_BRIDGE_AUTH_PASS
+        - name: {{ $fitRoutePrefix }}_BRIDGE_AUTH_PASS
           valueFrom: { secretKeyRef: { name: {{ $secret }}, key: password } }
         {{- end }}
         {{- end }}

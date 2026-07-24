@@ -73,14 +73,18 @@ mcp:
       path: /mcp
       env:
         - { name: GARMIN_MCP_TRANSPORT, value: streamable-http }
-      tools: ["get_activit*", "*_workout"]   # app-side glob allowlist
+      tools: ["get_activit*", "*_workout", "download_activity_file"] # app-side glob allowlist
       alias: garmin                          # optional: tool-name prefix override
       hint: "use for activity history and training plans"  # optional: chat system-prompt guidance
       existingSecret: garmin-creds           # server-specific secret (optional)
       persistence:                           # optional per-server volume
         enabled: true
         size: 1Gi
-        mountPath: /root/.garminconnect
+        mountPath: /data/.garminconnect
+      fitAnalysis:                           # optional native FIT analysis
+        enabled: true
+        downloadDir: /data/fit
+        downloadTool: download_activity_file # unprefixed MCP tool name
 ```
 
 Notes:
@@ -88,6 +92,48 @@ Notes:
   to track a rolling image; a digest pin always re-pulls that exact build.
 - The sidecar proxies to the MCP on `127.0.0.1:<port>`. The proxied `Host` header
   includes the port so it satisfies MCP SDKs that enforce DNS-rebinding/Host checks.
+
+### Native FIT activity analysis
+
+Enable `fitAnalysis` independently on any number of `mcp.servers[]` entries.
+`downloadTool` is the unprefixed MCP tool name. The chart emits a distinct numbered
+`KADENCE_FIT_ROUTE_<N>_*` group containing the server's exact name, scope, bridge,
+and credentials; at chat time Kadence combines that route with the effective
+alias/name prefix from the current user's MCP snapshot.
+
+For example, two entries with unique names (`garmin1` and `garmin2`), scopes
+`{user: alice}` and `{user: bob}`, and the same `alias: garmin` remain isolated:
+Alice's snapshot resolves only the first bridge and Bob's only the second. If one
+user can see multiple FIT-enabled servers, the model-facing
+`kadence__analyze_garmin_fit` tool adds a required `source` enum containing only
+that user's effective prefixes.
+
+The selected MCP server must:
+
+- accept a positive `activity_id`,
+- write the downloaded file beneath `downloadDir`, and
+- return the resulting path directly or as JSON containing `path` or `file_path`.
+
+The chart mounts a per-pod `emptyDir` at `downloadDir` in both the MCP container and
+a Kadence `file-bridge` sidecar. It also:
+
+- exposes the bridge on the MCP Service's port 8081,
+- injects the download tool, bridge URL, and bridge credentials into the app,
+- reuses the MCP basic-auth Secret for the private bridge,
+- adds app egress and MCP-pod ingress rules for port 8081 when NetworkPolicy is
+  enabled, and
+- configures hardened bridge security context, health probes, and resources.
+
+The app sends only the returned `.fit` basename to the bridge. The bridge confines
+access to a direct regular file beneath `downloadDir`, caps files at 32 MiB, and
+deletes the unchanged file after a complete successful transfer. Kadence decodes
+the response in memory and exposes only a metric summary and at most 100 lap splits;
+it does not retain raw records or GPS positions.
+
+For non-Helm deployments, reproduce the same private shared-storage and authenticated
+HTTP arrangement using the variables in
+[CONFIGURATION.md](CONFIGURATION.md#native-fit-analysis). Never expose the bridge
+outside the trusted app-to-MCP network path.
 
 ## Optional document ingestion (markitdown)
 
@@ -113,28 +159,32 @@ above the upload cap. Set your host and issuer in `ingress:`.
 - Every MCP/markitdown sidecar's **nginx** basic-auth container runs
   `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, drops all
   capabilities, and uses `seccompProfile: RuntimeDefault`.
+- MCP and markitdown pods default to uid/gid 65532 with `runAsNonRoot: true`; an MCP
+  server may override its pod security context when its image requires another uid.
+- MCP and markitdown workload containers drop all capabilities, disable privilege
+  escalation, and receive default CPU/memory requests. Per-workload resources may be
+  overridden.
 - Each MCP/markitdown workload is basic-auth protected in front of nginx, and its
   `NetworkPolicy` restricts **ingress** to the main app pod only.
+- MCP NetworkPolicies also restrict egress to DNS plus public TCP 80/443 by default,
+  excluding private and link-local ranges. `mcp.servers[].egress` replaces that
+  default for a server that needs another destination.
+- The optional FIT bridge uses a read-only root filesystem, drops all capabilities,
+  has liveness/readiness probes, and is reachable only from the app on port 8081.
 - `KADENCE_CSRF_SECRET` must be shared across replicas (set it explicitly in prod).
 
 ### Known gaps in MCP/markitdown sidecar hardening (current state)
 
-The MCP server / markitdown **workload container** (as opposed to its nginx sidecar,
-which is fully hardened per above) does not yet have:
+Remaining gaps are narrower:
 
-- `runAsNonRoot` / a pinned `runAsUser` — it drops Linux capabilities and disables
-  privilege escalation, but runs as whatever user the upstream image defaults to.
-- Liveness/readiness probes on either the workload or nginx containers.
-- Default CPU/memory **limits** — `mcp.servers[].resources` and
-  `markitdown.resources` accept `requests`/`limits`, but nothing is set unless you
-  provide them; an unbounded workload can consume node resources.
-- **Egress** restriction — the rendered `NetworkPolicy` only sets
-  `policyTypes: [Ingress]`, so outbound traffic from MCP/markitdown pods is not
-  restricted by the chart; a compromised MCP image could still reach arbitrary
-  network destinations.
-
-These are tracked as follow-up (wave-2) hardening work; this section will be
-updated once they land.
+- MCP/markitdown upstream processes bind to loopback and cannot be probed directly
+  with the current images. The nginx liveness/readiness probe proves the proxy is
+  running, not that the upstream MCP process can complete a request.
+- Upstream MCP/markitdown root filesystems remain writable for image compatibility.
+- Workloads have default resource requests but no default CPU/memory limits; set
+  `mcp.servers[].resources` or `markitdown.resources` for production limits.
+- The markitdown NetworkPolicy currently restricts ingress only; unlike MCP servers,
+  markitdown egress is not restricted by the chart.
 
 ## Local / cluster dev deploy
 
