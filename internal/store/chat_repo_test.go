@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -45,10 +46,17 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	if _, err := msgs.Add(ctx, c.ID, model.MsgRoleAssistant, "hi there"); err != nil {
 		t.Fatalf("add assistant msg: %v", err)
 	}
+	if _, err := msgs.Add(ctx, c.ID, model.MsgRoleUser, "latest"); err != nil {
+		t.Fatalf("add latest msg: %v", err)
+	}
 
 	list, err := msgs.ListByConversation(ctx, c.ID)
-	if err != nil || len(list) != 2 || list[0].Content != "hello" || list[1].Role != model.MsgRoleAssistant {
+	if err != nil || len(list) != 3 || list[0].Content != "hello" || list[1].Role != model.MsgRoleAssistant {
 		t.Fatalf("list messages: %v %+v", err, list)
+	}
+	recent, err := msgs.ListRecentByConversation(ctx, c.ID, 2)
+	if err != nil || len(recent) != 2 || recent[0].Content != "hi there" || recent[1].Content != "latest" {
+		t.Fatalf("list recent messages: %v %+v", err, recent)
 	}
 
 	got, err := convs.GetByID(ctx, c.ID, u.ID)
@@ -59,6 +67,48 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	all, err := convs.ListByUser(ctx, u.ID)
 	if err != nil || len(all) != 1 {
 		t.Fatalf("list conversations: %v len=%d", err, len(all))
+	}
+}
+
+func TestScheduledDefinitionHistoryExcludes198Deliveries(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	user, err := users.Create(ctx, model.User{Username: "scheduled-history", Email: "scheduled-history@example.com", PasswordHash: "h", Role: model.RoleUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := conversations.CreateWithKind(ctx, user.ID, "Scheduled", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := messages.AddDefinition(ctx, conversation.ID, model.MsgRoleUser, "Define my task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := messages.AddDefinition(ctx, conversation.ID, model.MsgRoleAssistant, "Which days?"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 198 {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO messages (conversation_id, role, content, purpose)
+			 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')`,
+			conversation.ID, model.MsgRoleAssistant, "delivery-"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("insert delivery %d: %v", i, err)
+		}
+	}
+
+	definitions, err := messages.ListRecentDefinitionByConversation(ctx, conversation.ID, 201)
+	if err != nil || len(definitions) != 2 ||
+		definitions[0].Content != "Define my task" || definitions[1].Content != "Which days?" {
+		t.Fatalf("definition history = %+v, %v", definitions, err)
+	}
+	all, err := messages.ListByConversation(ctx, conversation.ID)
+	if err != nil || len(all) != 200 {
+		t.Fatalf("complete history len=%d err=%v", len(all), err)
 	}
 }
 

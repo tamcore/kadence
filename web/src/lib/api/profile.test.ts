@@ -26,14 +26,15 @@ describe('profile api', () => {
 		vi.restoreAllMocks();
 	});
 
-	it('PATCHes /api/profile with all three fields and returns the updated user', async () => {
+	it('PATCHes /api/profile with preferences and returns the updated user', async () => {
 		const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: sampleUser }));
 		vi.stubGlobal('fetch', fetchMock);
 
 		const user = await updateProfile({
 			displayName: 'Alice',
 			email: 'alice@example.com',
-			unitSystem: 'metric'
+			unitSystem: 'metric',
+			timezone: 'Europe/Berlin'
 		});
 
 		expect(user).toEqual(sampleUser);
@@ -45,7 +46,8 @@ describe('profile api', () => {
 		expect(JSON.parse(init.body)).toEqual({
 			displayName: 'Alice',
 			email: 'alice@example.com',
-			unitSystem: 'metric'
+			unitSystem: 'metric',
+			timezone: 'Europe/Berlin'
 		});
 	});
 
@@ -60,7 +62,8 @@ describe('profile api', () => {
 			email: 'alice@example.com',
 			unitSystem: 'metric',
 			location: 'Berlin',
-			aboutMe: 'runs marathons'
+			aboutMe: 'runs marathons',
+			timezone: 'Europe/Berlin'
 		});
 
 		const [, init] = fetchMock.mock.calls[0];
@@ -69,14 +72,20 @@ describe('profile api', () => {
 			email: 'alice@example.com',
 			unitSystem: 'metric',
 			location: 'Berlin',
-			aboutMe: 'runs marathons'
+			aboutMe: 'runs marathons',
+			timezone: 'Europe/Berlin'
 		});
 	});
 
 	it('throws APIError with the message on email conflict (409)', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(409, { error: 'email already in use' })));
 		await expect(
-			updateProfile({ displayName: 'Alice', email: 'taken@example.com', unitSystem: 'metric' })
+			updateProfile({
+				displayName: 'Alice',
+				email: 'taken@example.com',
+				unitSystem: 'metric',
+				timezone: 'UTC'
+			})
 		).rejects.toMatchObject({ status: 409, message: 'email already in use' });
 	});
 

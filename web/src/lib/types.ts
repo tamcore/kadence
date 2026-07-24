@@ -7,6 +7,8 @@ export interface User {
 	unitSystem: 'metric' | 'imperial';
 	location: string;
 	aboutMe: string;
+	timezone: string;
+	scheduledEnabled: boolean;
 }
 
 export interface Conversation {

@@ -24,7 +24,8 @@
 		email: $currentUser?.email ?? '',
 		unitSystem: ($currentUser?.unitSystem ?? 'metric') as 'metric' | 'imperial',
 		location: $currentUser?.location ?? '',
-		aboutMe: $currentUser?.aboutMe ?? ''
+		aboutMe: $currentUser?.aboutMe ?? '',
+		timezone: $currentUser?.timezone ?? 'UTC'
 	});
 
 	let pw = $state({ currentPassword: '', newPassword: '', logoutOthers: true });
@@ -229,6 +230,17 @@
 	<section>
 		<h2>Preferences</h2>
 		<form class="form" onsubmit={saveProfile}>
+			<label class="field">
+				<span class="field-label">Timezone</span>
+				<input
+					name="timezone"
+					required
+					autocomplete="off"
+					placeholder="Europe/Berlin"
+					bind:value={form.timezone}
+				/>
+				<small>Use an IANA timezone, such as Europe/Berlin or America/New_York.</small>
+			</label>
 			<fieldset class="units">
 				<legend>Unit system</legend>
 				<label>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -135,6 +136,78 @@ func TestScheduledTaskRepositoryOwnerScopeAndActiveLimit(t *testing.T) {
 	}
 }
 
+func TestScheduledTaskRepositoryBoundsListResponses(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 200)
+	owner := createScheduledUser(t, ctx, users, "bounded-owner", "bounded@example.com")
+
+	var newest model.ScheduledTask
+	var activeID string
+	var unreadID string
+	for i := range 101 {
+		conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+		state := model.ScheduledTaskStateCompleted
+		var nextRunAt *time.Time
+		if i == 0 {
+			state = model.ScheduledTaskStateActive
+			nextRunAt = new(time.Now().UTC().Add(time.Hour))
+		}
+		task, err := repo.Create(ctx, model.ScheduledTask{
+			UserID: owner.ID, ConversationID: conversation.ID, Name: "Task " + strconv.Itoa(i),
+			Kind: model.ScheduledTaskKindReminder, State: state,
+			CompiledPrompt: "bounded", Timezone: scheduledTimezoneUTC, NextRunAt: nextRunAt,
+		})
+		if err != nil {
+			t.Fatalf("create task %d: %v", i, err)
+		}
+		if _, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+			TaskID: task.ID, OccurrenceKey: "run-" + strconv.Itoa(i),
+			ScheduledFor: time.Now().UTC(), State: model.ScheduledTaskRunStateCompleted, Unread: i == 1,
+		}); err != nil {
+			t.Fatalf("create summary run %d: %v", i, err)
+		}
+		if i == 0 {
+			activeID = task.ID
+		}
+		if i == 1 {
+			unreadID = task.ID
+		}
+		newest = task
+	}
+
+	tasks, err := repo.ListByUser(ctx, owner.ID, 0, 100)
+	if err != nil || len(tasks) != 100 {
+		t.Fatalf("bounded tasks = %d, %v; want 100", len(tasks), err)
+	}
+	taskIDs := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		taskIDs[task.ID] = true
+	}
+	if !taskIDs[activeID] || !taskIDs[unreadID] {
+		t.Fatalf("priority tasks missing: active=%t unread=%t", taskIDs[activeID], taskIDs[unreadID])
+	}
+	summaries, err := repo.ListRunSummaries(ctx, owner.ID, 0, 100)
+	if err != nil || len(summaries) != 100 {
+		t.Fatalf("bounded summaries = %d, %v; want 100", len(summaries), err)
+	}
+	for i := 101; i < 201; i++ {
+		if _, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+			TaskID: newest.ID, OccurrenceKey: "run-" + strconv.Itoa(i),
+			ScheduledFor: time.Now().UTC(), State: model.ScheduledTaskRunStateCompleted,
+		}); err != nil {
+			t.Fatalf("create history run %d: %v", i, err)
+		}
+	}
+	runs, err := repo.ListRuns(ctx, newest.ID, owner.ID)
+	if err != nil || len(runs) != 100 {
+		t.Fatalf("bounded runs = %d, %v; want 100", len(runs), err)
+	}
+}
+
 func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
@@ -201,6 +274,44 @@ func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 	}
 	if noChange.ID == 0 {
 		t.Fatal("run id was not populated")
+	}
+}
+
+func TestScheduledTaskRepositoryRunSummaries(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "summary-owner", "summary@example.com")
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Name: "Summary",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateCompleted,
+		CompiledPrompt: "summary", Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recent model.ScheduledTaskRun
+	for i := range 2 {
+		recent, err = repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+			TaskID: task.ID, OccurrenceKey: "summary-" + strconv.Itoa(i),
+			ScheduledFor: time.Now().UTC().Add(time.Duration(i) * time.Minute),
+			State:        model.ScheduledTaskRunStateDelivered,
+			Unread:       true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summaries, err := repo.ListRunSummaries(ctx, owner.ID, 0, 100)
+	if err != nil || len(summaries) != 1 || summaries[0].TaskID != task.ID ||
+		summaries[0].UnreadCount != 2 || summaries[0].RecentRun == nil ||
+		summaries[0].RecentRun.ID != recent.ID {
+		t.Fatalf("run summaries = %+v, err=%v", summaries, err)
 	}
 }
 
@@ -306,7 +417,7 @@ func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID)
+	draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID, task.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +442,55 @@ func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	confirmed, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, 2, time.Now().UTC())
 	if err != nil || confirmed.State != model.ScheduledTaskStateActive {
 		t.Fatalf("ConfirmProposal = %+v, %v", confirmed, err)
+	}
+
+	raceConversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	raceTask, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: raceConversation.ID, Version: 1, Name: "Concurrent edit",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: "race prompt", Timezone: scheduledTimezoneUTC, NextRunAt: new(time.Now().UTC().Add(time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type revisionResult struct {
+		task model.ScheduledTask
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan revisionResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			revised, revisionErr := repo.BeginDraftRevision(ctx, raceTask.ID, owner.ID, raceTask.Version)
+			results <- revisionResult{task: revised, err: revisionErr}
+		}()
+	}
+	close(start)
+	var succeeded, staleCount int
+	for range 2 {
+		result := <-results
+		switch {
+		case result.err == nil:
+			succeeded++
+			if result.task.Version != raceTask.Version+1 {
+				t.Fatalf("winning revision = %+v", result.task)
+			}
+		case errors.Is(result.err, store.ErrStaleScheduledProposal):
+			staleCount++
+		default:
+			t.Fatalf("concurrent revision err=%v", result.err)
+		}
+	}
+	if succeeded != 1 || staleCount != 1 {
+		t.Fatalf("concurrent revisions: succeeded=%d stale=%d", succeeded, staleCount)
+	}
+	persisted, err := repo.GetByID(ctx, raceTask.ID, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Version != raceTask.Version+1 || persisted.State != model.ScheduledTaskStateDraft {
+		t.Fatalf("persisted concurrent revision = %+v", persisted)
 	}
 }
 
@@ -377,7 +537,7 @@ func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *tes
 			}
 
 			staleVersion := task.Version
-			draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID)
+			draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID, task.Version)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -410,7 +570,7 @@ func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *tes
 			transitionResult := make(chan error, 1)
 			go func() {
 				<-start
-				_, err := repo.BeginDraftRevision(ctx, raceTask.ID, owner.ID)
+				_, err := repo.BeginDraftRevision(ctx, raceTask.ID, owner.ID, raceTask.Version)
 				editResult <- err
 			}()
 			go func() {
@@ -459,7 +619,7 @@ func TestScheduledTaskRepositoryRejectsDraftRevisionWhileRunInProgress(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID); !errors.Is(err, store.ErrScheduledRunInProgress) {
+	if _, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID, task.Version); !errors.Is(err, store.ErrScheduledRunInProgress) {
 		t.Fatalf("pending run edit err=%v", err)
 	}
 
@@ -467,13 +627,13 @@ func TestScheduledTaskRepositoryRejectsDraftRevisionWhileRunInProgress(t *testin
 	if err != nil || len(claims) != 1 || claims[0].Run.ID != pending.ID {
 		t.Fatalf("ClaimDue: claims=%+v err=%v", claims, err)
 	}
-	if _, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID); !errors.Is(err, store.ErrScheduledRunInProgress) {
+	if _, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID, task.Version); !errors.Is(err, store.ErrScheduledRunInProgress) {
 		t.Fatalf("running run edit err=%v", err)
 	}
 	if err := repo.MarkDelivered(ctx, pending.ID, owner.ID, "done"); err != nil {
 		t.Fatal(err)
 	}
-	draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID)
+	draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID, task.Version)
 	if err != nil {
 		t.Fatalf("terminal run edit err=%v", err)
 	}

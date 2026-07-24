@@ -156,7 +156,7 @@ func (r *ScheduledTaskRepository) Create(ctx context.Context, task model.Schedul
 // BeginDraftRevision atomically invalidates any confirmable proposal before
 // external compiler work starts. Active and paused definitions may be edited;
 // terminal definitions may not.
-func (r *ScheduledTaskRepository) BeginDraftRevision(ctx context.Context, id string, userID int64) (model.ScheduledTask, error) {
+func (r *ScheduledTaskRepository) BeginDraftRevision(ctx context.Context, id string, userID int64, expectedVersion int) (model.ScheduledTask, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return model.ScheduledTask{}, fmt.Errorf("begin scheduled draft revision: %w", err)
@@ -168,6 +168,9 @@ func (r *ScheduledTaskRepository) BeginDraftRevision(ctx context.Context, id str
 		id, userID))
 	if err != nil {
 		return model.ScheduledTask{}, err
+	}
+	if current.Version != expectedVersion {
+		return model.ScheduledTask{}, scheduledStaleProposalError()
 	}
 	if current.State != model.ScheduledTaskStateDraft &&
 		current.State != model.ScheduledTaskStateActive &&
@@ -299,9 +302,23 @@ func (r *ScheduledTaskRepository) GetByID(ctx context.Context, id string, userID
 		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL`, id, userID))
 }
 
-// ListByUser returns a user's non-deleted tasks, newest first.
-func (r *ScheduledTaskRepository) ListByUser(ctx context.Context, userID int64) ([]model.ScheduledTask, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+scheduledTaskCols+` FROM scheduled_tasks WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`, userID)
+// ListByUser returns one bounded page with active and unread tasks first.
+func (r *ScheduledTaskRepository) ListByUser(ctx context.Context, userID int64, offset, limit int) ([]model.ScheduledTask, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks AS task
+		  WHERE task.user_id = $1 AND task.deleted_at IS NULL
+		  ORDER BY CASE
+		             WHEN task.state = $4 THEN 0
+		             WHEN EXISTS (
+		                  SELECT 1 FROM scheduled_task_runs AS unread_run
+		                   WHERE unread_run.task_id = task.id AND unread_run.unread
+		             ) THEN 1
+		             WHEN task.state IN ($5, $6) THEN 2
+		             ELSE 3
+		           END,
+		           task.created_at DESC, task.id DESC
+		  LIMIT $2 OFFSET $3`,
+		userID, limit, offset, model.ScheduledTaskStateActive, model.ScheduledTaskStatePaused, model.ScheduledTaskStateDraft)
 	if err != nil {
 		return nil, fmt.Errorf("list scheduled tasks: %w", err)
 	}
@@ -502,6 +519,7 @@ func (r *ScheduledTaskRepository) PauseByConversation(ctx context.Context, conve
 
 const scheduledTaskRunCols = "id, task_id::text, occurrence_key, scheduled_for, state, started_at, finished_at, result, error, unread, created_at"
 const scheduledTaskRunColsQualified = "run.id, run.task_id::text, run.occurrence_key, run.scheduled_for, run.state, run.started_at, run.finished_at, run.result, run.error, run.unread, run.created_at"
+const scheduledRunListLimit = 100
 
 func scanScheduledTaskRun(row rowScanner) (model.ScheduledTaskRun, error) {
 	var run model.ScheduledTaskRun
@@ -516,14 +534,15 @@ func scanScheduledTaskRun(row rowScanner) (model.ScheduledTaskRun, error) {
 	return run, nil
 }
 
-// ListRuns returns immutable occurrence records for one non-deleted task
-// owned by userID, newest first.
+// ListRuns returns at most 100 immutable occurrence records for one
+// non-deleted task owned by userID, newest first.
 func (r *ScheduledTaskRepository) ListRuns(ctx context.Context, taskID string, userID int64) ([]model.ScheduledTaskRun, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+scheduledTaskRunColsQualified+` FROM scheduled_task_runs AS run
 		 JOIN scheduled_tasks AS task ON task.id = run.task_id
 		 WHERE task.id = $1::uuid AND task.user_id = $2 AND task.deleted_at IS NULL
-		 ORDER BY run.created_at DESC`, taskID, userID)
+		 ORDER BY run.created_at DESC, run.id DESC
+		 LIMIT $3`, taskID, userID, scheduledRunListLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list scheduled task runs: %w", err)
 	}
@@ -545,6 +564,56 @@ func (r *ScheduledTaskRepository) ListRuns(ctx context.Context, taskID string, u
 		}
 	}
 	return runs, nil
+}
+
+// ListRunSummaries returns one latest occurrence and unread count for the same
+// bounded priority page as ListByUser.
+func (r *ScheduledTaskRepository) ListRunSummaries(ctx context.Context, userID int64, offset, limit int) ([]model.ScheduledTaskRunSummary, error) {
+	rows, err := r.pool.Query(ctx,
+		`WITH selected_tasks AS (
+		        SELECT task.id
+		          FROM scheduled_tasks AS task
+		         WHERE task.user_id = $1 AND task.deleted_at IS NULL
+		         ORDER BY CASE
+		                    WHEN task.state = $4 THEN 0
+		                    WHEN EXISTS (
+		                         SELECT 1 FROM scheduled_task_runs AS unread_run
+		                          WHERE unread_run.task_id = task.id AND unread_run.unread
+		                    ) THEN 1
+		                    WHEN task.state IN ($5, $6) THEN 2
+		                    ELSE 3
+		                  END,
+		                  task.created_at DESC, task.id DESC
+		         LIMIT $2 OFFSET $3
+		 )
+		 SELECT DISTINCT ON (run.task_id)
+		        run.task_id::text,
+		        COUNT(*) FILTER (WHERE run.unread) OVER (PARTITION BY run.task_id),
+		        `+scheduledTaskRunColsQualified+`
+		   FROM scheduled_task_runs AS run
+		   JOIN selected_tasks AS task ON task.id = run.task_id
+		  ORDER BY run.task_id, run.created_at DESC, run.id DESC`,
+		userID, limit, offset, model.ScheduledTaskStateActive, model.ScheduledTaskStatePaused, model.ScheduledTaskStateDraft)
+	if err != nil {
+		return nil, fmt.Errorf("list scheduled task run summaries: %w", err)
+	}
+	defer rows.Close()
+	summaries := make([]model.ScheduledTaskRunSummary, 0)
+	for rows.Next() {
+		var summary model.ScheduledTaskRunSummary
+		var run model.ScheduledTaskRun
+		if err := rows.Scan(&summary.TaskID, &summary.UnreadCount, &run.ID, &run.TaskID, &run.OccurrenceKey,
+			&run.ScheduledFor, &run.State, &run.StartedAt, &run.FinishedAt, &run.Result, &run.Error,
+			&run.Unread, &run.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan scheduled task run summary: %w", err)
+		}
+		summary.RecentRun = &run
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list scheduled task run summaries: %w", err)
+	}
+	return summaries, nil
 }
 
 // CreateRun records an occurrence for a non-deleted task owned by userID. The
@@ -810,7 +879,8 @@ func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success mod
 	}
 	if visible {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO messages (conversation_id, role, content) VALUES ($1::uuid, $2, $3)`,
+			`INSERT INTO messages (conversation_id, role, content, purpose)
+			 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')`,
 			conversationID, model.MsgRoleAssistant, success.Content); err != nil {
 			return fmt.Errorf("insert scheduled delivery: %w", err)
 		}

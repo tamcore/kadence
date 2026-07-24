@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,7 @@ type ScheduledLifecycle interface {
 	Create(context.Context, scheduled.Actor, string) (scheduled.DefinitionResult, error)
 	Refine(context.Context, scheduled.Actor, string, string) (scheduled.DefinitionResult, error)
 	Confirm(context.Context, scheduled.Actor, string, int) (model.ScheduledTask, error)
-	List(context.Context, int64) (scheduled.ListResult, error)
+	List(context.Context, int64, int) (scheduled.ListResult, error)
 	Detail(context.Context, int64, string) (scheduled.Detail, error)
 	Pause(context.Context, int64, string) (model.ScheduledTask, error)
 	Resume(context.Context, int64, string) (model.ScheduledTask, error)
@@ -46,28 +47,30 @@ const (
 )
 
 type scheduledTaskDTO struct {
-	ID               string   `json:"id"`
-	ConversationID   string   `json:"conversationId"`
-	Version          int      `json:"version"`
-	Name             string   `json:"name"`
-	Kind             string   `json:"kind"`
-	State            string   `json:"state"`
-	CompiledPrompt   string   `json:"compiledPrompt"`
-	OneOffAt         *string  `json:"oneOffAt,omitempty"`
-	DTStart          *string  `json:"dtStart,omitempty"`
-	RRULE            string   `json:"rrule,omitempty"`
-	Timezone         string   `json:"timezone"`
-	ExecutionMode    string   `json:"executionMode"`
-	AuthorizedTools  []string `json:"authorizedTools"`
-	DeliveryPolicy   string   `json:"deliveryPolicy"`
-	InitialRun       string   `json:"initialRun"`
-	StopCondition    string   `json:"stopCondition,omitempty"`
-	StaticMessage    string   `json:"staticMessage,omitempty"`
-	NextRunAt        *string  `json:"nextRunAt,omitempty"`
-	LastRunAt        *string  `json:"lastRunAt,omitempty"`
-	ConsecutiveFails int      `json:"consecutiveFailures"`
-	CreatedAt        string   `json:"createdAt"`
-	UpdatedAt        string   `json:"updatedAt"`
+	ID               string           `json:"id"`
+	ConversationID   string           `json:"conversationId"`
+	Version          int              `json:"version"`
+	Name             string           `json:"name"`
+	Kind             string           `json:"kind"`
+	State            string           `json:"state"`
+	CompiledPrompt   string           `json:"compiledPrompt"`
+	OneOffAt         *string          `json:"oneOffAt,omitempty"`
+	DTStart          *string          `json:"dtStart,omitempty"`
+	RRULE            string           `json:"rrule,omitempty"`
+	Timezone         string           `json:"timezone"`
+	ExecutionMode    string           `json:"executionMode"`
+	AuthorizedTools  []string         `json:"authorizedTools"`
+	DeliveryPolicy   string           `json:"deliveryPolicy"`
+	InitialRun       string           `json:"initialRun"`
+	StopCondition    string           `json:"stopCondition,omitempty"`
+	StaticMessage    string           `json:"staticMessage,omitempty"`
+	NextRunAt        *string          `json:"nextRunAt,omitempty"`
+	LastRunAt        *string          `json:"lastRunAt,omitempty"`
+	ConsecutiveFails int              `json:"consecutiveFailures"`
+	UnreadCount      int              `json:"unreadCount"`
+	RecentRun        *scheduledRunDTO `json:"recentRun,omitempty"`
+	CreatedAt        string           `json:"createdAt"`
+	UpdatedAt        string           `json:"updatedAt"`
 }
 
 type scheduledRunDTO struct {
@@ -81,6 +84,12 @@ type scheduledRunDTO struct {
 	Error         string  `json:"error,omitempty"`
 	Unread        bool    `json:"unread"`
 	CreatedAt     string  `json:"createdAt"`
+}
+
+type scheduledDefinitionMessageDTO struct {
+	Role     string                  `json:"role"`
+	Text     string                  `json:"text"`
+	Question *scheduled.QuestionCard `json:"question,omitempty"`
 }
 
 func taskDTO(task model.ScheduledTask) scheduledTaskDTO {
@@ -154,7 +163,11 @@ func (h *Scheduled) Refine(w http.ResponseWriter, r *http.Request) {
 	defer stop()
 	result, err := h.service.Refine(streamCtx, scheduledActor(r), id, body.Message)
 	if err != nil {
-		if stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: "could not refine scheduled task"}) == nil {
+		message := "could not refine scheduled task"
+		if errors.Is(err, scheduled.ErrDefinitionLimit) {
+			message = "refinement limit reached; start a new scheduled task"
+		}
+		if stream.event(map[string]any{scheduledEventType: scheduledEventError, scheduledEventError: message}) == nil {
 			_ = stream.event(map[string]any{scheduledEventType: scheduledEventDone})
 		}
 		return
@@ -283,16 +296,36 @@ func (h *Scheduled) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	result, err := h.service.List(r.Context(), u.ID)
+	offset := 0
+	if value := r.URL.Query().Get("offset"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			RespondError(w, http.StatusBadRequest, "offset must be a non-negative integer")
+			return
+		}
+		offset = parsed
+	}
+	result, err := h.service.List(r.Context(), u.ID, offset)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not list scheduled tasks")
 		return
 	}
 	tasks := make([]scheduledTaskDTO, 0, len(result.Tasks))
 	for _, task := range result.Tasks {
-		tasks = append(tasks, taskDTO(task))
+		dto := taskDTO(task)
+		if summary, ok := result.RunSummaries[task.ID]; ok {
+			dto.UnreadCount = summary.UnreadCount
+			if summary.RecentRun != nil {
+				recent := runDTO(*summary.RecentRun)
+				dto.RecentRun = &recent
+			}
+		}
+		tasks = append(tasks, dto)
 	}
-	RespondJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "unreadCount": result.Unread})
+	RespondJSON(w, http.StatusOK, map[string]any{
+		"tasks": tasks, "unreadCount": result.Unread,
+		"hasMore": result.HasMore, "nextOffset": result.NextOffset,
+	})
 }
 
 func (h *Scheduled) Detail(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +342,15 @@ func (h *Scheduled) Detail(w http.ResponseWriter, r *http.Request) {
 	for _, run := range result.Runs {
 		runs = append(runs, runDTO(run))
 	}
-	RespondJSON(w, http.StatusOK, map[string]any{"task": taskDTO(result.Task), "runs": runs})
+	messages := make([]scheduledDefinitionMessageDTO, 0, len(result.DefinitionMessages))
+	for _, message := range result.DefinitionMessages {
+		messages = append(messages, scheduledDefinitionMessageDTO{
+			Role: message.Role, Text: message.Text, Question: message.Question,
+		})
+	}
+	RespondJSON(w, http.StatusOK, map[string]any{
+		"task": taskDTO(result.Task), "runs": runs, "definitionMessages": messages,
+	})
 }
 
 func (h *Scheduled) Confirm(w http.ResponseWriter, r *http.Request) {

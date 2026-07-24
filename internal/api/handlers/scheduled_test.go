@@ -47,6 +47,7 @@ type fakeScheduledLifecycle struct {
 	gotMessage   string
 	gotID        string
 	gotOwner     int64
+	gotOffset    int
 	gotVersion   int
 	gotMethod    string
 }
@@ -63,8 +64,8 @@ func (f *fakeScheduledLifecycle) Confirm(_ context.Context, actor scheduled.Acto
 	f.gotMethod, f.gotActor, f.gotID, f.gotVersion = scheduledTestConfirm, actor, id, version
 	return f.taskResult, f.lifecycleErr
 }
-func (f *fakeScheduledLifecycle) List(_ context.Context, owner int64) (scheduled.ListResult, error) {
-	f.gotMethod, f.gotOwner = scheduledTestList, owner
+func (f *fakeScheduledLifecycle) List(_ context.Context, owner int64, offset int) (scheduled.ListResult, error) {
+	f.gotMethod, f.gotOwner, f.gotOffset = scheduledTestList, owner, offset
 	return f.listResult, f.lifecycleErr
 }
 func (f *fakeScheduledLifecycle) Detail(_ context.Context, owner int64, id string) (scheduled.Detail, error) {
@@ -174,6 +175,13 @@ func TestScheduledDefinitionRouteBodiesQuestionsErrorsAndBounds(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"type":"error"`) || strings.Contains(rec.Body.String(), "secret") {
 		t.Fatalf("body=%s", rec.Body.String())
 	}
+
+	fake.refineErr = scheduled.ErrDefinitionLimit
+	rec = httptest.NewRecorder()
+	h.Refine(rec, withChiParam(withUser(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(scheduledTestMessage)), 7), "id", scheduledTestTask2))
+	if !strings.Contains(rec.Body.String(), "refinement limit") {
+		t.Fatalf("limit body=%s", rec.Body.String())
+	}
 }
 
 func TestScheduledLifecycleRoutesSuccessAndOwnerForwarding(t *testing.T) {
@@ -198,11 +206,23 @@ func TestScheduledLifecycleRoutesSuccessAndOwnerForwarding(t *testing.T) {
 		wantBody   string
 	}{
 		{name: scheduledTestList, method: http.MethodGet, setup: func(f *fakeScheduledLifecycle) {
-			f.listResult = scheduled.ListResult{Tasks: []model.ScheduledTask{task}, Unread: 3}
-		}, invoke: (*handlers.Scheduled).List, wantMethod: scheduledTestList, wantBody: `"unreadCount":3`},
+			recent := run
+			f.listResult = scheduled.ListResult{
+				Tasks: []model.ScheduledTask{task}, Unread: 3, HasMore: true, NextOffset: 100,
+				RunSummaries: map[string]model.ScheduledTaskRunSummary{
+					task.ID: {TaskID: task.ID, UnreadCount: 2, RecentRun: &recent},
+				},
+			}
+		}, invoke: (*handlers.Scheduled).List, wantMethod: scheduledTestList, wantBody: `"nextOffset":100`},
 		{name: scheduledTestDetail, method: http.MethodGet, setup: func(f *fakeScheduledLifecycle) {
-			f.detailResult = scheduled.Detail{Task: task, Runs: []model.ScheduledTaskRun{run}}
-		}, invoke: (*handlers.Scheduled).Detail, wantMethod: scheduledTestDetail, wantBody: `"error":"execution_failed"`},
+			f.detailResult = scheduled.Detail{
+				Task: task, Runs: []model.ScheduledTaskRun{run},
+				DefinitionMessages: []scheduled.DefinitionMessage{{
+					Role: model.MsgRoleAssistant, Text: "Choose.",
+					Question: &scheduled.QuestionCard{ID: "topics", Prompt: "Which topics?", Kind: scheduled.QuestionKindText},
+				}},
+			}
+		}, invoke: (*handlers.Scheduled).Detail, wantMethod: scheduledTestDetail, wantBody: `"question":{"id":"topics"`},
 		{name: scheduledTestConfirm, method: http.MethodPost, body: `{"expectedVersion":2}`, setup: func(f *fakeScheduledLifecycle) { f.taskResult = task }, invoke: (*handlers.Scheduled).Confirm, wantMethod: scheduledTestConfirm, wantBody: `"version":2`},
 		{name: scheduledTestPause, method: http.MethodPatch, body: scheduledTestPaused, setup: func(f *fakeScheduledLifecycle) { f.taskResult = task }, invoke: (*handlers.Scheduled).Patch, wantMethod: scheduledTestPause, wantBody: `"id":"task-1"`},
 		{name: scheduledTestResume, method: http.MethodPatch, body: `{"state":"active"}`, setup: func(f *fakeScheduledLifecycle) { f.taskResult = task }, invoke: (*handlers.Scheduled).Patch, wantMethod: scheduledTestResume, wantBody: `"id":"task-1"`},
@@ -225,10 +245,33 @@ func TestScheduledLifecycleRoutesSuccessAndOwnerForwarding(t *testing.T) {
 				fake.gotID != scheduledTestTask1 && tc.wantMethod != scheduledTestList {
 				t.Fatalf("status=%d body=%s fake=%+v", rec.Code, rec.Body.String(), fake)
 			}
+			if tc.wantMethod == scheduledTestList &&
+				!strings.Contains(rec.Body.String(), `"unreadCount":2`) {
+				t.Fatalf("task summary missing: %s", rec.Body.String())
+			}
 			if tc.wantMethod == scheduledTestConfirm && (fake.gotActor.ID != 7 || fake.gotVersion != 2) {
 				t.Fatalf("confirm forwarding=%+v", fake)
 			}
 		})
+	}
+}
+
+func TestScheduledListOffsetValidationAndForwarding(t *testing.T) {
+	fake := &fakeScheduledLifecycle{listResult: scheduled.ListResult{}}
+	h := handlers.NewScheduled(fake)
+
+	rec := httptest.NewRecorder()
+	h.List(rec, withUser(httptest.NewRequest(http.MethodGet, "/?offset=25", nil), 7))
+	if rec.Code != http.StatusOK || fake.gotOffset != 25 {
+		t.Fatalf("valid offset status=%d fake=%+v", rec.Code, fake)
+	}
+
+	for _, value := range []string{"-1", "invalid"} {
+		rec = httptest.NewRecorder()
+		h.List(rec, withUser(httptest.NewRequest(http.MethodGet, "/?offset="+value, nil), 7))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("offset %q status=%d body=%s", value, rec.Code, rec.Body.String())
+		}
 	}
 }
 
