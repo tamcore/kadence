@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ const (
 	scheduledCompiledQuery  = "query"
 	scheduledConfirmedName  = "Confirmed"
 	scheduledOldPrompt      = "old prompt"
+	scheduledSafeResult     = "Safe result"
 )
 
 func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
@@ -154,7 +156,7 @@ func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 		t.Fatalf("ClaimDue: %v %+v", err, claims)
 	}
 	claim := claims[0]
-	if claim.Task.ID != task.ID || claim.Run.State != model.ScheduledTaskRunStateRunning || claim.Run.OccurrenceKey == "" {
+	if claim.Task.ID != task.ID || claim.Run.State != model.ScheduledTaskRunStateRunning || claim.Run.OccurrenceKey == "" || !claim.FirstRun {
 		t.Fatalf("claim = %+v", claim)
 	}
 	if again, err := repo.ClaimDue(ctx, now, 2); err != nil || len(again) != 0 {
@@ -166,8 +168,18 @@ func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 	if err := repo.MarkDelivered(ctx, claim.Run.ID, owner.ID, "Here is your reminder"); err != nil {
 		t.Fatalf("MarkDelivered: %v", err)
 	}
-	if unread, err := repo.UnreadCount(ctx, owner.ID); err != nil || unread != 1 {
-		t.Fatalf("UnreadCount = %d, %v; want 1", unread, err)
+	if _, err := repo.RunNow(ctx, owner.ID, task.ID, "manual:not-first", now); err != nil {
+		t.Fatalf("RunNow: %v", err)
+	}
+	repeated, err := repo.ClaimDue(ctx, now, 1)
+	if err != nil || len(repeated) != 1 || repeated[0].FirstRun {
+		t.Fatalf("repeat ClaimDue: %v %+v", err, repeated)
+	}
+	if err := repo.MarkDelivered(ctx, repeated[0].Run.ID, owner.ID, "Again"); err != nil {
+		t.Fatalf("repeat MarkDelivered: %v", err)
+	}
+	if unread, err := repo.UnreadCount(ctx, owner.ID); err != nil || unread != 2 {
+		t.Fatalf("UnreadCount = %d, %v; want 2", unread, err)
 	}
 	if err := repo.MarkRead(ctx, task.ID, owner.ID); err != nil {
 		t.Fatalf("MarkRead: %v", err)
@@ -579,6 +591,195 @@ func TestScheduledTaskRepositoryDeliveryResetsFailures(t *testing.T) {
 	updated, err := repo.GetByID(ctx, task.ID, owner.ID)
 	if err != nil || updated.ConsecutiveFailures != 0 {
 		t.Fatalf("successful delivery did not reset failures: %v %+v", err, updated)
+	}
+}
+
+func TestScheduledTaskRepositoryFinishSuccessIsAtomicAndCASProtected(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	other := createScheduledUser(t, ctx, users, "other", testEmailB)
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	now := time.Now().UTC().Truncate(time.Second)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Name: "Atomic", Kind: model.ScheduledTaskKindData,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+		ConsecutiveFailures: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "atomic", ScheduledFor: now, State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := now.Add(time.Hour)
+	success := model.ScheduledExecutionSuccess{
+		RunID: run.ID, UserID: owner.ID, ConversationID: conversation.ID,
+		RunState: model.ScheduledTaskRunStateDelivered, TaskState: model.ScheduledTaskStateActive,
+		Content: scheduledSafeResult, Unread: true, MonitoringState: json.RawMessage(`{"cursor":2}`), NextRunAt: &next,
+	}
+	if err := repo.FinishSuccess(ctx, success); err != nil {
+		t.Fatal(err)
+	}
+	history, err := messages.ListByConversation(ctx, conversation.ID)
+	if err != nil || len(history) != 1 || history[0].Role != model.MsgRoleAssistant || history[0].Content != scheduledSafeResult {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+	runs, err := repo.ListRuns(ctx, task.ID, owner.ID)
+	if err != nil || len(runs) != 1 || runs[0].State != model.ScheduledTaskRunStateDelivered || !runs[0].Unread || runs[0].Result != scheduledSafeResult {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	updated, err := repo.GetByID(ctx, task.ID, owner.ID)
+	if err != nil || updated.ConsecutiveFailures != 0 || string(updated.MonitoringState) != `{"cursor": 2}` ||
+		updated.NextRunAt == nil || !updated.NextRunAt.Equal(next) {
+		t.Fatalf("task=%+v err=%v", updated, err)
+	}
+	if err := repo.FinishSuccess(ctx, success); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second finish err=%v", err)
+	}
+	freshRun, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "other-owner", ScheduledFor: now, State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	success.RunID, success.UserID = freshRun.ID, other.ID
+	if err := repo.FinishSuccess(ctx, success); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-owner finish err=%v", err)
+	}
+	history, _ = messages.ListByConversation(ctx, conversation.ID)
+	if len(history) != 1 {
+		t.Fatalf("partial message inserted: %+v", history)
+	}
+}
+
+func TestScheduledTaskRepositoryFinishNoChangeAndFailureTransitions(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	now := time.Now().UTC().Truncate(time.Second)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Name: "Monitor", Kind: model.ScheduledTaskKindMonitoring,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+		ConsecutiveFailures: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noChange, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "no-change", ScheduledFor: now, State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := now.Add(time.Hour)
+	if err := repo.FinishSuccess(ctx, model.ScheduledExecutionSuccess{
+		RunID: noChange.ID, UserID: owner.ID, ConversationID: conversation.ID,
+		RunState: model.ScheduledTaskRunStateNoChange, TaskState: model.ScheduledTaskStateActive,
+		MonitoringState: json.RawMessage(`{"baseline":true}`), NextRunAt: &next,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if history, err := messages.ListByConversation(ctx, conversation.ID); err != nil || len(history) != 0 {
+		t.Fatalf("no-change history=%+v err=%v", history, err)
+	}
+	failed, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "failed-cas", ScheduledFor: now, State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FinishFailure(ctx, model.ScheduledExecutionFailure{
+		RunID: failed.ID, UserID: owner.ID, Code: "raw provider error!", TaskState: model.ScheduledTaskStatePaused, Pause: true, IncrementFailures: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := repo.ListRuns(ctx, task.ID, owner.ID)
+	if err != nil || runs[0].Error != "execution_failed" || runs[0].State != model.ScheduledTaskRunStateFailed {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	updated, err := repo.GetByID(ctx, task.ID, owner.ID)
+	if err != nil || updated.State != model.ScheduledTaskStatePaused || updated.ConsecutiveFailures != 1 {
+		t.Fatalf("task=%+v err=%v", updated, err)
+	}
+	if err := repo.FinishFailure(ctx, model.ScheduledExecutionFailure{RunID: failed.ID, UserID: owner.ID, Code: "again"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second failure err=%v", err)
+	}
+}
+
+func TestScheduledTaskRepositoryFinishPreservesPauseAndMissingToolFailureCount(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	now := time.Now().UTC().Truncate(time.Second)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: "Paused",
+		Kind: model.ScheduledTaskKindData, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC, ConsecutiveFailures: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "paused-success", ScheduledFor: now, State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Pause(ctx, task.ID, owner.ID, task.Version); err != nil {
+		t.Fatal(err)
+	}
+	next := now.Add(time.Hour)
+	if err := repo.FinishSuccess(ctx, model.ScheduledExecutionSuccess{
+		RunID: run.ID, UserID: owner.ID, ConversationID: conversation.ID,
+		RunState: model.ScheduledTaskRunStateDelivered, TaskState: model.ScheduledTaskStateActive,
+		Content: "Finished current occurrence", Unread: true, MonitoringState: json.RawMessage(`{}`), NextRunAt: &next,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := repo.GetByID(ctx, task.ID, owner.ID)
+	if err != nil || paused.State != model.ScheduledTaskStatePaused || paused.NextRunAt != nil {
+		t.Fatalf("paused task=%+v err=%v", paused, err)
+	}
+	paused.ConsecutiveFailures = 2
+	paused, err = repo.Update(ctx, paused, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingRun, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "missing-tool", ScheduledFor: now, State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FinishFailure(ctx, model.ScheduledExecutionFailure{
+		RunID: missingRun.ID, UserID: owner.ID, Code: "missing_tool",
+		TaskState: model.ScheduledTaskStatePaused, Pause: true, IncrementFailures: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paused, err = repo.GetByID(ctx, task.ID, owner.ID)
+	if err != nil || paused.State != model.ScheduledTaskStatePaused || paused.ConsecutiveFailures != 2 {
+		t.Fatalf("missing-tool task=%+v err=%v", paused, err)
 	}
 }
 

@@ -16,6 +16,7 @@ const (
 	testFITServerOne    = "GARMIN1"
 	testFITServerTwo    = "GARMIN2"
 	testFITDownloadTool = "download_activity_file"
+	testFITGenericTool  = "download_fit"
 	testFITBridgeOne    = "http://garmin1:8081"
 	testFITBridgeTwo    = "http://garmin2:8081"
 	testFITBobPassword  = "bob-pass"
@@ -202,7 +203,7 @@ func hasToolNamed(tools []provider.ToolDefinition, name string) bool {
 func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
 	s := NewService(nil, ServiceConfig{MCPMaxTools: 1}, Deps{
 		FITRoutes: []FITRoute{{
-			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: "download_fit",
+			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: testFITGenericTool,
 			BridgeURL: "http://bridge", BridgeAuthUser: "u", BridgeAuthPass: "p", MaxBytes: 1024,
 		}},
 	})
@@ -219,7 +220,7 @@ func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
 func TestFITAnalysisReturnsSafeToolError(t *testing.T) {
 	s := NewService(nil, ServiceConfig{}, Deps{
 		FITRoutes: []FITRoute{{
-			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: "download_fit",
+			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: testFITGenericTool,
 			BridgeURL: "http://bridge", BridgeAuthUser: "u", BridgeAuthPass: "p", MaxBytes: 1024,
 		}},
 	})
