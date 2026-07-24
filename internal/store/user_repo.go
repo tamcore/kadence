@@ -36,7 +36,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 func scanUser(row pgx.Row) (model.User, error) {
 	var u model.User
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem,
-		&u.Location, &u.AboutMe, &u.CreatedAt, &u.WebAuthnHandle)
+		&u.Location, &u.AboutMe, &u.Timezone, &u.CreatedAt, &u.WebAuthnHandle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.User{}, ErrNotFound
 	}
@@ -47,7 +47,7 @@ func scanUser(row pgx.Row) (model.User, error) {
 }
 
 const userCols = "id, username, email, password_hash, role, display_name, unit_system, " +
-	"COALESCE(location, '') AS location, COALESCE(about_me, '') AS about_me, created_at, webauthn_user_handle"
+	"COALESCE(location, '') AS location, COALESCE(about_me, '') AS about_me, timezone, created_at, webauthn_user_handle"
 
 // Create inserts a new user and returns it with ID and CreatedAt populated.
 func (r *UserRepository) Create(ctx context.Context, u model.User) (model.User, error) {
@@ -150,6 +150,19 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayNam
 	}
 	if err != nil {
 		return fmt.Errorf("update profile: %w", err)
+	}
+	return nil
+}
+
+// UpdateTimezone stores a user's IANA timezone preference. Validation belongs
+// to the caller because this repository is deliberately persistence-only.
+func (r *UserRepository) UpdateTimezone(ctx context.Context, id int64, timezone string) error {
+	command, err := r.pool.Exec(ctx, `UPDATE users SET timezone = $1 WHERE id = $2`, timezone, id)
+	if err != nil {
+		return fmt.Errorf("update timezone: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

@@ -21,11 +21,16 @@ func NewConversationRepository(pool *pgxpool.Pool) *ConversationRepository {
 
 // Create inserts a new conversation for a user.
 func (r *ConversationRepository) Create(ctx context.Context, userID int64, title string) (model.Conversation, error) {
+	return r.CreateWithKind(ctx, userID, title, model.ConversationKindChat)
+}
+
+// CreateWithKind inserts a conversation of the requested kind for a user.
+func (r *ConversationRepository) CreateWithKind(ctx context.Context, userID int64, title, kind string) (model.Conversation, error) {
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO conversations (user_id, title) VALUES ($1, $2)
-		 RETURNING id::text, user_id, title, created_at`, userID, title).
-		Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt)
+		`INSERT INTO conversations (user_id, title, kind) VALUES ($1, $2, $3)
+		 RETURNING id::text, user_id, title, kind, created_at`, userID, title, kind).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt)
 	if err != nil {
 		return model.Conversation{}, fmt.Errorf("insert conversation: %w", err)
 	}
@@ -36,8 +41,8 @@ func (r *ConversationRepository) Create(ctx context.Context, userID int64, title
 func (r *ConversationRepository) GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error) {
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
-		`SELECT id::text, user_id, title, created_at FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID).
-		Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt)
+		`SELECT id::text, user_id, title, kind, created_at FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Conversation{}, ErrNotFound
 	}
@@ -50,7 +55,7 @@ func (r *ConversationRepository) GetByID(ctx context.Context, id string, userID 
 // ListByUser returns a user's conversations, newest first.
 func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id::text, user_id, title, created_at FROM conversations WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+		`SELECT id::text, user_id, title, kind, created_at FROM conversations WHERE user_id = $1 AND kind = $2 ORDER BY created_at DESC`, userID, model.ConversationKindChat)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -58,7 +63,7 @@ func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) (
 	var out []model.Conversation
 	for rows.Next() {
 		var c model.Conversation
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan conversation: %w", err)
 		}
 		out = append(out, c)
@@ -72,8 +77,8 @@ func (r *ConversationRepository) UpdateTitle(ctx context.Context, id string, use
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
 		`UPDATE conversations SET title = $1 WHERE id = $2::uuid AND user_id = $3
-		 RETURNING id::text, user_id, title, created_at`, title, id, userID).
-		Scan(&c.ID, &c.UserID, &c.Title, &c.CreatedAt)
+		 RETURNING id::text, user_id, title, kind, created_at`, title, id, userID).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Conversation{}, ErrNotFound
 	}

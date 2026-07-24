@@ -27,6 +27,7 @@ type User struct {
 	UnitSystem     string
 	Location       string
 	AboutMe        string
+	Timezone       string
 	CreatedAt      time.Time
 	WebAuthnHandle string
 }
