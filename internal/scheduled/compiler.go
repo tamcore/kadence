@@ -19,9 +19,12 @@ const (
 	interactiveCredentialsTool = "kadence__request_credentials" // #nosec G101 -- a tool name, not a credential
 	defaultCompilerMaxTokens   = 2048
 	maxCompilerMaxTokens       = 8192
+	maxCompilerResponseBytes   = 64 << 10
 	maxToolNameBytes           = 128
 	maxToolDescriptionBytes    = 4096
 )
+
+var errCompilerResponseTooLarge = errors.New("scheduled: compiler response exceeds 64 KiB")
 
 // QuestionKind controls how a Scheduled clarification is rendered.
 type QuestionKind string
@@ -98,7 +101,7 @@ type Proposal struct {
 	StaticMessage   string         `json:"staticMessage,omitempty"`
 }
 
-// Refinement is one provider result: optional assistant text and exactly one
+// Refinement is one provider result: nonblank assistant text and exactly one
 // structured question or final proposal.
 type Refinement struct {
 	Text     string        `json:"assistantText,omitempty"`
@@ -157,9 +160,22 @@ func (c *Compiler) Refine(ctx context.Context, history []provider.Message, avail
 	req.Messages = append(req.Messages, provider.Message{Role: "system", Content: compilerSystemPrompt(tools)})
 	req.Messages = append(req.Messages, history...)
 
-	response, err := c.provider.StreamChat(ctx, req, func(string) error { return nil })
+	streamedBytes := 0
+	response, err := c.provider.StreamChat(ctx, req, func(delta string) error {
+		streamedBytes += len(delta)
+		if streamedBytes > maxCompilerResponseBytes {
+			return errCompilerResponseTooLarge
+		}
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, errCompilerResponseTooLarge) {
+			return Refinement{}, errCompilerResponseTooLarge
+		}
 		return Refinement{}, fmt.Errorf("scheduled: refine task: %w", err)
+	}
+	if streamedBytes > maxCompilerResponseBytes || len(response) > maxCompilerResponseBytes {
+		return Refinement{}, errCompilerResponseTooLarge
 	}
 
 	decoded, err := decodeRefinement(response)
@@ -219,7 +235,7 @@ func compilerSystemPrompt(tools map[string]provider.ToolDefinition) string {
 	sort.Strings(names)
 	var b strings.Builder
 	b.WriteString("You refine one Scheduled task from the complete conversation. Reply only with one JSON object. ")
-	b.WriteString("It may include assistantText and must include exactly one of question or proposal. ")
+	b.WriteString("It must include nonblank assistantText and exactly one of question or proposal. ")
 	b.WriteString("Ask one focused question at a time. A question has id, prompt, kind (single_select, multi_select, or text), options [{label,value}], allowCustom, and optional. ")
 	b.WriteString("A final proposal has version, name, taskKind (reminder, data, monitoring), compiledPrompt, executionMode (static, data), schedule {at,dtStart,rrule,timezone}, timezone, authorizedTools, deliveryPolicy (always, on_change), initialRun (wait, preview, baseline), optional stopCondition, and optional staticMessage. ")
 	b.WriteString("Use IANA timezones; schedule.timezone must equal timezone. Reminders are static, have no authorized tools, always deliver, and require staticMessage. Data and monitoring tasks use data mode and cannot have staticMessage. Monitoring requires a recurring rrule and uses on_change delivery; only monitoring may use stopCondition. ")

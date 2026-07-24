@@ -17,10 +17,13 @@ const (
 )
 
 type refinementProvider struct {
-	reply  string
-	err    error
-	req    provider.ChatRequest
-	called bool
+	reply             string
+	err               error
+	req               provider.ChatRequest
+	called            bool
+	tokens            []string
+	ignoreTokenError  bool
+	skipTokenCallback bool
 }
 
 func (p *refinementProvider) StreamChat(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
@@ -29,8 +32,16 @@ func (p *refinementProvider) StreamChat(_ context.Context, req provider.ChatRequ
 	if p.err != nil {
 		return "", p.err
 	}
-	if err := onToken(p.reply); err != nil {
-		return "", err
+	tokens := p.tokens
+	if tokens == nil {
+		tokens = []string{p.reply}
+	}
+	if !p.skipTokenCallback {
+		for _, token := range tokens {
+			if err := onToken(token); err != nil && !p.ignoreTokenError {
+				return "", err
+			}
+		}
 	}
 	return p.reply, nil
 }
@@ -79,11 +90,33 @@ func TestCompilerRefineQuestionIsToolFreeAndExcludesCredentials(t *testing.T) {
 		t.Fatalf("request messages = %+v, want system plus complete history", p.req.Messages)
 	}
 	prompt := p.req.Messages[0].Content
-	if !strings.Contains(prompt, weatherTool) || !strings.Contains(prompt, "Read the forecast.") || strings.Contains(prompt, credentialsTool) {
+	if !strings.Contains(prompt, "must include nonblank assistantText") || !strings.Contains(prompt, weatherTool) || !strings.Contains(prompt, "Read the forecast.") || strings.Contains(prompt, credentialsTool) {
 		t.Fatalf("system prompt tool listing = %q", prompt)
 	}
 	if p.req.Model != "primary-model" || p.req.MaxTokens != 777 || p.req.Temperature != 0 {
 		t.Fatalf("request = %+v, want compiler settings", p.req)
+	}
+}
+
+func TestCompilerRejectsOversizedStreamedResponse(t *testing.T) {
+	p := &refinementProvider{
+		reply:  `{"assistantText":"Question","question":{"id":"x","prompt":"p","kind":"text"}}`,
+		tokens: []string{strings.Repeat("x", 64*1024+1)},
+	}
+	c := scheduled.NewCompiler(p, scheduled.CompilerConfig{})
+	if got, err := c.Refine(context.Background(), nil, nil, 1); err == nil || got.Question != nil || got.Proposal != nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("Refine() = %+v, %v; want bounded stream error and no refinement", got, err)
+	}
+}
+
+func TestCompilerRejectsOversizedDirectResponse(t *testing.T) {
+	p := &refinementProvider{
+		reply:             strings.Repeat("x", 64*1024+1),
+		skipTokenCallback: true,
+	}
+	c := scheduled.NewCompiler(p, scheduled.CompilerConfig{})
+	if got, err := c.Refine(context.Background(), nil, nil, 1); err == nil || got.Question != nil || got.Proposal != nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("Refine() = %+v, %v; want bounded direct-response error and no refinement", got, err)
 	}
 }
 
