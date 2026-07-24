@@ -131,6 +131,30 @@ func TestScheduleNextAfterPreservesLocalTimeAcrossDST(t *testing.T) {
 	}
 }
 
+func TestScheduleNextAfterUsesStableLocalOccurrenceAtAutumnDSTFallback(t *testing.T) {
+	t.Parallel()
+	berlin, err := time.LoadLocation(timezoneBerlin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := scheduled.Schedule{
+		DTStart:  time.Date(2026, 10, 24, 2, 30, 0, 0, berlin),
+		RRULE:    rruleDaily,
+		Timezone: timezoneBerlin,
+	}
+	next, err := spec.NextAfter(time.Date(2026, 10, 24, 3, 0, 0, 0, berlin))
+	if err != nil {
+		t.Fatalf("NextAfter: %v", err)
+	}
+	want := time.Date(2026, 10, 25, 2, 30, 0, 0, berlin)
+	if !next.Equal(want) || next.Hour() != 2 || next.Minute() != 30 {
+		t.Fatalf("next = %s, want %s at 02:30 local", next, want)
+	}
+	if got, wantKey := scheduled.OccurrenceKey(next), want.UTC().Format(time.RFC3339Nano); got != wantKey {
+		t.Fatalf("OccurrenceKey(next) = %q, want %q", got, wantKey)
+	}
+}
+
 func TestScheduleCoalesceMissed(t *testing.T) {
 	t.Parallel()
 	spec := scheduled.Schedule{
