@@ -794,6 +794,7 @@ func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot
 	}
 	activity, err := s.fitAnalyzer.Analyze(ctx, mcpSnap, args.ActivityID)
 	if err != nil {
+		slog.Warn("FIT analysis failed", "stage", fitactivity.FailureStage(err))
 		_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusError})
 		_ = sink.Flush()
 		return provider.Message{Role: toolMsgRole, ToolCallID: tc.ID, Name: tc.Name, Content: "error: could not analyze FIT activity"}
