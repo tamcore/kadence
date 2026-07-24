@@ -41,3 +41,19 @@ func TestAnalyzerDownloadsBridgeFileAndReturnsSummary(t *testing.T) {
 		t.Fatalf("Analyze() = %+v", got)
 	}
 }
+
+func TestAnalyzerClassifiesDecodeFailure(t *testing.T) {
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not a FIT file"))
+	}))
+	defer bridge.Close()
+
+	a := NewAnalyzer("garmin__download_activity_fit", bridge.URL, "u", "p", 32<<20)
+	_, err := a.Analyze(context.Background(), fakeMCPCaller{result: `{"file_path":"/data/fit/activity.fit"}`}, 42)
+	if err == nil {
+		t.Fatal("Analyze() error = nil, want decode error")
+	}
+	if got := FailureStage(err); got != "decode" {
+		t.Fatalf("FailureStage() = %q, want decode", got)
+	}
+}

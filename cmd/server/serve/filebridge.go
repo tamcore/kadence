@@ -111,9 +111,13 @@ func NewFileBridgeHandler(cfg FileBridgeConfig) (http.Handler, error) {
 	if cfg.MaxBytes <= 0 {
 		return nil, errors.New("file bridge maximum size must be positive")
 	}
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, errors.New("file bridge root is unavailable")
+	}
 
 	return &fileBridgeHandler{
-		root:     root,
+		root:     rootHandle,
 		username: cfg.Username,
 		password: cfg.Password,
 		maxBytes: cfg.MaxBytes,
@@ -121,7 +125,7 @@ func NewFileBridgeHandler(cfg FileBridgeConfig) (http.Handler, error) {
 }
 
 type fileBridgeHandler struct {
-	root     string
+	root     *os.Root
 	username string
 	password string
 	maxBytes int64
@@ -176,8 +180,7 @@ func fileBridgeName(path string) (string, int) {
 }
 
 func (h *fileBridgeHandler) fetchAndDelete(w http.ResponseWriter, name string) {
-	path := filepath.Join(h.root, name)
-	pathInfo, err := os.Lstat(path)
+	pathInfo, err := h.root.Lstat(name)
 	if err != nil || !pathInfo.Mode().IsRegular() {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
@@ -187,7 +190,7 @@ func (h *fileBridgeHandler) fetchAndDelete(w http.ResponseWriter, name string) {
 		return
 	}
 
-	f, err := os.Open(path)
+	f, err := h.root.Open(name)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
@@ -216,9 +219,9 @@ func (h *fileBridgeHandler) fetchAndDelete(w http.ResponseWriter, name string) {
 	if n, _ := f.Read(extra[:]); n != 0 {
 		return
 	}
-	currentInfo, err := os.Lstat(path)
+	currentInfo, err := h.root.Lstat(name)
 	if err != nil || !currentInfo.Mode().IsRegular() || !os.SameFile(openedInfo, currentInfo) {
 		return
 	}
-	_ = os.Remove(path)
+	_ = h.root.Remove(name)
 }

@@ -3,6 +3,7 @@ package fit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,31 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+type analysisFailure struct {
+	stage string
+	err   error
+}
+
+func (e *analysisFailure) Error() string {
+	return "FIT analysis failed during " + e.stage
+}
+
+func (e *analysisFailure) Unwrap() error { return e.err }
+
+func failAnalysis(stage string, err error) error {
+	return &analysisFailure{stage: stage, err: err}
+}
+
+// FailureStage returns a bounded, path-free stage name suitable for
+// operational logging. Unknown errors are classified as "unknown".
+func FailureStage(err error) string {
+	var failure *analysisFailure
+	if errors.As(err, &failure) {
+		return failure.stage
+	}
+	return "unknown"
+}
 
 // MCPCaller is the narrow MCP surface the analyzer needs.
 type MCPCaller interface {
@@ -37,26 +63,30 @@ func (a *Analyzer) Analyze(ctx context.Context, caller MCPCaller, activityID int
 	args, _ := json.Marshal(map[string]int64{"activity_id": activityID})
 	result, err := caller.Call(ctx, a.downloadTool, string(args))
 	if err != nil {
-		return Activity{}, fmt.Errorf("download FIT activity: %w", err)
+		return Activity{}, failAnalysis("download", err)
 	}
 	name, err := fitFilename(result)
 	if err != nil {
-		return Activity{}, err
+		return Activity{}, failAnalysis("download_result", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.bridgeURL+"/files/"+url.PathEscape(name), nil)
 	if err != nil {
-		return Activity{}, fmt.Errorf("create FIT bridge request: %w", err)
+		return Activity{}, failAnalysis("bridge_request", err)
 	}
 	req.SetBasicAuth(a.authUser, a.authPass)
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return Activity{}, fmt.Errorf("fetch FIT file: %w", err)
+		return Activity{}, failAnalysis("bridge_fetch", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return Activity{}, fmt.Errorf("fetch FIT file: bridge returned %s", resp.Status)
+		return Activity{}, failAnalysis("bridge_status", fmt.Errorf("bridge returned %s", resp.Status))
 	}
-	return Decode(io.LimitReader(resp.Body, a.maxBytes+1))
+	activity, err := Decode(io.LimitReader(resp.Body, a.maxBytes+1))
+	if err != nil {
+		return Activity{}, failAnalysis("decode", err)
+	}
+	return activity, nil
 }
 
 func fitFilename(result string) (string, error) {
