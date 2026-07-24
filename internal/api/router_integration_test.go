@@ -39,7 +39,7 @@ func TestLoginThenCurrentUser(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: config.Config{}}))
+	srv := httptest.NewServer(api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: config.Config{ScheduledEnabled: true}}))
 	defer srv.Close()
 	jar := &cookieJar{}
 
@@ -59,13 +59,18 @@ func TestLoginThenCurrentUser(t *testing.T) {
 	}
 	var env struct {
 		Data struct {
-			Username string `json:"username"`
+			Username         string `json:"username"`
+			Timezone         string `json:"timezone"`
+			ScheduledEnabled bool   `json:"scheduledEnabled"`
 		} `json:"data"`
 	}
 	_ = json.NewDecoder(resp2.Body).Decode(&env)
 	_ = resp2.Body.Close()
 	if env.Data.Username != testUsername {
 		t.Fatalf("expected %s, got %q", testUsername, env.Data.Username)
+	}
+	if env.Data.Timezone != "UTC" || !env.Data.ScheduledEnabled {
+		t.Fatalf("session omitted scheduled preferences: %+v", env.Data)
 	}
 }
 

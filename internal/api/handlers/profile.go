@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -21,6 +22,7 @@ import (
 type profileUsers interface {
 	GetByID(ctx context.Context, id int64) (model.User, error)
 	UpdateProfile(ctx context.Context, id int64, displayName, email, unitSystem, location, aboutMe string) error
+	UpdateTimezone(ctx context.Context, id int64, timezone string) error
 	UpdatePassword(ctx context.Context, id int64, passwordHash string) error
 }
 
@@ -60,6 +62,7 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 		UnitSystem  string `json:"unitSystem"`
 		Location    string `json:"location"`
 		AboutMe     string `json:"aboutMe"`
+		Timezone    string `json:"timezone"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		RespondError(w, http.StatusBadRequest, "invalid request body")
@@ -85,6 +88,17 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, fmt.Sprintf("about me must be %d characters or fewer", maxAboutMeLen))
 		return
 	}
+	timezone := strings.TrimSpace(in.Timezone)
+	if timezone == "" {
+		timezone = u.Timezone
+		if timezone == "" {
+			timezone = "UTC"
+		}
+	}
+	if _, err := time.LoadLocation(timezone); err != nil || (timezone != "UTC" && !strings.Contains(timezone, "/")) {
+		RespondError(w, http.StatusBadRequest, "timezone must be an IANA timezone")
+		return
+	}
 
 	if err := h.users.UpdateProfile(r.Context(), u.ID, strings.TrimSpace(in.DisplayName), email, in.UnitSystem, location, aboutMe); err != nil {
 		if errors.Is(err, store.ErrEmailTaken) {
@@ -94,13 +108,17 @@ func (h *Profile) Update(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "could not update profile")
 		return
 	}
+	if err := h.users.UpdateTimezone(r.Context(), u.ID, timezone); err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not update profile")
+		return
+	}
 
 	updated, err := h.users.GetByID(r.Context(), u.ID)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not load profile")
 		return
 	}
-	RespondJSON(w, http.StatusOK, toPublic(updated))
+	RespondJSON(w, http.StatusOK, toPublicWithConfig(updated, h.cfg))
 }
 
 // ChangePassword handles POST /api/profile/password. The current password

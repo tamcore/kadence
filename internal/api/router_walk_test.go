@@ -49,6 +49,7 @@ func fullDeps() api.Deps {
 		Profile:     handlers.NewProfile(nil, nil, cfg),
 		SessionsAPI: handlers.NewSessions(nil),
 		WebAuthn:    handlers.NewWebAuthn(nil, nil, nil, nil, nil, cfg),
+		Scheduled:   handlers.NewScheduled(nil),
 	}
 }
 
@@ -103,6 +104,16 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 	for key := range publicAllowlist {
 		if !seen[key] {
 			t.Errorf("allowlisted route %q was never registered on the router", key)
+		}
+	}
+	for _, key := range []string{
+		"GET /api/scheduled/tasks", "POST /api/scheduled/tasks", "GET /api/scheduled/tasks/{id}",
+		"PATCH /api/scheduled/tasks/{id}", "DELETE /api/scheduled/tasks/{id}",
+		"POST /api/scheduled/tasks/{id}/messages", "POST /api/scheduled/tasks/{id}/confirm",
+		"POST /api/scheduled/tasks/{id}/run", "POST /api/scheduled/tasks/{id}/read",
+	} {
+		if !seen[key] {
+			t.Errorf("scheduled route %q was never registered", key)
 		}
 	}
 }

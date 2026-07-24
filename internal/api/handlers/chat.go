@@ -41,16 +41,27 @@ type MsgLister interface {
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 }
 
+// ScheduledConversationPauser preserves the definition/audit relationship
+// when a linked Scheduled conversation is removed from the ordinary chat UI.
+type ScheduledConversationPauser interface {
+	PauseByConversation(ctx context.Context, conversationID string, userID int64) error
+}
+
 // Chat handles the chat + conversation HTTP endpoints.
 type Chat struct {
-	svc   ChatStreamer
-	convs ConvLister
-	msgs  MsgLister
+	svc       ChatStreamer
+	convs     ConvLister
+	msgs      MsgLister
+	scheduled ScheduledConversationPauser
 }
 
 // NewChat constructs the Chat handler.
-func NewChat(svc ChatStreamer, convs ConvLister, msgs MsgLister) *Chat {
-	return &Chat{svc: svc, convs: convs, msgs: msgs}
+func NewChat(svc ChatStreamer, convs ConvLister, msgs MsgLister, scheduled ...ScheduledConversationPauser) *Chat {
+	h := &Chat{svc: svc, convs: convs, msgs: msgs}
+	if len(scheduled) > 0 {
+		h.scheduled = scheduled[0]
+	}
+	return h
 }
 
 // sseSink writes chat.ChatEvent as SSE frames. mu guards w against concurrent
@@ -232,6 +243,24 @@ func (h *Chat) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 	if id == "" {
 		RespondError(w, http.StatusBadRequest, "id is required")
 		return
+	}
+	if h.scheduled != nil {
+		conversation, err := h.convs.GetByID(r.Context(), id, u.ID)
+		if err != nil {
+			RespondError(w, http.StatusNotFound, "conversation not found")
+			return
+		}
+		if conversation.Kind == model.ConversationKindScheduled {
+			// scheduled_tasks.conversation_id is intentionally RESTRICT. Keep
+			// this Scheduled thread soft-preserved after pausing its live task so
+			// definitions and immutable runs remain auditable.
+			if err := h.scheduled.PauseByConversation(r.Context(), id, u.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+				RespondError(w, http.StatusInternalServerError, "could not pause scheduled task")
+				return
+			}
+			RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
 	}
 	if err := h.convs.Delete(r.Context(), id, u.ID); err != nil {
 		RespondError(w, http.StatusInternalServerError, "could not delete conversation")

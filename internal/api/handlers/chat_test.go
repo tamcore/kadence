@@ -31,6 +31,7 @@ type fakeConvLister struct {
 	deleteError     error
 	updateTitleErr  error
 	updateTitleResp model.Conversation
+	getByIDResp     model.Conversation
 }
 
 func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation, error) {
@@ -39,6 +40,9 @@ func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation
 func (f fakeConvLister) GetByID(_ context.Context, id string, userID int64) (model.Conversation, error) {
 	if f.getByIDError != nil {
 		return model.Conversation{}, f.getByIDError
+	}
+	if f.getByIDResp.ID != "" {
+		return f.getByIDResp, nil
 	}
 	return model.Conversation{ID: id, UserID: userID}, nil
 }
@@ -57,6 +61,13 @@ type fakeMsgLister struct{ msgs []model.Message }
 
 func (f fakeMsgLister) ListByConversation(context.Context, string) ([]model.Message, error) {
 	return f.msgs, nil
+}
+
+type fakeScheduledConversationPauser struct{ calls int }
+
+func (f *fakeScheduledConversationPauser) PauseByConversation(context.Context, string, int64) error {
+	f.calls++
+	return nil
 }
 
 func withUser(r *http.Request, id int64) *http.Request { //nolint:unparam
@@ -153,6 +164,17 @@ func TestDeleteConversationEmptyID(t *testing.T) {
 	h.DeleteConversation(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400", rec.Code)
+	}
+}
+
+func TestDeleteScheduledConversationPausesAndSoftPreservesIt(t *testing.T) {
+	pauser := &fakeScheduledConversationPauser{}
+	h := handlers.NewChat(&fakeStreamer{}, fakeConvLister{getByIDResp: model.Conversation{ID: "1", Kind: model.ConversationKindScheduled}}, fakeMsgLister{}, pauser)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
+	rec := httptest.NewRecorder()
+	h.DeleteConversation(rec, req)
+	if rec.Code != http.StatusOK || pauser.calls != 1 {
+		t.Fatalf("status=%d pauses=%d", rec.Code, pauser.calls)
 	}
 }
 

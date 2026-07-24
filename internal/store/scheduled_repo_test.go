@@ -69,12 +69,16 @@ func TestScheduledTaskRepositoryOwnerScopeAndActiveLimit(t *testing.T) {
 		UserID: owner.ID, ConversationID: conversation.ID, Name: "Morning reminder",
 		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
 		CompiledPrompt: "Drink water", Timezone: scheduledTimezoneUTC, NextRunAt: new(time.Now().UTC().Add(time.Hour)),
+		DeliveryPolicy: "always", InitialRun: "wait", StaticMessage: "Drink water now.",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if task.ID == "" || task.Version != 1 {
 		t.Fatalf("created task = %+v", task)
+	}
+	if task.DeliveryPolicy != "always" || task.InitialRun != "wait" || task.StaticMessage != "Drink water now." {
+		t.Fatalf("proposal fields did not round trip: %+v", task)
 	}
 	if _, err := repo.GetByID(ctx, task.ID, other.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-owner GetByID err = %v, want ErrNotFound", err)

@@ -55,6 +55,10 @@ type ScheduledTask struct {
 	Timezone            string
 	ExecutionMode       string
 	AuthorizedTools     []string
+	DeliveryPolicy      string
+	InitialRun          string
+	StopCondition       string
+	StaticMessage       string
 	MonitoringState     json.RawMessage
 	ConsecutiveFailures int
 	NextRunAt           *time.Time
