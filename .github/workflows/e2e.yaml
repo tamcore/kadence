@@ -43,9 +43,22 @@ jobs:
         run: go build -tags prodfrontend -o bin/kadence ./cmd/server
       - name: Build e2e stub
         run: go build -o bin/e2e-stub ./e2e/stub
-      - name: Install Playwright browsers
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-chromium-
+      - name: Install Playwright dependencies
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install-deps chromium
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        working-directory: web
+        run: npx playwright install chromium
       - name: Run Playwright browser e2e
         run: scripts/e2e-web.sh
         env:
