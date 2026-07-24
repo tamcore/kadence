@@ -261,6 +261,7 @@ func TestScheduledLifecycleBodyAndErrorMapping(t *testing.T) {
 		{name: "not found", err: store.ErrNotFound, want: http.StatusNotFound},
 		{name: "active limit", err: store.ErrActiveTaskLimit, want: http.StatusConflict},
 		{name: "stale", err: scheduled.ErrStaleProposal, want: http.StatusConflict},
+		{name: "run in progress", err: scheduled.ErrRunInProgress, want: http.StatusConflict},
 		{name: "transition", err: scheduled.ErrInvalidTransition, want: http.StatusBadRequest},
 		{name: "public validation", err: errors.New("scheduled: invalid"), want: http.StatusBadRequest},
 		{name: "internal", err: errors.New("database unavailable"), want: http.StatusInternalServerError},

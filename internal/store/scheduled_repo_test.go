@@ -18,6 +18,8 @@ const (
 	scheduledTimezoneUTC    = "UTC"
 	scheduledTimezoneBerlin = "Europe/Berlin"
 	scheduledCompiledQuery  = "query"
+	scheduledConfirmedName  = "Confirmed"
+	scheduledOldPrompt      = "old prompt"
 )
 
 func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
@@ -199,9 +201,9 @@ func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
 	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
 	task, err := repo.Create(ctx, model.ScheduledTask{
-		UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: "Confirmed",
+		UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: scheduledConfirmedName,
 		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
-		CompiledPrompt: "old prompt", Timezone: scheduledTimezoneUTC, NextRunAt: new(time.Now().UTC().Add(time.Hour)),
+		CompiledPrompt: scheduledOldPrompt, Timezone: scheduledTimezoneUTC, NextRunAt: new(time.Now().UTC().Add(time.Hour)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +233,154 @@ func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	confirmed, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, 2, time.Now().UTC())
 	if err != nil || confirmed.State != model.ScheduledTaskStateActive {
 		t.Fatalf("ConfirmProposal = %+v, %v", confirmed, err)
+	}
+}
+
+func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+
+	for _, tc := range []struct {
+		name       string
+		state      string
+		transition func(context.Context, string, int64, int) (model.ScheduledTask, error)
+	}{
+		{
+			name:  "pause loses to edit",
+			state: model.ScheduledTaskStateActive,
+			transition: func(ctx context.Context, id string, ownerID int64, version int) (model.ScheduledTask, error) {
+				return repo.Pause(ctx, id, ownerID, version)
+			},
+		},
+		{
+			name:  "resume loses to edit",
+			state: model.ScheduledTaskStatePaused,
+			transition: func(ctx context.Context, id string, ownerID int64, version int) (model.ScheduledTask, error) {
+				return repo.Resume(ctx, id, ownerID, version, time.Now().UTC().Add(time.Hour))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+			task, err := repo.Create(ctx, model.ScheduledTask{
+				UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: scheduledConfirmedName,
+				Kind: model.ScheduledTaskKindReminder, State: tc.state, CompiledPrompt: scheduledOldPrompt,
+				Timezone: scheduledTimezoneUTC, RRULE: "FREQ=DAILY", DTStart: new(time.Now().UTC()),
+				AuthorizedTools: []string{"search"}, StaticMessage: "old static message",
+				NextRunAt: new(time.Now().UTC().Add(time.Hour)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			staleVersion := task.Version
+			draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tc.transition(ctx, task.ID, owner.ID, staleVersion); !errors.Is(err, store.ErrInvalidScheduledTaskState) {
+				t.Fatalf("stale lifecycle transition err=%v", err)
+			}
+			persisted, err := repo.GetByID(ctx, task.ID, owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.State != model.ScheduledTaskStateDraft || persisted.Version != draft.Version ||
+				persisted.CompiledPrompt != "" || persisted.NextRunAt != nil ||
+				len(persisted.AuthorizedTools) != 0 || persisted.StaticMessage != "" {
+				t.Fatalf("draft revision overwritten: %+v", persisted)
+			}
+
+			raceConversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+			raceTask, err := repo.Create(ctx, model.ScheduledTask{
+				UserID: owner.ID, ConversationID: raceConversation.ID, Version: 1, Name: "Racing",
+				Kind: model.ScheduledTaskKindReminder, State: tc.state, CompiledPrompt: "race prompt",
+				Timezone: scheduledTimezoneUTC, RRULE: "FREQ=DAILY", DTStart: new(time.Now().UTC()),
+				AuthorizedTools: []string{"search"}, StaticMessage: "race static message",
+				NextRunAt: new(time.Now().UTC().Add(time.Hour)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := make(chan struct{})
+			editResult := make(chan error, 1)
+			transitionResult := make(chan error, 1)
+			go func() {
+				<-start
+				_, err := repo.BeginDraftRevision(ctx, raceTask.ID, owner.ID)
+				editResult <- err
+			}()
+			go func() {
+				<-start
+				_, err := tc.transition(ctx, raceTask.ID, owner.ID, raceTask.Version)
+				transitionResult <- err
+			}()
+			close(start)
+			if err := <-editResult; err != nil {
+				t.Fatalf("concurrent edit err=%v", err)
+			}
+			if err := <-transitionResult; err != nil && !errors.Is(err, store.ErrInvalidScheduledTaskState) {
+				t.Fatalf("concurrent lifecycle err=%v", err)
+			}
+			persisted, err = repo.GetByID(ctx, raceTask.ID, owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.State != model.ScheduledTaskStateDraft || persisted.Version != raceTask.Version+1 ||
+				persisted.CompiledPrompt != "" || persisted.NextRunAt != nil {
+				t.Fatalf("concurrent draft revision overwritten: %+v", persisted)
+			}
+		})
+	}
+}
+
+func TestScheduledTaskRepositoryRejectsDraftRevisionWhileRunInProgress(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "owner", testEmailO)
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	now := time.Now().UTC().Truncate(time.Second)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Version: 1, Name: scheduledConfirmedName,
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: scheduledOldPrompt, Timezone: scheduledTimezoneUTC, NextRunAt: new(now.Add(time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := repo.RunNow(ctx, owner.ID, task.ID, "manual:edit-conflict", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID); !errors.Is(err, store.ErrScheduledRunInProgress) {
+		t.Fatalf("pending run edit err=%v", err)
+	}
+
+	claims, err := repo.ClaimDue(ctx, now, 1)
+	if err != nil || len(claims) != 1 || claims[0].Run.ID != pending.ID {
+		t.Fatalf("ClaimDue: claims=%+v err=%v", claims, err)
+	}
+	if _, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID); !errors.Is(err, store.ErrScheduledRunInProgress) {
+		t.Fatalf("running run edit err=%v", err)
+	}
+	if err := repo.MarkDelivered(ctx, pending.ID, owner.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := repo.BeginDraftRevision(ctx, task.ID, owner.ID)
+	if err != nil {
+		t.Fatalf("terminal run edit err=%v", err)
+	}
+	if draft.State != model.ScheduledTaskStateDraft || draft.Version != task.Version+1 {
+		t.Fatalf("draft after terminal run=%+v", draft)
 	}
 }
 

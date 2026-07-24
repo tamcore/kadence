@@ -402,7 +402,7 @@ func (h *Scheduled) writeLifecycleError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		RespondError(w, http.StatusNotFound, "scheduled task not found")
-	case errors.Is(err, store.ErrActiveTaskLimit), errors.Is(err, scheduled.ErrStaleProposal):
+	case errors.Is(err, store.ErrActiveTaskLimit), errors.Is(err, scheduled.ErrStaleProposal), errors.Is(err, scheduled.ErrRunInProgress):
 		RespondError(w, http.StatusConflict, "scheduled task conflict")
 	case errors.Is(err, scheduled.ErrInvalidTransition), strings.HasPrefix(err.Error(), "scheduled:"):
 		RespondError(w, http.StatusBadRequest, "invalid scheduled task request")
