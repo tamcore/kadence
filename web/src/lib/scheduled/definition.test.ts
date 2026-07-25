@@ -115,6 +115,19 @@ describe('ScheduledDefinitionController', () => {
 		expect(controller.proposal).toMatchObject({ version: proposal.version, name: proposal.name });
 	});
 
+	it('handles a failed canonical reload after a version conflict', async () => {
+		const controller = new ScheduledDefinitionController('task-1');
+		confirmMock.mockRejectedValueOnce(new APIError(409, 'version changed'));
+		detailMock.mockRejectedValueOnce(new Error('offline'));
+
+		await expect(controller.confirm(2)).resolves.toBeNull();
+		expect(controller.sending).toBe(false);
+		expect(controller.stale).toBe(true);
+		expect(controller.error).toBe(
+			'This plan changed, and we could not reload the latest version. Please try again.'
+		);
+	});
+
 	it('keeps pending and error state isolated per card controller', async () => {
 		let release!: () => void;
 		streamMock.mockImplementationOnce(

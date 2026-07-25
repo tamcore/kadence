@@ -159,7 +159,12 @@ export class ScheduledDefinitionController {
 			if (cause instanceof APIError && cause.status === 409) {
 				this.error = 'This plan changed while you were reviewing it. Refine it again to see the latest version.';
 				this.stale = true;
-				await this.loadCanonical();
+				try {
+					await this.loadCanonical();
+				} catch {
+					this.error =
+						'This plan changed, and we could not reload the latest version. Please try again.';
+				}
 			} else {
 				this.error = cause instanceof Error ? cause.message : 'Could not schedule this task';
 			}
