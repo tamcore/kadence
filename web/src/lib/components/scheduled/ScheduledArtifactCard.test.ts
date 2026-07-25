@@ -126,9 +126,14 @@ describe('ScheduledArtifactCard', () => {
 		const dismiss = render(ScheduledArtifactCard, {
 			props: { artifact: artifact({ proposal: undefined }) }
 		});
-		await fireEvent.click(screen.getByRole('button', { name: 'Dismiss draft' }));
+		expect(within(dismiss.container).getByRole('link', { name: /scheduled details/i })).toHaveAttribute(
+			'href',
+			'/scheduled?task=task-1'
+		);
+		await fireEvent.click(within(dismiss.container).getByRole('button', { name: 'Dismiss draft' }));
 		expect(discardMock).toHaveBeenCalledWith('task-1');
-		expect(screen.getByText(/Dismissed/i)).toBeInTheDocument();
+		expect(within(dismiss.container).getByText(/Dismissed/i)).toBeInTheDocument();
+		expect(within(dismiss.container).queryByRole('link', { name: /scheduled details/i })).not.toBeInTheDocument();
 		dismiss.unmount();
 
 		render(ScheduledArtifactCard, {
@@ -139,6 +144,15 @@ describe('ScheduledArtifactCard', () => {
 			expect.objectContaining({ taskId: 'task-1' }),
 			expect.any(AbortSignal)
 		));
+	});
+
+	it('hides stale task details for a persisted dismissed artifact', () => {
+		const result = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ artifactState: 'dismissed', proposal: undefined }) }
+		});
+
+		expect(within(result.container).getByText(/Dismissed/i)).toBeInTheDocument();
+		expect(within(result.container).queryByRole('link', { name: /scheduled details/i })).not.toBeInTheDocument();
 	});
 
 	it('keeps Adjust and Dismiss beside Schedule for a compiled draft proposal', async () => {

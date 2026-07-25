@@ -52,7 +52,7 @@
 	}
 
 	function detailHref(): string | undefined {
-		if (!taskID) return undefined;
+		if (isDismissed || !taskID) return undefined;
 		return taskState === 'draft' ? `/scheduled?task=${encodeURIComponent(taskID)}` : `/scheduled/${encodeURIComponent(taskID)}`;
 	}
 
