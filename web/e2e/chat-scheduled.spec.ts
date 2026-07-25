@@ -24,6 +24,15 @@ async function hrefs(cards: Locator): Promise<string[]> {
 	);
 }
 
+async function scheduledTaskIDs(page: Page): Promise<string[]> {
+	const response = await page.request.get('/api/scheduled/tasks');
+	if (!response.ok()) {
+		throw new Error(`Could not list Scheduled tasks before regeneration: HTTP ${response.status()}`);
+	}
+	const payload = (await response.json()).data as { tasks: { id: string }[] };
+	return payload.tasks.map((task) => task.id).sort();
+}
+
 test('explicitly schedules, confirms, revises, preserves, and runs two weather checks', async ({ page }) => {
 	test.setTimeout(90_000);
 	await login(page, USERNAME, PASSWORD);
@@ -62,6 +71,7 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	await expect(cards.nth(1)).toContainText('Scheduled');
 	const originalLinks = await hrefs(cards);
 	expect(new Set(originalLinks).size).toBe(2);
+	const taskIDsBeforeRegeneration = await scheduledTaskIDs(page);
 
 	// Regenerating the source answer must reuse its relational handoff slots,
 	// rather than creating a second pair of task cards or task IDs.
@@ -70,13 +80,14 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	await expect(cards).toHaveCount(2);
 	const links = await hrefs(cards);
 	expect(links).toEqual(originalLinks);
-	const scheduledList = await page.request.get('/api/scheduled/tasks');
-	expect(scheduledList.ok()).toBe(true);
-	const listed = (await scheduledList.json()).data.tasks as { id: string }[];
-	const listedIDs = listed.map((task) => task.id);
+	const taskIDsAfterRegeneration = await scheduledTaskIDs(page);
+	expect(
+		taskIDsAfterRegeneration,
+		`regeneration changed Scheduled task IDs; before=${taskIDsBeforeRegeneration.join(',')} after=${taskIDsAfterRegeneration.join(',')}`
+	).toEqual(taskIDsBeforeRegeneration);
 	for (const link of originalLinks) {
 		const id = link.split('/').at(-1);
-		expect(listedIDs.filter((listedID) => listedID === id)).toHaveLength(1);
+		expect(taskIDsAfterRegeneration.filter((taskID) => taskID === id)).toHaveLength(1);
 	}
 
 	// The task detail view is the Scheduled conversation's result inbox. Run
