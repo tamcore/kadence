@@ -65,6 +65,16 @@ test('does not overflow horizontally on a narrow mobile viewport', async ({ page
 	await login(page, USERNAME, PASSWORD);
 	await page.goto('/chat');
 
+	const thread = page.getByTestId('chat-thread');
+	await expect(thread).toBeVisible();
+
+	const longToken = 'x'.repeat(1_000);
+	const composer = page.getByLabel('Message');
+	await composer.fill(longToken);
+	await composer.press('Enter');
+	await expect(page.getByTestId('chat-message-user').last()).toHaveText(longToken);
+
+	await expect.poll(() => thread.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 	await expect
 		.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
 		.toBe(true);

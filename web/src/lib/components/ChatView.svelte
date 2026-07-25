@@ -123,7 +123,14 @@
 		box-sizing: border-box;
 		display: flex; flex-direction: column; gap: 16px; padding-bottom: 16px;
 	}
-	.msg { max-width: 80%; box-sizing: border-box; padding: 10px 14px; border-radius: var(--radius); }
+	.msg {
+		min-width: 0;
+		max-width: 80%;
+		box-sizing: border-box;
+		padding: 10px 14px;
+		border-radius: var(--radius);
+		overflow-wrap: anywhere;
+	}
 	.msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 	.msg.assistant {
 		align-self: stretch; width: 100%; max-width: none; padding: 0;
