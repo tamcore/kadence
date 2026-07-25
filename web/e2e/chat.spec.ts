@@ -8,7 +8,7 @@ test('sending a chat message shows the stub assistant reply with no error', asyn
 	await login(page, USERNAME, PASSWORD);
 	await page.goto('/chat');
 
-	const composer = page.getByLabel('Message');
+	const composer = page.getByRole('textbox', { name: 'Message', exact: true });
 	await composer.fill('Hello coach');
 	await composer.press('Enter');
 
@@ -22,7 +22,7 @@ test('edits and regenerates persisted chat turns', async ({ page }) => {
 	await login(page, USERNAME, PASSWORD);
 	await page.goto('/chat');
 
-	const composer = page.getByLabel('Message');
+	const composer = page.getByRole('textbox', { name: 'Message', exact: true });
 	await composer.fill('First prompt');
 	await composer.press('Enter');
 	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(1);
@@ -111,7 +111,7 @@ test('uses content-fit assistant and user bubbles on opposite sides', async ({ p
 	});
 	await page.goto('/chat');
 
-	const composer = page.getByLabel('Message');
+	const composer = page.getByRole('textbox', { name: 'Message', exact: true });
 	await composer.fill('A long message '.repeat(100));
 	await composer.press('Enter');
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
@@ -167,7 +167,7 @@ test('does not overflow horizontally on a narrow mobile viewport', async ({ page
 	await expect(thread).toBeVisible();
 
 	const longToken = 'x'.repeat(1_000);
-	const composer = page.getByLabel('Message');
+	const composer = page.getByRole('textbox', { name: 'Message', exact: true });
 	await composer.fill(longToken);
 	await composer.press('Enter');
 	await expect(page.getByTestId('chat-message-user').last()).toHaveText(longToken);
