@@ -199,7 +199,7 @@
 		flex-direction: column;
 		height: 100%;
 	}
-	.thread { flex: 1; overflow-y: auto; padding: 24px 20px 0; }
+	.thread { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; padding: 24px 20px 0; }
 	.thread-inner {
 		width: 100%; max-width: var(--chat-content-width); margin: 0 auto;
 		box-sizing: border-box;
@@ -289,4 +289,8 @@
 	}
 	.composer-column :global(.composer),
 	.credential-column :global(.credential-prompt) { width: 100%; box-sizing: border-box; }
+
+	@media (max-width: 899px) {
+		.message-block { max-width: 95%; }
+	}
 </style>

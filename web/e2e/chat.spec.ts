@@ -176,4 +176,19 @@ test('does not overflow horizontally on a narrow mobile viewport', async ({ page
 	await expect
 		.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
 		.toBe(true);
+	const rootMetrics = await page.evaluate(() => {
+		const root = document.scrollingElement;
+		return {
+			bodyHeight: document.body.scrollHeight,
+			clientHeight: root?.clientHeight,
+			scrollHeight: root?.scrollHeight
+		};
+	});
+	expect(rootMetrics.scrollHeight).toBeLessThanOrEqual(rootMetrics.clientHeight!);
+	const user = page.getByTestId('chat-message-user').last();
+	const [threadBox, userBox] = await Promise.all([thread.boundingBox(), user.boundingBox()]);
+	expect(threadBox).not.toBeNull();
+	expect(userBox).not.toBeNull();
+	expect(userBox!.width).toBeGreaterThan(threadBox!.width * 0.9);
+	expect(userBox!.width).toBeLessThanOrEqual(threadBox!.width * 0.95 + 1);
 });

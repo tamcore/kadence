@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import source from './+page.svelte?raw';
 
 const loginMock = vi.fn();
 const getCurrentUserMock = vi.fn();
@@ -18,6 +19,10 @@ import Login from './+page.svelte';
 afterEach(() => vi.clearAllMocks());
 
 describe('login page', () => {
+	it('fills its assigned public viewport instead of creating a second viewport height', () => {
+		expect(source).toMatch(/\.login\s*\{[\s\S]*?min-height:\s*100%;/);
+	});
+
 	it('shows decorative artwork without changing the Kadence heading name', () => {
 		render(Login);
 

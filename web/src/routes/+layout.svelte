@@ -124,36 +124,39 @@
 
 <svelte:window onkeydown={closeSidebarOnEscape} />
 
-<PwaStatusStrip
-	online={pwaStatus.online}
-	updateAvailable={pwaStatus.updateAvailable}
-	applyingUpdate={pwaStatus.applyingUpdate}
-	onReload={() => pwaLifecycle?.applyUpdate()}
-/>
-
 {#if checking}
 	<div class="loading">Loading…</div>
-{:else if isPublic($page.url.pathname)}
-	{@render children()}
 {:else}
-	<ReindexStrip stale={reindex.stale} total={reindex.total} />
-	<McpHealthStrip unhealthy={mcp.unhealthy} total={mcp.total} />
-	<div class="shell">
-		<div class="scrim" class:show={$sidebarOpen} onclick={closeSidebar} aria-hidden="true"></div>
-		<aside class="sidebar" class:open={$sidebarOpen}><Sidebar /></aside>
-		<div class="main">
-			<div class="mobilebar">
-				<button class="hamburger" onclick={toggleSidebar} aria-label="Menu">☰</button>
-				<span class="brand-sm">
-					<img src="/icons/icon-192.png" alt="" width="24" height="24" />
-					<span>Kadence</span>
-				</span>
+	<div class="app-viewport">
+		<PwaStatusStrip
+			online={pwaStatus.online}
+			updateAvailable={pwaStatus.updateAvailable}
+			applyingUpdate={pwaStatus.applyingUpdate}
+			onReload={() => pwaLifecycle?.applyUpdate()}
+		/>
+		{#if isPublic($page.url.pathname)}
+			<div class="public-content">{@render children()}</div>
+		{:else}
+			<ReindexStrip stale={reindex.stale} total={reindex.total} />
+			<McpHealthStrip unhealthy={mcp.unhealthy} total={mcp.total} />
+			<div class="shell">
+				<div class="scrim" class:show={$sidebarOpen} onclick={closeSidebar} aria-hidden="true"></div>
+				<aside class="sidebar" class:open={$sidebarOpen}><Sidebar /></aside>
+				<div class="main">
+					<div class="mobilebar">
+						<button class="hamburger" onclick={toggleSidebar} aria-label="Menu">☰</button>
+						<span class="brand-sm">
+							<img src="/icons/icon-192.png" alt="" width="24" height="24" />
+							<span>Kadence</span>
+						</span>
+					</div>
+					<main>{@render children()}</main>
+				</div>
 			</div>
-			<main>{@render children()}</main>
-		</div>
+		{/if}
 	</div>
 {/if}
 
 <style>
-	.loading { min-height: 100vh; display: grid; place-items: center; color: var(--text-muted); }
+	.loading { height: 100dvh; display: grid; place-items: center; color: var(--text-muted); }
 </style>

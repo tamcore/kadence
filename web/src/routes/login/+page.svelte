@@ -78,7 +78,7 @@
 </main>
 
 <style>
-	.login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+	.login { min-height: 100%; display: grid; place-items: center; padding: 16px; }
 	.card {
 		background: var(--surface); padding: 32px; border-radius: var(--radius);
 		box-shadow: var(--shadow); width: 100%; max-width: 360px;

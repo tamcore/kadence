@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import source from './ChatView.svelte?raw';
 
 const sendMessageMock = vi.fn();
 const stopGenerationMock = vi.fn();
@@ -38,6 +39,15 @@ afterEach(() => {
 });
 
 describe('ChatView', () => {
+	it('allows bubbles to use 95% width on mobile while containing thread overscroll', () => {
+		expect(source).toMatch(
+			/@media\s*\(max-width:\s*899px\)\s*\{[\s\S]*?\.message-block\s*\{[\s\S]*?max-width:\s*95%;/
+		);
+		expect(source).toMatch(
+			/\.thread\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior-y:\s*contain;/
+		);
+	});
+
 	it('renders assistant markdown', () => {
 		render(ChatView, { props: {} });
 		expect(screen.getByText('hi').tagName.toLowerCase()).toBe('strong');
