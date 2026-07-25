@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -113,11 +114,36 @@ func buildMessages(reqMessages []Message) []openai.ChatCompletionMessageParamUni
 				continue
 			}
 			msgs = append(msgs, buildAssistantToolCallMessage(m))
+		case "user":
+			msgs = append(msgs, buildUserMessage(m))
 		default:
 			msgs = append(msgs, openai.UserMessage(m.Content))
 		}
 	}
 	return msgs
+}
+
+func buildUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	if len(m.Images) == 0 {
+		return openai.UserMessage(m.Content)
+	}
+
+	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, openai.TextContentPart(m.Content))
+	}
+	for _, image := range m.Images {
+		dataURL := fmt.Sprintf(
+			"data:%s;base64,%s",
+			image.MIMEType,
+			base64.StdEncoding.EncodeToString(image.Data),
+		)
+		parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+			URL:    dataURL,
+			Detail: "high",
+		}))
+	}
+	return openai.UserMessage(parts)
 }
 
 // buildAssistantToolCallMessage builds an assistant message param carrying

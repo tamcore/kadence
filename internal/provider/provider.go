@@ -21,6 +21,12 @@ type ToolCall struct {
 	Arguments string // JSON object
 }
 
+// ImageContent is one native image input carried by a user message.
+type ImageContent struct {
+	Data     []byte
+	MIMEType string
+}
+
 // FinishLength is the finish_reason the provider reports when a completion was
 // cut off because it reached the max-tokens cap (as opposed to stopping
 // naturally). Callers use it to detect and continue truncated answers.
@@ -40,6 +46,7 @@ type StreamResult struct {
 type Message struct {
 	Role       string // "system" | "user" | "assistant" | "tool"
 	Content    string
+	Images     []ImageContent
 	ToolCalls  []ToolCall `json:",omitempty"` // assistant → tool-call request
 	ToolCallID string     `json:",omitempty"` // role="tool" → which call this answers
 	Name       string     `json:",omitempty"` // role="tool" → tool name
