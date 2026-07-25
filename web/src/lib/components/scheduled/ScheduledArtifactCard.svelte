@@ -15,6 +15,8 @@
 	let dismissed = $state(false);
 	let adjusting = $state(false);
 	let adjustment = $state('');
+	let hasLocalLifecycleState = $state(false);
+	let localArtifactState = $state<ScheduledArtifact['artifactState'] | null>(null);
 
 	onDestroy(() => controller.dispose());
 	$effect(() => {
@@ -23,18 +25,20 @@
 
 	const taskID = $derived(controller.taskId ?? artifact.taskId);
 	const taskState = $derived(controller.task?.state ?? artifact.taskState);
-	const question = $derived(controller.question ?? artifact.question);
-	const proposal = $derived(controller.proposal ?? artifact.proposal);
-	const isDismissed = $derived(dismissed || artifact.artifactState === 'dismissed');
+	const artifactState = $derived(localArtifactState ?? artifact.artifactState);
+	const question = $derived(hasLocalLifecycleState ? controller.question : controller.question ?? artifact.question);
+	const proposal = $derived(hasLocalLifecycleState ? controller.proposal : controller.proposal ?? artifact.proposal);
+	const isDismissed = $derived(dismissed || artifactState === 'dismissed');
 	const pending = $derived(disabled || mutating || controller.sending);
+	const canDefine = $derived(taskState === 'draft' && !isDismissed);
 	const canAdjust = $derived(
-		taskID !== undefined && taskState === 'draft' && !isDismissed && !question
+		taskID !== undefined && canDefine && !question
 	);
 
 	function stateLabel(): string {
 		if (isDismissed) return 'Dismissed';
-		if (artifact.artifactState === 'creating') return 'Preparing delegated task';
-		if (artifact.artifactState === 'failed') return artifact.retryable ? 'Ready to retry' : 'Could not prepare task';
+		if (artifactState === 'creating') return 'Preparing delegated task';
+		if (artifactState === 'failed') return artifact.retryable ? 'Ready to retry' : 'Could not prepare task';
 		switch (taskState) {
 			case 'active':
 				return 'Scheduled';
@@ -52,11 +56,12 @@
 	}
 
 	function detailHref(): string | undefined {
-		if (isDismissed || !taskID) return undefined;
+		if (isDismissed || !taskID || taskState === 'deleted') return undefined;
 		return taskState === 'draft' ? `/scheduled?task=${encodeURIComponent(taskID)}` : `/scheduled/${encodeURIComponent(taskID)}`;
 	}
 
 	async function answer(value: string): Promise<void> {
+		hasLocalLifecycleState = true;
 		await controller.answerQuestion(value);
 	}
 
@@ -80,6 +85,7 @@
 
 	async function refine(message: string): Promise<void> {
 		if (!taskID || !message.trim() || pending) return;
+		hasLocalLifecycleState = true;
 		await controller.refine(message.trim());
 		adjustment = '';
 		adjusting = false;
@@ -87,7 +93,9 @@
 
 	async function retry(): Promise<void> {
 		if (!taskID || pending) return;
+		hasLocalLifecycleState = true;
 		await controller.refine('Please retry preparing this delegated task.');
+		if (controller.proposal || controller.question) localArtifactState = 'ready';
 	}
 </script>
 
@@ -104,11 +112,11 @@
 			<p class="scheduled-error" role="status" aria-live="polite">{controller.error}</p>
 		{/if}
 
-		{#if !isDismissed && artifact.artifactState === 'failed' && artifact.retryable}
+		{#if !isDismissed && artifactState === 'failed' && artifact.retryable}
 			<p class="scheduled-error" role="alert">This delegated task could not be prepared.</p>
 		{/if}
 
-		{#if !isDismissed && question}
+		{#if canDefine && question}
 			{#key question.id}
 				<ScheduledQuestionCard
 					{question}
@@ -118,7 +126,7 @@
 					onBack={controller.showPreviousQuestion}
 				/>
 			{/key}
-		{:else if !isDismissed && proposal}
+		{:else if canDefine && proposal}
 			<ScheduledProposal {proposal} disabled={pending} onConfirm={(version) => void confirm(version)} />
 		{:else if controller.sending}
 			<p class="scheduled-progress" aria-live="polite">Updating this work order…</p>
@@ -147,10 +155,10 @@
 			{#if canAdjust && !adjusting}
 				<button class="secondary" disabled={pending} onclick={() => (adjusting = true)}>Adjust</button>
 			{/if}
-			{#if !isDismissed && artifact.artifactState === 'failed' && artifact.retryable}
+			{#if canDefine && artifactState === 'failed' && artifact.retryable}
 				<button disabled={pending} onclick={() => void retry()}>Retry</button>
 			{/if}
-			{#if !isDismissed && taskState === 'draft' && !question}
+			{#if canDefine && !question}
 				<button class="secondary danger" disabled={pending} onclick={() => void dismiss()}>Dismiss draft</button>
 			{/if}
 			{#if detailHref()}

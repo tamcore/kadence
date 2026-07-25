@@ -173,12 +173,12 @@ describe('ChatView', () => {
 				parts: [
 					{ kind: 'text', content: 'I delegated this.' },
 					{
-						kind: 'scheduled',
-						artifact: {
-							handoffId: 'handoff-1', taskId: 'task-1', ordinal: 1,
-							artifactState: 'failed', retryable: true
+							kind: 'scheduled',
+							artifact: {
+								handoffId: 'handoff-1', taskId: 'task-1', ordinal: 1,
+								artifactState: 'failed', taskState: 'draft', retryable: true
+							}
 						}
-					}
 				]
 			}
 		]);

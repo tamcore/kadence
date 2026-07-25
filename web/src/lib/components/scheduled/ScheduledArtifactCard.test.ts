@@ -94,6 +94,106 @@ describe('ScheduledArtifactCard', () => {
 		result.unmount();
 	});
 
+	it('replaces a hydrated question with the returned proposal after answering', async () => {
+		streamMock.mockImplementation(async function* () {
+			yield { type: 'meta', taskId: 'task-1', conversationId: 'conversation-1' };
+			yield { type: 'task_proposal', proposal };
+			yield { type: 'done' };
+		});
+		const result = render(ScheduledArtifactCard, {
+			props: {
+				artifact: artifact({
+					question: {
+						id: 'hydrated-question',
+						prompt: 'What should I watch?',
+						kind: 'text',
+						allowCustom: true,
+						optional: false
+					},
+					proposal: undefined
+				})
+			}
+		});
+
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Your answer' }), {
+			target: { value: 'Heart rate' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Continue' }));
+
+		await waitFor(() => expect(within(result.container).getByRole('button', { name: 'Schedule task' })).toBeInTheDocument());
+		expect(within(result.container).queryByText('What should I watch?')).not.toBeInTheDocument();
+	});
+
+	it('does not offer draft actions for terminal tasks that retain a hydrated proposal', () => {
+		for (const taskState of ['active', 'paused', 'completed', 'failed', 'deleted'] as const) {
+			const result = render(ScheduledArtifactCard, {
+				props: { artifact: artifact({ taskState }) }
+			});
+
+			expect(within(result.container).queryByRole('button', { name: 'Schedule task' })).not.toBeInTheDocument();
+			if (taskState === 'deleted') {
+				expect(within(result.container).queryByRole('link', { name: /scheduled details/i })).not.toBeInTheDocument();
+			}
+			result.unmount();
+		}
+	});
+
+	it('does not offer retry for a failed non-draft task', () => {
+		const result = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ artifactState: 'failed', retryable: true, taskState: 'failed' }) }
+		});
+
+		expect(within(result.container).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+	});
+
+	it('marks a failed artifact ready when retry returns a proposal', async () => {
+		streamMock.mockImplementation(async function* () {
+			yield { type: 'meta', taskId: 'task-1', conversationId: 'conversation-1' };
+			yield { type: 'task_proposal', proposal };
+			yield { type: 'done' };
+		});
+		const result = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ artifactState: 'failed', retryable: true, proposal: undefined }) }
+		});
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Retry' }));
+
+		await waitFor(() =>
+			expect(within(result.container).getByRole('status')).toHaveTextContent('Ready to schedule')
+		);
+		expect(within(result.container).queryByRole('alert')).not.toBeInTheDocument();
+		expect(within(result.container).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+	});
+
+	it('marks a failed artifact ready when retry returns a question', async () => {
+		streamMock.mockImplementation(async function* () {
+			yield { type: 'meta', taskId: 'task-1', conversationId: 'conversation-1' };
+			yield {
+				type: 'task_question',
+				question: {
+					id: 'retry-question',
+					prompt: 'Which forecast source should I use?',
+					kind: 'text',
+					allowCustom: true,
+					optional: false
+				}
+			};
+			yield { type: 'done' };
+		});
+		const result = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ artifactState: 'failed', retryable: true, proposal: undefined }) }
+		});
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Retry' }));
+
+		await waitFor(() =>
+			expect(within(result.container).getByRole('status')).toHaveTextContent('Needs your input')
+		);
+		expect(within(result.container).getByRole('heading', { name: 'Which forecast source should I use?' })).toBeInTheDocument();
+		expect(within(result.container).queryByRole('alert')).not.toBeInTheDocument();
+		expect(within(result.container).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+	});
+
 	it('uses a per-card pending state and disables controls for an unpersisted assistant', async () => {
 		streamMock.mockImplementation(async function* () {
 			yield { type: 'meta', taskId: 'task-1', conversationId: 'conversation-1' };
