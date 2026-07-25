@@ -75,20 +75,23 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	}
 
 	await cards.nth(0).getByRole('button', { name: 'Schedule task' }).click();
-	await expect(cards.nth(0)).toContainText('Scheduled');
-	await expect(cards.nth(1)).toContainText('Ready to schedule');
+	await expect(cards.nth(0).getByRole('status')).toHaveText('Scheduled');
+	await expect(cards.nth(1).getByRole('status')).toHaveText('Ready to schedule');
 
 	await page.reload();
 	await expect(cards).toHaveCount(2);
-	await expect(cards.nth(0)).toContainText('Scheduled');
-	await expect(cards.nth(1)).toContainText('Ready to schedule');
+	await expect(cards.nth(0).getByRole('status')).toHaveText('Scheduled');
+	await expect(cards.nth(1).getByRole('status')).toHaveText('Ready to schedule');
 
 	await cards.nth(1).getByRole('button', { name: 'Adjust' }).click();
 	await page.getByLabel('Adjust scheduled task').fill('Keep the same check and focus on wind.');
 	await page.getByRole('button', { name: 'Save adjustment' }).click();
 	await expect(cards.nth(1)).toContainText('Race-day weather check');
 	await cards.nth(1).getByRole('button', { name: 'Schedule task' }).click();
-	await expect(cards.nth(1)).toContainText('Scheduled');
+	await expect(cards.nth(1).getByRole('status')).toHaveText('Scheduled');
+	for (const card of [cards.nth(0), cards.nth(1)]) {
+		await expect(taskLink(card)).toHaveAttribute('href', /\/scheduled\/[0-9a-f-]+$/);
+	}
 	const originalLinks = await hrefs(cards);
 	expect(new Set(originalLinks).size).toBe(2);
 	const taskIDsBeforeRegeneration = await scheduledTaskIDs(page);
@@ -96,7 +99,7 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	// Regenerating the source answer must reuse its relational handoff slots,
 	// rather than creating a second pair of task cards or task IDs.
 	await page.getByRole('button', { name: 'Regenerate response' }).last().click();
-	await expect(page.getByText('I prepared two weather checks for review.')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Stop generating' })).toBeHidden();
 	await expect(cards).toHaveCount(2);
 	const links = await hrefs(cards);
 	expect(links).toEqual(originalLinks);
@@ -116,7 +119,7 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 		await page.goto(link);
 		await expect(page.getByRole('button', { name: 'Run now' })).toBeEnabled();
 		await page.getByRole('button', { name: 'Run now' }).click();
-		const delivered = page.locator('.history li').first();
+		const delivered = page.getByRole('heading', { name: 'Run history' }).locator('..').locator('li').first();
 		await expect(delivered).toContainText('Delivered', { timeout: 30_000 });
 		await expect(delivered.locator('p')).not.toHaveText('');
 	}
@@ -124,7 +127,7 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	await page.goto(sourceURL);
 	await expect(cards).toHaveCount(2);
 	for (const card of [cards.nth(0), cards.nth(1)]) {
-		await expect(card).toContainText('Scheduled');
+		await expect(card.getByRole('status')).toHaveText('Completed');
 		await expect(taskLink(card)).toHaveAttribute('href', /\/scheduled\/[0-9a-f-]+$/);
 	}
 });
