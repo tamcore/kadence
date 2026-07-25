@@ -474,4 +474,38 @@ describe('ScheduledArtifactCard', () => {
 		expect(within(result.container).getAllByText('Canonical review')).toHaveLength(2);
 		expect(within(result.container).queryByText('Post-run review')).not.toBeInTheDocument();
 	});
+
+	it('keeps an empty canonical 409 draft authoritative after adjustment fails', async () => {
+		confirmMock.mockRejectedValueOnce(new APIError(409, 'conflict'));
+		getTaskMock.mockResolvedValueOnce({
+			task: {
+				id: 'task-1', version: 8, state: 'draft', name: 'Empty canonical draft', kind: 'data', compiledPrompt: '',
+				timezone: 'UTC', executionMode: 'data', authorizedTools: [], deliveryPolicy: 'always', initialRun: 'wait'
+			},
+			definitionMessages: []
+		});
+		streamMock.mockImplementationOnce(async function* () {
+			throw new Error('definition unavailable');
+		});
+		const result = render(ScheduledArtifactCard, { props: { artifact: artifact() } });
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Schedule task' }));
+		await waitFor(() =>
+			expect(within(result.container).getByText(/changed while you were reviewing/i)).toBeInTheDocument()
+		);
+		expect(within(result.container).queryByRole('button', { name: 'Schedule task' })).not.toBeInTheDocument();
+		expect(within(result.container).queryByText('Post-run review')).not.toBeInTheDocument();
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Adjust' }));
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Adjust scheduled task' }), {
+			target: { value: 'Rebuild the proposal.' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Save adjustment' }));
+
+		await waitFor(() =>
+			expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument()
+		);
+		expect(within(result.container).queryByRole('button', { name: 'Schedule task' })).not.toBeInTheDocument();
+		expect(within(result.container).queryByText('Post-run review')).not.toBeInTheDocument();
+	});
 });

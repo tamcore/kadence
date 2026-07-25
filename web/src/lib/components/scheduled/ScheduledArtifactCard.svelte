@@ -97,6 +97,7 @@
 
 	async function confirm(version: number): Promise<void> {
 		await controller.confirm(version);
+		if (controller.stale) hasLocalLifecycleState = true;
 	}
 
 	async function dismiss(): Promise<void> {
