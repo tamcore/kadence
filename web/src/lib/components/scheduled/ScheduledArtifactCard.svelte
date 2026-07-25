@@ -35,6 +35,13 @@
 		taskID !== undefined && canDefine && !question
 	);
 
+	interface LifecycleSnapshot {
+		hasLocalState: boolean;
+		question: typeof question;
+		proposal: typeof proposal;
+		artifactState: typeof localArtifactState;
+	}
+
 	function stateLabel(): string {
 		if (isDismissed) return 'Dismissed';
 		if (artifactState === 'creating') return 'Preparing delegated task';
@@ -60,14 +67,31 @@
 		return taskState === 'draft' ? `/scheduled?task=${encodeURIComponent(taskID)}` : `/scheduled/${encodeURIComponent(taskID)}`;
 	}
 
-	function restoreHydratedLifecycleIfUnchanged(): void {
-		if (!controller.question && !controller.proposal) hasLocalLifecycleState = false;
+	function beginLifecycleMutation(): LifecycleSnapshot {
+		const snapshot = {
+			hasLocalState: hasLocalLifecycleState,
+			question,
+			proposal,
+			artifactState: localArtifactState
+		};
+		hasLocalLifecycleState = true;
+		return snapshot;
+	}
+
+	function restoreLifecycleIfUnchanged(snapshot: LifecycleSnapshot): void {
+		if (controller.question || controller.proposal) return;
+		hasLocalLifecycleState = snapshot.hasLocalState;
+		localArtifactState = snapshot.artifactState;
+		if (snapshot.hasLocalState) {
+			controller.question = snapshot.question ?? null;
+			controller.proposal = snapshot.proposal ?? null;
+		}
 	}
 
 	async function answer(value: string): Promise<void> {
-		hasLocalLifecycleState = true;
+		const snapshot = beginLifecycleMutation();
 		await controller.answerQuestion(value);
-		restoreHydratedLifecycleIfUnchanged();
+		restoreLifecycleIfUnchanged(snapshot);
 	}
 
 	async function confirm(version: number): Promise<void> {
@@ -90,19 +114,19 @@
 
 	async function refine(message: string): Promise<void> {
 		if (!taskID || !message.trim() || pending) return;
-		hasLocalLifecycleState = true;
+		const snapshot = beginLifecycleMutation();
 		await controller.refine(message.trim());
-		restoreHydratedLifecycleIfUnchanged();
+		restoreLifecycleIfUnchanged(snapshot);
 		adjustment = '';
 		adjusting = false;
 	}
 
 	async function retry(): Promise<void> {
 		if (!taskID || pending) return;
-		hasLocalLifecycleState = true;
+		const snapshot = beginLifecycleMutation();
 		await controller.refine('Please retry preparing this delegated task.');
 		if (controller.proposal || controller.question) localArtifactState = 'ready';
-		restoreHydratedLifecycleIfUnchanged();
+		restoreLifecycleIfUnchanged(snapshot);
 	}
 </script>
 

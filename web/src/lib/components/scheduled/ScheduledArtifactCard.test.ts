@@ -154,6 +154,62 @@ describe('ScheduledArtifactCard', () => {
 		expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument();
 	});
 
+	it('keeps the latest local question when its answer fails', async () => {
+		streamMock
+			.mockImplementationOnce(async function* () {
+				yield {
+					type: 'task_question',
+					question: {
+						id: 'local-question',
+						prompt: 'Which metric matters most?',
+						kind: 'text',
+						allowCustom: true,
+						optional: false
+					}
+				};
+			})
+			.mockImplementationOnce(async function* () {
+				throw new Error('definition unavailable');
+			});
+		const result = render(ScheduledArtifactCard, {
+			props: {
+				artifact: artifact({
+					question: {
+						id: 'hydrated-question',
+						prompt: 'What should I watch?',
+						kind: 'text',
+						allowCustom: true,
+						optional: false
+					},
+					proposal: undefined
+				})
+			}
+		});
+
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Your answer' }), {
+			target: { value: 'Heart rate' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Continue' }));
+		await waitFor(() =>
+			expect(
+				within(result.container).getByRole('heading', { name: 'Which metric matters most?' })
+			).toBeInTheDocument()
+		);
+
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Your answer' }), {
+			target: { value: 'Recovery' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Continue' }));
+
+		await waitFor(() =>
+			expect(
+				within(result.container).getByRole('heading', { name: 'Which metric matters most?' })
+			).toBeInTheDocument()
+		);
+		expect(within(result.container).queryByText('What should I watch?')).not.toBeInTheDocument();
+		expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument();
+	});
+
 	it('restores a hydrated proposal when adjustment fails', async () => {
 		streamMock.mockImplementation(async function* () {
 			throw new Error('definition unavailable');
@@ -171,6 +227,39 @@ describe('ScheduledArtifactCard', () => {
 		await waitFor(() =>
 			expect(within(result.container).getByRole('button', { name: 'Schedule task' })).toBeInTheDocument()
 		);
+		expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument();
+	});
+
+	it('keeps the proposal returned by retry when its adjustment fails', async () => {
+		streamMock
+			.mockImplementationOnce(async function* () {
+				yield { type: 'task_proposal', proposal };
+			})
+			.mockImplementationOnce(async function* () {
+				throw new Error('definition unavailable');
+			});
+		const result = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ artifactState: 'failed', retryable: true, proposal: undefined }) }
+		});
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Retry' }));
+		await waitFor(() =>
+			expect(within(result.container).getByRole('button', { name: 'Schedule task' })).toBeInTheDocument()
+		);
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Adjust' }));
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Adjust scheduled task' }), {
+			target: { value: 'Use a shorter summary.' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Save adjustment' }));
+
+		await waitFor(() =>
+			expect(within(result.container).getByRole('button', { name: 'Schedule task' })).toBeInTheDocument()
+		);
+		expect(
+			within(result.container).getByText('Ready to schedule', { selector: '.scheduled-state' })
+		).toBeInTheDocument();
+		expect(within(result.container).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
 		expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument();
 	});
 
