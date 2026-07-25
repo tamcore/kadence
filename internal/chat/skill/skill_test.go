@@ -33,6 +33,17 @@ func TestGetReturnsBody(t *testing.T) {
 	}
 }
 
+func TestPaceConversionToolHasDedicatedSkill(t *testing.T) {
+	reg, err := skill.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, ok := reg.ForTool("kadence__convert_pace")
+	if !ok || matched.Name != "pace-conversion" {
+		t.Fatalf("converter skill = %+v, %v", matched, ok)
+	}
+}
+
 func TestForToolGlobMatch(t *testing.T) {
 	reg, _ := skill.Load()
 	// workout-programming gates only creation/edit tools.

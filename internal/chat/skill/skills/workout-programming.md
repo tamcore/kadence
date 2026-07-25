@@ -43,22 +43,16 @@ For running `ExecutableStepDTO` steps, encode the step's actual intent:
 
 For custom numeric running pace ranges, use
 `{"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}` and do not use
-`zoneNumber`. Target values are speeds in meters per second:
+`zoneNumber`.
 
-```text
-meters_per_second = 1000 / seconds_per_kilometer
-targetValueOne = faster bound (higher speed)
-targetValueTwo = slower bound (lower speed)
-```
+Call `kadence__convert_pace` with `output: mps` once for every pace bound. Use
+the user's source unit (`metric` for min/km or `imperial` for min/mi) and use
+each returned number directly. Do not calculate, approximate, or round the
+conversion yourself.
 
-For 4:52-5:24 min/km, use:
-
-```json
-{
-  "targetValueOne": 3.4246575,
-  "targetValueTwo": 3.0864198
-}
-```
+Set `targetValueOne` to the faster bound returned by the converter (the higher
+meters-per-second value) and `targetValueTwo` to the slower bound (the lower
+meters-per-second value).
 
 Repeated intervals use `{"type": "RepeatGroupDTO"}` with
 `numberOfIterations` and an end condition containing both

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/provider"
 )
 
@@ -17,6 +18,7 @@ const (
 	testMetricUnit             = "metric"
 	testImperialUnit           = "imperial"
 	testSpoofedToolDescription = "spoofed"
+	testPaceCallID             = "pace-1"
 )
 
 func TestPaceToolDefinitionExposesStrictContract(t *testing.T) {
@@ -73,7 +75,7 @@ func TestHandlePaceConversionEmitsEvents(t *testing.T) {
 	service := NewService(nil, ServiceConfig{}, Deps{})
 	sink := &fitEventSink{}
 	msg := service.handlePaceConversion(provider.ToolCall{
-		ID:        "pace-1",
+		ID:        testPaceCallID,
 		Name:      testConvertPaceToolName,
 		Arguments: `{"unit":"metric","targetpace":"5:35","output":"mps"}`,
 	}, sink)
@@ -109,7 +111,7 @@ func TestHandlePaceConversionReturnsToolError(t *testing.T) {
 	service := NewService(nil, ServiceConfig{}, Deps{})
 	sink := &fitEventSink{}
 	msg := service.handlePaceConversion(provider.ToolCall{
-		ID:        "pace-1",
+		ID:        testPaceCallID,
 		Name:      testConvertPaceToolName,
 		Arguments: `{"unit":"metric","targetpace":"0:00","output":"mps"}`,
 	}, sink)
@@ -128,4 +130,53 @@ func countToolNamed(tools []provider.ToolDefinition, name string) int {
 		}
 	}
 	return count
+}
+
+func TestPaceToolLoadsDedicatedSkillBeforeLocalRetry(t *testing.T) {
+	reg, err := skill.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(nil, ServiceConfig{}, Deps{Skills: reg})
+	call := provider.ToolCall{
+		ID:        testPaceCallID,
+		Name:      convertPaceToolName,
+		Arguments: testMetricPaceArgs,
+	}
+	gated := map[string]bool{}
+	sink := &fitEventSink{}
+
+	first := service.dispatchTool(
+		t.Context(), t.Context(), 1, nil, call, gated, &turnRedactor{}, sink,
+	)
+	if !strings.Contains(first.Content, "one tool call per pace") {
+		t.Fatalf("first result = %q", first.Content)
+	}
+
+	second := service.dispatchTool(
+		t.Context(), t.Context(), 1, nil, call, gated, &turnRedactor{}, sink,
+	)
+	if second.Content != testMetricPaceResult {
+		t.Fatalf("second result = %q", second.Content)
+	}
+}
+
+func TestWorkoutSkillRequiresPaceConverter(t *testing.T) {
+	reg, err := skill.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(nil, ServiceConfig{}, Deps{Skills: reg})
+	call := provider.ToolCall{
+		ID:        "workout-1",
+		Name:      "garmin__update_workout",
+		Arguments: `{"workout_id":1,"workout_data":{}}`,
+	}
+
+	result := service.dispatchTool(
+		t.Context(), t.Context(), 1, nil, call, map[string]bool{}, &turnRedactor{}, &fitEventSink{},
+	)
+	if !strings.Contains(result.Content, testConvertPaceToolName) {
+		t.Fatalf("workout guidance did not require converter: %q", result.Content)
+	}
 }
