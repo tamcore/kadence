@@ -124,6 +124,56 @@ describe('ScheduledArtifactCard', () => {
 		expect(within(result.container).queryByText('What should I watch?')).not.toBeInTheDocument();
 	});
 
+	it('restores a hydrated question when answering fails', async () => {
+		streamMock.mockImplementation(async function* () {
+			throw new Error('definition unavailable');
+		});
+		const result = render(ScheduledArtifactCard, {
+			props: {
+				artifact: artifact({
+					question: {
+						id: 'hydrated-question',
+						prompt: 'What should I watch?',
+						kind: 'text',
+						allowCustom: true,
+						optional: false
+					},
+					proposal: undefined
+				})
+			}
+		});
+
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Your answer' }), {
+			target: { value: 'Heart rate' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Continue' }));
+
+		await waitFor(() =>
+			expect(within(result.container).getByRole('heading', { name: 'What should I watch?' })).toBeInTheDocument()
+		);
+		expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument();
+	});
+
+	it('restores a hydrated proposal when adjustment fails', async () => {
+		streamMock.mockImplementation(async function* () {
+			throw new Error('definition unavailable');
+		});
+		const result = render(ScheduledArtifactCard, {
+			props: { artifact: artifact() }
+		});
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Adjust' }));
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Adjust scheduled task' }), {
+			target: { value: 'Use a shorter summary.' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Save adjustment' }));
+
+		await waitFor(() =>
+			expect(within(result.container).getByRole('button', { name: 'Schedule task' })).toBeInTheDocument()
+		);
+		expect(within(result.container).getByText('definition unavailable')).toBeInTheDocument();
+	});
+
 	it('does not offer draft actions for terminal tasks that retain a hydrated proposal', () => {
 		for (const taskState of ['active', 'paused', 'completed', 'failed', 'deleted'] as const) {
 			const result = render(ScheduledArtifactCard, {

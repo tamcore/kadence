@@ -60,9 +60,14 @@
 		return taskState === 'draft' ? `/scheduled?task=${encodeURIComponent(taskID)}` : `/scheduled/${encodeURIComponent(taskID)}`;
 	}
 
+	function restoreHydratedLifecycleIfUnchanged(): void {
+		if (!controller.question && !controller.proposal) hasLocalLifecycleState = false;
+	}
+
 	async function answer(value: string): Promise<void> {
 		hasLocalLifecycleState = true;
 		await controller.answerQuestion(value);
+		restoreHydratedLifecycleIfUnchanged();
 	}
 
 	async function confirm(version: number): Promise<void> {
@@ -87,6 +92,7 @@
 		if (!taskID || !message.trim() || pending) return;
 		hasLocalLifecycleState = true;
 		await controller.refine(message.trim());
+		restoreHydratedLifecycleIfUnchanged();
 		adjustment = '';
 		adjusting = false;
 	}
@@ -96,6 +102,7 @@
 		hasLocalLifecycleState = true;
 		await controller.refine('Please retry preparing this delegated task.');
 		if (controller.proposal || controller.question) localArtifactState = 'ready';
+		restoreHydratedLifecycleIfUnchanged();
 	}
 </script>
 
