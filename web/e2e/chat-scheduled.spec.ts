@@ -60,6 +60,8 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	await expect(cards.nth(1)).toContainText('Race-day weather check');
 	await cards.nth(1).getByRole('button', { name: 'Schedule task' }).click();
 	await expect(cards.nth(1)).toContainText('Scheduled');
+	const originalLinks = await hrefs(cards);
+	expect(new Set(originalLinks).size).toBe(2);
 
 	// Regenerating the source answer must reuse its relational handoff slots,
 	// rather than creating a second pair of task cards or task IDs.
@@ -67,7 +69,15 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 	await expect(page.getByText('I prepared two weather checks for review.')).toBeVisible();
 	await expect(cards).toHaveCount(2);
 	const links = await hrefs(cards);
-	expect(new Set(links).size).toBe(2);
+	expect(links).toEqual(originalLinks);
+	const scheduledList = await page.request.get('/api/scheduled/tasks');
+	expect(scheduledList.ok()).toBe(true);
+	const listed = (await scheduledList.json()).data.tasks as { id: string }[];
+	const listedIDs = listed.map((task) => task.id);
+	for (const link of originalLinks) {
+		const id = link.split('/').at(-1);
+		expect(listedIDs.filter((listedID) => listedID === id)).toHaveLength(1);
+	}
 
 	// The task detail view is the Scheduled conversation's result inbox. Run
 	// each confirmed task through its normal UI path and wait for delivery.
@@ -75,9 +85,9 @@ test('explicitly schedules, confirms, revises, preserves, and runs two weather c
 		await page.goto(link);
 		await expect(page.getByRole('button', { name: 'Run now' })).toBeEnabled();
 		await page.getByRole('button', { name: 'Run now' }).click();
-		await expect(page.locator('.history li').first()).toContainText(/delivered|completed|no change/i, {
-			timeout: 30_000
-		});
+		const delivered = page.locator('.history li').first();
+		await expect(delivered).toContainText('Delivered', { timeout: 30_000 });
+		await expect(delivered.locator('p')).not.toHaveText('');
 	}
 
 	await page.goto(sourceURL);

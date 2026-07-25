@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/tamcore/kadence/internal/mcp"
+	"github.com/tamcore/kadence/internal/provider"
 )
 
 const (
@@ -16,6 +20,8 @@ const (
 	stubDoneFrame         = "[DONE]"
 	stubToolCallIDKey     = "tool_call_id"
 	stubToolCallNameKey   = "name"
+	stubToolCallsKey      = "tool_calls"
+	messageRoleAssistant  = "assistant"
 	scheduleWeatherPrompt = "Please schedule it as suggested"
 )
 
@@ -101,7 +107,7 @@ func TestChatCompletionsRefinesScheduledTasks(t *testing.T) {
 	proposal := scheduledStubReply(t, []map[string]string{
 		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
 		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "Help me plan a daily training check-in"},
-		{stubMessageRoleKey: "assistant", stubMessageContentKey: question},
+		{stubMessageRoleKey: messageRoleAssistant, stubMessageContentKey: question},
 		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "daily"},
 	})
 	var proposalBody struct {
@@ -155,6 +161,14 @@ func TestChatSchedulingToolScript(t *testing.T) {
 	if got := stubToolCalls(noDefinitionFrames); len(got) != 0 {
 		t.Fatalf("request without draft-tool definition emitted calls = %+v", got)
 	}
+	historicalFrames := chatStubFrames(t, stubChatRequest([]map[string]any{
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: scheduleWeatherPrompt},
+		{stubMessageRoleKey: "assistant", stubMessageContentKey: "I can prepare drafts when you ask."},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "What is the weather forecast now?"},
+	}, true))
+	if got := stubToolCalls(historicalFrames); len(got) != 0 {
+		t.Fatalf("historical schedule request emitted calls = %+v", got)
+	}
 
 	scheduledFrames := chatStubFrames(t, stubChatRequest(
 		[]map[string]any{{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: scheduleWeatherPrompt}}, true,
@@ -171,6 +185,13 @@ func TestChatSchedulingToolScript(t *testing.T) {
 			!strings.Contains(call.Arguments, "pacing, hydration, and kit guidance") {
 			t.Fatalf("call[%d] instruction = %q", i, call.Arguments)
 		}
+	}
+	//nolint:lll // Exact protocol payload is the scheduling contract.
+	wantFirst := `{"instruction":"fetch fresh race weather two days before the race and deliver updated pacing, hydration, and kit guidance."}`
+	//nolint:lll // Exact protocol payload is the scheduling contract.
+	wantSecond := `{"instruction":"fetch fresh race weather on race morning and deliver updated pacing, hydration, and kit guidance."}`
+	if calls[0].Arguments != wantFirst || calls[1].Arguments != wantSecond {
+		t.Fatalf("distinct instructions = %+v", calls)
 	}
 	if !stubFinishReason(scheduledFrames, "tool_calls") {
 		t.Fatalf("scheduled response did not end with tool_calls: %s", strings.Join(scheduledFrames, "\n"))
@@ -198,6 +219,82 @@ func TestChatSchedulingToolScript(t *testing.T) {
 	}
 }
 
+// TestChatSchedulingToolScript_OpenAICompat exercises the real v3 stream
+// accumulator: continuation deltas must not repeat function metadata.
+func TestChatSchedulingToolScript_OpenAICompat(t *testing.T) {
+	ts := httptest.NewServer(handler())
+	defer ts.Close()
+	p := provider.NewOpenAICompat(ts.URL+"/v1", "stub")
+	res, err := p.StreamChatWithTools(context.Background(), provider.ChatRequest{
+		Model:    stubModelName,
+		Messages: []provider.Message{{Role: messageRoleUser, Content: scheduleWeatherPrompt}},
+		Tools:    []provider.ToolDefinition{{Name: draftScheduledToolName}},
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("StreamChatWithTools: %v", err)
+	}
+	if len(res.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %+v", res.ToolCalls)
+	}
+	for i, call := range res.ToolCalls {
+		if call.Name != draftScheduledToolName {
+			t.Fatalf("call[%d] name = %q", i, call.Name)
+		}
+		if !json.Valid([]byte(call.Arguments)) {
+			t.Fatalf("call[%d] arguments = %q", i, call.Arguments)
+		}
+	}
+}
+
+func TestBrowserMCPFixtureListsAndCallsDeterministicTools(t *testing.T) {
+	ts := httptest.NewServer(handler())
+	defer ts.Close()
+	reg := mcp.NewRegistry([]mcp.Server{{
+		Name: "BROWSER", Scope: "GLOBAL", URL: ts.URL + "/mcp", Transport: "streamable-http",
+	}}, nil, nil)
+	tools, err := reg.ToolsFor(context.Background(), "admin")
+	if err != nil {
+		t.Fatalf("ToolsFor: %v", err)
+	}
+	if len(tools) != 2 || tools[0].Name != browserNavigateTool || tools[1].Name != browserSnapshotTool {
+		t.Fatalf("tools = %+v", tools)
+	}
+	result, err := reg.Call(context.Background(), "admin", browserNavigateTool, `{"url":"https://weather.example.test"}`)
+	if err != nil || !strings.Contains(result, "race weather fixture") {
+		t.Fatalf("navigate result = %q, err=%v", result, err)
+	}
+}
+
+func TestScheduledWeatherWorkerScriptDeliversOutcomeAndSynthesis(t *testing.T) {
+	workerFrames := chatStubFrames(t, stubChatRequest([]map[string]any{{
+		stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: workerPromptPrefix,
+	}}, true))
+	workerCalls := stubToolCalls(workerFrames)
+	if len(workerCalls) != 2 || workerCalls[0].Name != browserNavigateTool || workerCalls[1].Name != browserSnapshotTool {
+		t.Fatalf("worker calls = %+v", workerCalls)
+	}
+	resultFrames := chatStubFrames(t, stubChatRequest([]map[string]any{
+		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: workerPromptPrefix},
+		stubToolResultMessage(stubToolCall{ID: "call_weather_navigate"}, `{"forecast":"race weather fixture"}`),
+		stubToolResultMessage(stubToolCall{ID: "call_weather_snapshot"}, `{"snapshot":"race weather fixture"}`),
+	}, true))
+	var outcome struct {
+		Status   string   `json:"status"`
+		Summary  string   `json:"summary"`
+		Evidence []string `json:"evidence"`
+	}
+	err := json.Unmarshal([]byte(joinedStubContent(resultFrames)), &outcome)
+	if err != nil || outcome.Status != "deliver" || outcome.Summary == "" || len(outcome.Evidence) == 0 {
+		t.Fatalf("worker outcome = %+v, err=%v", outcome, err)
+	}
+	synthesisFrames := chatStubFrames(t, stubChatRequest([]map[string]any{{
+		stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: synthesisPromptPrefix,
+	}}, false))
+	if got := joinedStubContent(synthesisFrames); strings.TrimSpace(got) == "" {
+		t.Fatal("synthesis reply is empty")
+	}
+}
+
 // TestScheduledWeatherProposal ensures each delegated instruction compiles to
 // a separate, one-off data task with the exact browser tools it is allowed to
 // use. Keeping these checks in the stub makes the browser scenario independent
@@ -221,6 +318,7 @@ func TestScheduledWeatherProposal(t *testing.T) {
 					Name            string   `json:"name"`
 					TaskKind        string   `json:"taskKind"`
 					ExecutionMode   string   `json:"executionMode"`
+					CompiledPrompt  string   `json:"compiledPrompt"`
 					AuthorizedTools []string `json:"authorizedTools"`
 					Schedule        struct {
 						At string `json:"at"`
@@ -230,9 +328,17 @@ func TestScheduledWeatherProposal(t *testing.T) {
 			if err := json.Unmarshal([]byte(reply), &body); err != nil {
 				t.Fatalf("decode weather proposal: %v\n%s", err, reply)
 			}
-			if body.Proposal.Name != tc.proposal || body.Proposal.TaskKind != "data" ||
+			if body.Proposal.Name != tc.proposal || body.Proposal.CompiledPrompt != tc.instruction ||
+				body.Proposal.TaskKind != "data" ||
 				body.Proposal.ExecutionMode != "data" || body.Proposal.Schedule.At == "" {
 				t.Fatalf("weather proposal = %+v", body.Proposal)
+			}
+			wantAt := "2040-01-03T08:00:00Z"
+			if tc.name == "race-day" {
+				wantAt = "2040-01-05T05:30:00Z"
+			}
+			if body.Proposal.Schedule.At != wantAt {
+				t.Fatalf("at = %q, want %q", body.Proposal.Schedule.At, wantAt)
 			}
 			wantTools := browserNavigateTool + "," + browserSnapshotTool
 			if got := strings.Join(body.Proposal.AuthorizedTools, ","); got != wantTools {
@@ -438,7 +544,7 @@ func scheduledToolRequestMessage(calls []stubToolCall) map[string]any {
 		})
 	}
 	return map[string]any{
-		stubMessageRoleKey: "assistant", stubMessageContentKey: "", "tool_calls": toolCalls,
+		stubMessageRoleKey: messageRoleAssistant, stubMessageContentKey: "", stubToolCallsKey: toolCalls,
 	}
 }
 

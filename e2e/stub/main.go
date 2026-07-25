@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,9 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 const (
@@ -22,8 +26,11 @@ const (
 	defaultEmbeddingVectorLen = 1024
 	stubModelName             = "stub"
 	functionToolType          = "function"
+	finishToolCalls           = "tool_calls"
 	messageRoleTool           = "tool"
 	draftScheduledToolName    = "kadence__draft_scheduled_task"
+	workerPromptPrefix        = "Gather evidence using only the offered tools."
+	synthesisPromptPrefix     = "Write the concise user-facing Scheduled result"
 	browserNavigateTool       = "browser__browser_navigate"
 	browserSnapshotTool       = "browser__browser_snapshot"
 	preRaceWeatherInstruction = "Fetch fresh race weather two days before the race and deliver updated " +
@@ -32,6 +39,8 @@ const (
 		"hydration, and kit guidance."
 	weatherSuggestionReply = "Two future weather checks would help: one two days before your race and " +
 		"another on race morning. Please explicitly ask me to schedule them if you want drafts."
+	//nolint:lll // Exact single-line worker JSON outcome exercises strict parsing.
+	workerWeatherOutcomeReply = `{"status":"deliver","summary":"Fresh race weather is cool and breezy.","evidence":["race weather fixture: 12C, light rain"],"monitoringState":{}}`
 )
 
 // chatContentTokens are the deterministic content deltas streamed back for
@@ -212,6 +221,7 @@ func handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", handleChatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", handleEmbeddings)
+	mux.Handle("/mcp", browserMCPHandler())
 	return mux
 }
 
@@ -245,7 +255,17 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	if !isScheduledCompiler(req.Messages) {
+	if isWorkerRequest(req.Messages) {
+		if hasToolResult(req.Messages) {
+			tokens = []string{workerWeatherOutcomeReply}
+		} else {
+			writeWorkerToolCalls(w, canFlush, flusher)
+			return
+		}
+	} else if isSynthesisRequest(req.Messages) {
+		tokens = []string{"Fresh race weather is ready: adjust pacing for conditions, " +
+			"hydrate steadily, and bring the appropriate kit."}
+	} else if !isScheduledCompiler(req.Messages) {
 		switch {
 		case hasToolResult(req.Messages):
 			tokens = []string{"I prepared two weather checks for review."}
@@ -255,7 +275,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			if !writeChunk(chatCompletionChunk{Choices: []chatCompletionChunkChoice{{FinishReason: "tool_calls"}}}) {
+			if !writeChunk(chatCompletionChunk{Choices: []chatCompletionChunkChoice{{FinishReason: finishToolCalls}}}) {
 				return
 			}
 			writeDone(w, canFlush, flusher)
@@ -294,9 +314,10 @@ func asksForWeatherForecast(messages []chatCompletionRequestMessage) bool {
 }
 
 func explicitlySchedulesWeatherChecks(messages []chatCompletionRequestMessage) bool {
-	for _, message := range messages {
-		if message.Role == messageRoleUser && strings.Contains(strings.ToLower(message.Content), "schedule it") {
-			return true
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role == messageRoleUser {
+			return strings.Contains(strings.ToLower(message.Content), "schedule it")
 		}
 	}
 	return false
@@ -334,10 +355,61 @@ func scheduledToolCallChunks() []chatCompletionChunk {
 }
 
 func draftToolCall(index int, id, arguments string) chatCompletionChunkToolCall {
+	if id == "" {
+		return chatCompletionChunkToolCall{
+			Index: index, Function: chatCompletionChunkToolFunction{Arguments: arguments},
+		}
+	}
 	return chatCompletionChunkToolCall{
 		Index: index, ID: id, Type: functionToolType,
 		Function: chatCompletionChunkToolFunction{Name: draftScheduledToolName, Arguments: arguments},
 	}
+}
+
+func writeWorkerToolCalls(w http.ResponseWriter, canFlush bool, flusher http.Flusher) {
+	chunk := chatCompletionChunk{Choices: []chatCompletionChunkChoice{{
+		Delta: chatCompletionChunkDelta{ToolCalls: []chatCompletionChunkToolCall{
+			{Index: 0, ID: "call_weather_navigate", Type: functionToolType,
+				//nolint:lll // Exact URL is part of deterministic browser fixture.
+				Function: chatCompletionChunkToolFunction{Name: browserNavigateTool, Arguments: `{"url":"https://weather.example.test/race"}`}},
+			{Index: 1, ID: "call_weather_snapshot", Type: functionToolType,
+				Function: chatCompletionChunkToolFunction{Name: browserSnapshotTool, Arguments: `{}`}},
+		}},
+	}}}
+	if err := writeSSEChunk(w, chunk); err != nil {
+		slog.Error("write worker tool-call chunk", "error", err)
+		return
+	}
+	if canFlush {
+		flusher.Flush()
+	}
+	finish := chatCompletionChunk{Choices: []chatCompletionChunkChoice{{FinishReason: finishToolCalls}}}
+	if err := writeSSEChunk(w, finish); err != nil {
+		slog.Error("write worker finish chunk", "error", err)
+		return
+	}
+	writeDone(w, canFlush, flusher)
+}
+
+func isWorkerRequest(messages []chatCompletionRequestMessage) bool {
+	return len(messages) > 0 && strings.HasPrefix(messages[0].Content, workerPromptPrefix)
+}
+
+func isSynthesisRequest(messages []chatCompletionRequestMessage) bool {
+	return len(messages) > 0 && strings.HasPrefix(messages[0].Content, synthesisPromptPrefix)
+}
+
+func browserMCPHandler() http.Handler {
+	srv := mcpserver.NewMCPServer("e2e-browser", "0.0.1")
+	navigate := mcpgo.NewTool("browser_navigate", mcpgo.WithString("url"))
+	srv.AddTool(navigate, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(`{"forecast":"race weather fixture: cool and breezy"}`), nil
+	})
+	snapshot := mcpgo.NewTool("browser_snapshot")
+	srv.AddTool(snapshot, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(`{"snapshot":"race weather fixture: 12C, light rain"}`), nil
+	})
+	return mcpserver.NewStreamableHTTPServer(srv)
 }
 
 func writeDone(w http.ResponseWriter, canFlush bool, flusher http.Flusher) {
