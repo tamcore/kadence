@@ -49,7 +49,14 @@ a { color: var(--accent); }
 .main > main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .public-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .mobilebar { display: none; }
-.brand-sm { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.brand-sm {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	color: inherit;
+	text-decoration: none;
+}
 .brand-sm img { flex: 0 0 auto; border-radius: 5px; }
 /* Padded, centered content wrapper for non-chat pages (documents, admin). */
 .page { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
