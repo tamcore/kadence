@@ -10,6 +10,8 @@
 		onConfirm: (expectedVersion: number) => void;
 		disabled?: boolean;
 	} = $props();
+	const instanceID = $props.id();
+	const headingID = `proposal-name-${instanceID}`;
 
 	const humanizedSelectors = new Set([
 		'FREQ',
@@ -165,9 +167,9 @@
 	}
 </script>
 
-<section class="proposal" aria-labelledby="proposal-name">
+<section class="proposal" aria-labelledby={headingID}>
 	<span class="eyebrow">Ready to schedule</span>
-	<h2 id="proposal-name">{proposal.name}</h2>
+	<h2 id={headingID}>{proposal.name}</h2>
 	<dl>
 		<div><dt>Cadence</dt><dd>{cadence()}</dd></div>
 		<div><dt>Timezone</dt><dd>{proposal.timezone}</dd></div>

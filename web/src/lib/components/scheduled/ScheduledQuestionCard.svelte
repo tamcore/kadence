@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { ScheduledQuestion } from '$lib/api/scheduled';
-	import type { Attachment } from 'svelte/attachments';
 
 	let {
 		question,
@@ -8,7 +7,8 @@
 		onBack,
 		onClose,
 		initialAnswer = '',
-		disabled = false
+		disabled = false,
+		autofocus = true
 	}: {
 		question: ScheduledQuestion;
 		onAnswer: (answer: string) => void;
@@ -16,7 +16,13 @@
 		onClose?: () => void;
 		initialAnswer?: string;
 		disabled?: boolean;
+		autofocus?: boolean;
 	} = $props();
+	const instanceID = $props.id();
+	const headingID = `question-${instanceID}`;
+	const customInputID = `question-custom-${instanceID}`;
+	const textInputID = `question-text-${instanceID}`;
+	const optionInputID = (value: string): string => `question-option-${instanceID}-${value}`;
 
 	function initialValues(): string[] {
 		return initialAnswer
@@ -48,7 +54,9 @@
 	let selected = $state(initialSelected());
 	let custom = $state(initialCustom());
 	let text = $state(initialText());
-	const focusCard: Attachment = (node) => (node as HTMLElement).focus();
+	function focusCard(node: Element): void {
+		(node as HTMLElement).focus();
+	}
 
 	function toggle(value: string): void {
 		selected = selected.includes(value)
@@ -69,9 +77,9 @@
 
 <section
 	class="question"
-	aria-labelledby={`question-${question.id}`}
+	aria-labelledby={headingID}
 	tabindex="-1"
-	{@attach focusCard}
+	{@attach autofocus ? focusCard : undefined}
 >
 	<header>
 		<div class="question-nav">
@@ -79,7 +87,7 @@
 			<span class="step" aria-hidden="true">Clarify</span>
 			<button aria-label="Close question" disabled={disabled} onclick={() => onClose?.()}>×</button>
 		</div>
-		<h2 id={`question-${question.id}`}>{question.prompt}</h2>
+		<h2 id={headingID}>{question.prompt}</h2>
 		{#if question.kind === 'multi_select'}<p>Select all that apply.</p>{/if}
 	</header>
 
@@ -100,9 +108,9 @@
 					if (custom.trim()) onAnswer(custom.trim());
 				}}
 			>
-				<label>
+				<label for={customInputID}>
 					<span>Something else</span>
-					<input bind:value={custom} disabled={disabled} />
+					<input id={customInputID} bind:value={custom} disabled={disabled} />
 				</label>
 				<button class="continue" type="submit" disabled={disabled || !custom.trim()}>Continue</button>
 			</form>
@@ -115,8 +123,9 @@
 	{:else if question.kind === 'multi_select'}
 		<div class="checks">
 			{#each question.options ?? [] as option (option.value)}
-				<label>
+				<label for={optionInputID(option.value)}>
 					<input
+						id={optionInputID(option.value)}
 						type="checkbox"
 						checked={selected.includes(option.value)}
 						disabled={disabled}
@@ -126,9 +135,9 @@
 				</label>
 			{/each}
 			{#if question.allowCustom}
-				<label class="custom">
+				<label class="custom" for={customInputID}>
 					<span>Something else</span>
-					<input bind:value={custom} disabled={disabled} />
+					<input id={customInputID} bind:value={custom} disabled={disabled} />
 				</label>
 			{/if}
 		</div>
@@ -149,9 +158,9 @@
 				submitText();
 			}}
 		>
-			<label>
+			<label for={textInputID}>
 				<span>Your answer</span>
-				<input bind:value={text} disabled={disabled} />
+				<input id={textInputID} bind:value={text} disabled={disabled} />
 			</label>
 			<div class="actions">
 				{#if question.optional}

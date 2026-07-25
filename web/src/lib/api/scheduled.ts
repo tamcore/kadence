@@ -2,7 +2,7 @@ import { api, getCsrfToken, handleUnauthorized, setCsrfToken } from '$lib/api/cl
 
 const MAX_SCHEDULED_SSE_BYTES = 128 << 10;
 
-export type ScheduledTaskState = 'draft' | 'active' | 'paused' | 'completed' | 'failed';
+export type ScheduledTaskState = 'draft' | 'active' | 'paused' | 'completed' | 'failed' | 'deleted';
 export type ScheduledRunState =
 	| 'pending'
 	| 'running'
@@ -221,6 +221,8 @@ export const confirmScheduledTask = (id: string, expectedVersion: number) =>
 	api.post<ScheduledTask>(`/scheduled/tasks/${encodeURIComponent(id)}/confirm`, {
 		expectedVersion
 	});
+export const discardScheduledDraft = (id: string) =>
+	api.post<{ ok: boolean }>(`/scheduled/tasks/${encodeURIComponent(id)}/discard`, {});
 export const pauseScheduledTask = (id: string) =>
 	api.patch<ScheduledTask>(`/scheduled/tasks/${encodeURIComponent(id)}`, { state: 'paused' });
 export const resumeScheduledTask = (id: string) =>
