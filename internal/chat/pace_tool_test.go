@@ -161,6 +161,38 @@ func TestPaceToolLoadsDedicatedSkillBeforeLocalRetry(t *testing.T) {
 	}
 }
 
+func TestExplicitPaceSkillLoadSatisfiesPreGate(t *testing.T) {
+	reg, err := skill.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(nil, ServiceConfig{}, Deps{Skills: reg})
+	gated := map[string]bool{}
+	sink := &fitEventSink{}
+
+	loaded := service.dispatchTool(
+		t.Context(), t.Context(), 1, nil, provider.ToolCall{
+			ID:        "skill-1",
+			Name:      loadSkillToolName,
+			Arguments: `{"name":"pace-conversion"}`,
+		}, gated, &turnRedactor{}, sink,
+	)
+	if !strings.Contains(loaded.Content, "one tool call per pace") {
+		t.Fatalf("loaded skill = %q", loaded.Content)
+	}
+
+	converted := service.dispatchTool(
+		t.Context(), t.Context(), 1, nil, provider.ToolCall{
+			ID:        testPaceCallID,
+			Name:      convertPaceToolName,
+			Arguments: testMetricPaceArgs,
+		}, gated, &turnRedactor{}, sink,
+	)
+	if converted.Content != testMetricPaceResult {
+		t.Fatalf("first conversion after explicit skill load = %q", converted.Content)
+	}
+}
+
 func TestWorkoutSkillRequiresPaceConverter(t *testing.T) {
 	reg, err := skill.Load()
 	if err != nil {

@@ -841,7 +841,7 @@ func (s *Service) dispatchTool(
 	}
 	if s.skills != nil {
 		if tc.Name == loadSkillToolName {
-			return s.handleLoadSkill(tc, sink)
+			return s.handleLoadSkill(tc, gated, sink)
 		}
 		if sk, ok := s.skills.ForTool(tc.Name); ok && !gated[sk.Name] {
 			gated[sk.Name] = true
@@ -950,7 +950,9 @@ func (s *Service) handleRequestCredentials(streamCtx context.Context, userID int
 }
 
 // handleLoadSkill answers a load_skill call with the requested skill body.
-func (s *Service) handleLoadSkill(tc provider.ToolCall, sink EventSink) provider.Message {
+func (s *Service) handleLoadSkill(
+	tc provider.ToolCall, gated map[string]bool, sink EventSink,
+) provider.Message {
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
 	_ = sink.Flush()
 
@@ -963,6 +965,7 @@ func (s *Service) handleLoadSkill(tc provider.ToolCall, sink EventSink) provider
 	content, status := "", toolStatusDone
 	if sk, ok := s.skills.Get(args.Name); ok {
 		content = sk.Body
+		gated[sk.Name] = true
 	} else {
 		status = toolStatusError
 		names := make([]string, 0, len(skillList))
