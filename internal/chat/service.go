@@ -27,7 +27,7 @@ type ConversationStore interface {
 // MessageStore is the message persistence the service needs.
 type MessageStore interface {
 	AddChatUser(ctx context.Context, conversationID, content string) (model.Message, error)
-	AddChatAssistantIfLatestUser(ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall) (model.Message, error)
+	AddChatAssistantIfLatestUser(ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string) (model.Message, error)
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 	EditAndRewind(ctx context.Context, conversationID string, messageID, userID int64, content string) (model.Message, error)
 	RegenerateAndRewind(ctx context.Context, conversationID string, messageID, userID int64) (model.Message, error)
@@ -489,7 +489,7 @@ func (s *Service) streamPersistedTurn(
 		full = secret.Redact(full, redactor.snapshot(s.secrets, userID))
 	}
 
-	assistantMsg, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, userMsg, full, turnCalls)
+	assistantMsg, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, userMsg, full, turnCalls, nil)
 	if err != nil {
 		slog.Error("persist assistant message", "err", err)
 		return s.fail(sink, "could not save response")
@@ -632,7 +632,7 @@ func (s *Service) applyGuardrail(
 	}
 
 	refusal := s.guardrail.RefusalMessage()
-	assistantMessage, saveErr := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, refusal, nil)
+	assistantMessage, saveErr := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, refusal, nil, nil)
 	if saveErr != nil {
 		return true, s.fail(sink, "could not save response")
 	}
@@ -662,7 +662,7 @@ func (s *Service) persistPartialAssistantAndFail(
 	if content == "" {
 		return s.fail(sink, "the assistant could not complete the response")
 	}
-	assistantMessage, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, content, toolCalls)
+	assistantMessage, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, content, toolCalls, nil)
 	if err != nil {
 		slog.Error("persist partial assistant message", "err", err)
 		return s.fail(sink, "the assistant could not complete the response")

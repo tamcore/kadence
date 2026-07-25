@@ -88,11 +88,33 @@ func (r *ConversationRepository) UpdateTitle(ctx context.Context, id string, use
 	return c, nil
 }
 
-// Delete removes a conversation owned by userID (cascades to messages).
+// Delete removes a conversation owned by userID (cascades to messages). Before
+// an ordinary source chat is removed, any still-draft handoff task and its
+// Scheduled definition conversation are hard-cleaned; confirmed work remains.
 func (r *ConversationRepository) Delete(ctx context.Context, id string, userID int64) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin delete conversation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var kind string
+	err = tx.QueryRow(ctx, `SELECT kind FROM conversations WHERE id = $1::uuid AND user_id = $2 FOR UPDATE`, id, userID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock delete conversation: %w", err)
+	}
+	if kind == model.ConversationKindChat {
+		if err := cleanupDraftHandoffsForConversation(ctx, tx, userID, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID); err != nil {
 		return fmt.Errorf("delete conversation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete conversation: %w", err)
 	}
 	return nil
 }

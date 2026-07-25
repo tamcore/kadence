@@ -410,7 +410,7 @@ func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testi
 		t.Fatal(err)
 	}
 
-	if _, err := msgs.AddChatAssistantIfLatestUser(ctx, conversation.ID, staleUser, "stale response", nil); !errors.Is(err, store.ErrStaleChatTurn) {
+	if _, err := msgs.AddChatAssistantIfLatestUser(ctx, conversation.ID, staleUser, "stale response", nil, nil); !errors.Is(err, store.ErrStaleChatTurn) {
 		t.Fatalf("stale assistant err = %v, want ErrStaleChatTurn", err)
 	}
 	remaining, err := msgs.ListByConversation(ctx, conversation.ID)
@@ -419,5 +419,157 @@ func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testi
 	}
 	if len(remaining) != 1 || remaining[0].Content != "edited prompt" {
 		t.Fatalf("messages after stale assistant = %+v", remaining)
+	}
+}
+
+func TestChatRepositoryAssistantHandoffBindingIsAtomic(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "bind-owner", "bind-owner@example.com")
+	other := createScheduledUser(t, ctx, users, "bind-other", "bind-other@example.com")
+	source, _ := conversations.Create(ctx, owner.ID, "Source")
+	otherSource, _ := conversations.Create(ctx, other.ID, "Other source")
+	prompt, _ := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	otherPrompt, _ := messages.AddChatUser(ctx, otherSource.ID, "Schedule this")
+	handoff, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: owner.ID, SourceConversationID: source.ID,
+		SourceUserMessageID: prompt.ID, SourceContentFingerprint: handoffFingerprint(40), InvocationOrdinal: 1, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherHandoff, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: other.ID, SourceConversationID: otherSource.ID,
+		SourceUserMessageID: otherPrompt.ID, SourceContentFingerprint: handoffFingerprint(41), InvocationOrdinal: 1, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := messages.AddChatAssistantIfLatestUser(ctx, source.ID, prompt, "Drafted", nil, []string{handoff.Handoff.ID, otherHandoff.Handoff.ID}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("mixed-source binding err=%v, want ErrNotFound", err)
+	}
+	remaining, err := messages.ListByConversation(ctx, source.ID)
+	if err != nil || len(remaining) != 1 {
+		t.Fatalf("assistant insertion was not rolled back: messages=%+v err=%v", remaining, err)
+	}
+	assistant, err := messages.AddChatAssistantIfLatestUser(ctx, source.ID, prompt, "Drafted", nil, []string{handoff.Handoff.ID, handoff.Handoff.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := handoffs.ListByAssistantMessages(ctx, owner.ID, source.ID, []int64{assistant.ID})
+	if err != nil || len(rows) != 1 || rows[0].Handoff.ID != handoff.Handoff.ID {
+		t.Fatalf("bound handoffs=%+v err=%v", rows, err)
+	}
+}
+
+func TestChatRepositoryRegenerateRewindsDraftHandoffsButKeepsConfirmed(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "rewind-handoff", "rewind-handoff@example.com")
+	source, _ := conversations.Create(ctx, owner.ID, "Source")
+	prompt, _ := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	newDraft := func(ordinal int) store.HydratedChatHandoff {
+		t.Helper()
+		row, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: owner.ID, SourceConversationID: source.ID,
+			SourceUserMessageID: prompt.ID, SourceContentFingerprint: handoffFingerprint(byte(50 + ordinal)), InvocationOrdinal: ordinal, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	draft := newDraft(1)
+	confirmed := newDraft(2)
+	if err := handoffs.MarkTaskReady(ctx, owner.ID, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = 'active' WHERE id = $1::uuid`, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := messages.AddChatAssistantIfLatestUser(ctx, source.ID, prompt, "Drafted", nil, []string{draft.Handoff.ID, confirmed.Handoff.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := messages.RegenerateAndRewind(ctx, source.ID, assistant.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	var draftHandoffs, draftTasks, draftConversations int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&draftHandoffs); err != nil || draftHandoffs != 0 {
+		t.Fatalf("draft handoffs=%d err=%v", draftHandoffs, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, draft.Task.ID).Scan(&draftTasks); err != nil || draftTasks != 0 {
+		t.Fatalf("draft tasks=%d err=%v", draftTasks, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, draft.Task.ConversationID).Scan(&draftConversations); err != nil || draftConversations != 0 {
+		t.Fatalf("draft conversations=%d err=%v", draftConversations, err)
+	}
+	var confirmedHandoffs, confirmedTasks int
+	var placement *int64
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*), max(assistant_message_id) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, confirmed.Handoff.ID).Scan(&confirmedHandoffs, &placement); err != nil || confirmedHandoffs != 1 || placement != nil {
+		t.Fatalf("confirmed handoff count=%d placement=%v err=%v", confirmedHandoffs, placement, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, confirmed.Task.ID).Scan(&confirmedTasks); err != nil || confirmedTasks != 1 {
+		t.Fatalf("confirmed tasks=%d err=%v", confirmedTasks, err)
+	}
+}
+
+func TestChatRepositoryEditAndConversationDeleteCleanOnlyDraftHandoffs(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "delete-handoff", "delete-handoff@example.com")
+	newSourceDraft := func(fingerprint byte) (model.Conversation, model.Message, store.HydratedChatHandoff) {
+		t.Helper()
+		source, _ := conversations.Create(ctx, owner.ID, "Source")
+		prompt, _ := messages.AddChatUser(ctx, source.ID, "Schedule this")
+		row, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: owner.ID, SourceConversationID: source.ID,
+			SourceUserMessageID: prompt.ID, SourceContentFingerprint: handoffFingerprint(fingerprint), InvocationOrdinal: 1, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return source, prompt, row
+	}
+	editSource, editPrompt, editDraft := newSourceDraft(60)
+	if _, err := messages.EditAndRewind(ctx, editSource.ID, editPrompt.ID, owner.ID, "Changed request"); err != nil {
+		t.Fatal(err)
+	}
+	var editCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, editDraft.Handoff.ID).Scan(&editCount); err != nil || editCount != 0 {
+		t.Fatalf("edited handoff count=%d err=%v", editCount, err)
+	}
+	deleteSource, _, draft := newSourceDraft(61)
+	confirmedSourcePrompt, _ := messages.AddChatUser(ctx, deleteSource.ID, "Second scheduling request")
+	confirmed, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: owner.ID, SourceConversationID: deleteSource.ID,
+		SourceUserMessageID: confirmedSourcePrompt.ID, SourceContentFingerprint: handoffFingerprint(62), InvocationOrdinal: 1, Title: "Confirmed", Timezone: "UTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handoffs.MarkTaskReady(ctx, owner.ID, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = 'active' WHERE id = $1::uuid`, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conversations.Delete(ctx, deleteSource.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	var draftCount, confirmedCount, confirmedTaskCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&draftCount); err != nil || draftCount != 0 {
+		t.Fatalf("deleted source draft handoff count=%d err=%v", draftCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, confirmed.Handoff.ID).Scan(&confirmedCount); err != nil || confirmedCount != 0 {
+		t.Fatalf("deleted source confirmed handoff count=%d err=%v", confirmedCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, confirmed.Task.ID).Scan(&confirmedTaskCount); err != nil || confirmedTaskCount != 1 {
+		t.Fatalf("deleted source confirmed task count=%d err=%v", confirmedTaskCount, err)
 	}
 }

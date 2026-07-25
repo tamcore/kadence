@@ -114,7 +114,7 @@ func (f *fakeMsgs) AddChatUser(ctx context.Context, convID, content string) (mod
 	return f.Add(ctx, convID, model.MsgRoleUser, content)
 }
 func (f *fakeMsgs) AddChatAssistantIfLatestUser(
-	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall,
+	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string,
 ) (model.Message, error) {
 	if f.rejectAssistant {
 		return model.Message{}, errFakeNotFound
