@@ -84,6 +84,7 @@ type Config struct {
 	ScheduledWorkerBaseURL       string
 	ScheduledWorkerAPIKey        string
 	ScheduledWorkerMaxTokens     int
+	ScheduledWorkerTemperature   float64
 	ScheduledWorkerTimeout       time.Duration
 	ScheduledWorkerMaxIterations int
 	ScheduledWorkerConcurrency   int
@@ -244,6 +245,7 @@ func Load() Config {
 	cfg.ScheduledWorkerBaseURL = os.Getenv("KADENCE_SCHEDULED_WORKER_BASE_URL")
 	cfg.ScheduledWorkerAPIKey = os.Getenv("KADENCE_SCHEDULED_WORKER_API_KEY")
 	cfg.ScheduledWorkerMaxTokens = envIntOr("KADENCE_SCHEDULED_WORKER_MAX_TOKENS", 2048)
+	cfg.ScheduledWorkerTemperature = envFloatOr("KADENCE_SCHEDULED_WORKER_TEMPERATURE", cfg.LLMTemperature)
 	cfg.ScheduledWorkerTimeout = envDurationOr("KADENCE_SCHEDULED_WORKER_TIMEOUT", 300*time.Second)
 	cfg.ScheduledWorkerMaxIterations = envIntOr("KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS", 16)
 	cfg.ScheduledWorkerConcurrency = envIntOr("KADENCE_SCHEDULED_WORKER_CONCURRENCY", 1)

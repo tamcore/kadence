@@ -58,7 +58,7 @@ func (p *refinementProvider) StreamChatWithTools(ctx context.Context, req provid
 func compilerFor(reply string) (*scheduled.Compiler, *refinementProvider) {
 	p := &refinementProvider{reply: reply}
 	return scheduled.NewCompiler(p, scheduled.CompilerConfig{
-		Model: "primary-model", MaxTokens: 777, Now: func() time.Time { return compilerNow },
+		Model: "primary-model", MaxTokens: 777, Temperature: 1, Now: func() time.Time { return compilerNow },
 	}), p
 }
 
@@ -104,7 +104,7 @@ func TestCompilerRefineQuestionIsToolFreeAndExcludesCredentials(t *testing.T) {
 		!strings.Contains(prompt, "Do not include version") {
 		t.Fatalf("system prompt lacks exact temporal context: %q", prompt)
 	}
-	if p.req.Model != "primary-model" || p.req.MaxTokens != 777 || p.req.Temperature != 0 {
+	if p.req.Model != "primary-model" || p.req.MaxTokens != 777 || p.req.Temperature != 1 {
 		t.Fatalf("request = %+v, want compiler settings", p.req)
 	}
 }

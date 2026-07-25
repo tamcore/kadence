@@ -121,7 +121,7 @@ func newScheduledService(
 	service := scheduled.NewService(scheduled.ServiceDeps{
 		Conversations: convs, Messages: msgs, Tasks: tasks, ChatHandoffs: handoffs,
 		Compiler: scheduled.NewCompiler(prov, scheduled.CompilerConfig{
-			Model: cfg.LLMModel, MaxTokens: cfg.LLMMaxTokens,
+			Model: cfg.LLMModel, MaxTokens: cfg.LLMMaxTokens, Temperature: cfg.LLMTemperature,
 		}),
 		ToolsForUser: toolsForUser,
 	})
@@ -335,13 +335,15 @@ func Run() error {
 				Tools: scheduledToolsAdapter{catalog: unattendedTools},
 				Store: scheduledTasks,
 				Config: scheduled.ExecutorConfig{
-					WorkerModel:         cfg.ResolvedScheduledWorkerModel(),
-					WorkerMaxTokens:     cfg.ScheduledWorkerMaxTokens,
-					WorkerTimeout:       cfg.ScheduledWorkerTimeout,
-					WorkerMaxIterations: cfg.ScheduledWorkerMaxIterations,
-					SynthesisModel:      cfg.LLMModel,
-					SynthesisMaxTokens:  cfg.LLMMaxTokens,
-					SynthesisTimeout:    cfg.LLMTimeout,
+					WorkerModel:          cfg.ResolvedScheduledWorkerModel(),
+					WorkerMaxTokens:      cfg.ScheduledWorkerMaxTokens,
+					WorkerTemperature:    cfg.ScheduledWorkerTemperature,
+					WorkerTimeout:        cfg.ScheduledWorkerTimeout,
+					WorkerMaxIterations:  cfg.ScheduledWorkerMaxIterations,
+					SynthesisModel:       cfg.LLMModel,
+					SynthesisMaxTokens:   cfg.LLMMaxTokens,
+					SynthesisTemperature: cfg.LLMTemperature,
+					SynthesisTimeout:     cfg.LLMTimeout,
 				},
 			})
 			worker := scheduled.NewWorker(scheduled.WorkerDeps{

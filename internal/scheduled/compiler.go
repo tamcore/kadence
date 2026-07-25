@@ -113,9 +113,10 @@ type Refinement struct {
 
 // CompilerConfig controls one tool-free definition-model request.
 type CompilerConfig struct {
-	Model     string
-	MaxTokens int
-	Now       func() time.Time
+	Model       string
+	MaxTokens   int
+	Temperature float64
+	Now         func() time.Time
 }
 
 // Compiler refines a complete Scheduled conversation through the primary
@@ -161,7 +162,7 @@ func (c *Compiler) Refine(ctx context.Context, history []provider.Message, avail
 		Messages:    make([]provider.Message, 0, len(history)+1),
 		Model:       c.cfg.Model,
 		MaxTokens:   c.cfg.MaxTokens,
-		Temperature: 0,
+		Temperature: c.cfg.Temperature,
 	}
 	req.Messages = append(req.Messages, provider.Message{
 		Role: "system", Content: compilerSystemPrompt(toolMetadata, c.cfg.Now().UTC()),

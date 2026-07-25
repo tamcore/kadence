@@ -95,6 +95,7 @@ endpoint, or both. Synthesis still uses the main model.
 | `KADENCE_SCHEDULED_WORKER_BASE_URL` | (main base URL) | Compatible provider endpoint used by the worker. |
 | `KADENCE_SCHEDULED_WORKER_API_KEY` | (main key) | Worker provider API key. Keep it in a Secret. |
 | `KADENCE_SCHEDULED_WORKER_MAX_TOKENS` | `2048` | Maximum completion tokens for each worker request. Must be positive when enabled. |
+| `KADENCE_SCHEDULED_WORKER_TEMPERATURE` | (main temperature) | Sampling temperature for unattended evidence gathering and tool calls. |
 | `KADENCE_SCHEDULED_WORKER_TIMEOUT` | `300s` | Timeout for each worker gather request. Must be a positive Go duration. |
 | `KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS` | `16` | Maximum agentic gather/tool-loop iterations per occurrence. Must be positive. |
 | `KADENCE_SCHEDULED_WORKER_CONCURRENCY` | `1` | Maximum occurrences executed concurrently by each app replica. PostgreSQL claims prevent duplicate execution across replicas. |

@@ -155,7 +155,8 @@ func executorFor(worker, synthesis provider.Provider, catalog ExecutionToolCatal
 		Worker: worker, Synthesis: synthesis, Tools: catalog, Store: store,
 		Config: ExecutorConfig{
 			WorkerModel: "worker", WorkerMaxTokens: 1000, WorkerMaxIterations: 3, WorkerTimeout: time.Second,
-			SynthesisModel: "primary", SynthesisMaxTokens: 1000, SynthesisTimeout: time.Second,
+			WorkerTemperature: 0.7, SynthesisModel: "primary", SynthesisMaxTokens: 1000,
+			SynthesisTemperature: 0.8, SynthesisTimeout: time.Second,
 		},
 		Now: func() time.Time { return now },
 	})
@@ -267,6 +268,14 @@ func TestExecutorGatherCallsOnlyAuthorizedToolsAndSynthesizesToolFree(t *testing
 	}
 	if synthesis.chatCalls != 1 || len(synthesis.requests[0].Tools) != 0 {
 		t.Fatalf("synthesis request = %+v", synthesis.requests)
+	}
+	for _, request := range worker.requests {
+		if request.Temperature != 0.7 {
+			t.Fatalf("worker temperature = %v, want 0.7", request.Temperature)
+		}
+	}
+	if synthesis.requests[0].Temperature != 0.8 {
+		t.Fatalf("synthesis temperature = %v, want 0.8", synthesis.requests[0].Temperature)
 	}
 	if len(store.successes) != 1 || store.successes[0].Content != "You ran 5 km." ||
 		store.successes[0].RunState != model.ScheduledTaskRunStateDelivered || store.successes[0].NextRunAt == nil ||

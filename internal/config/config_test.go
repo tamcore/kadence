@@ -358,7 +358,8 @@ func TestScheduledDefaultsDisabled(t *testing.T) {
 		t.Fatalf("scheduled worker overrides = %+v, want empty raw overrides", cfg)
 	}
 	if cfg.ScheduledWorkerMaxTokens != 2048 || cfg.ScheduledWorkerTimeout != 300*time.Second ||
-		cfg.ScheduledWorkerMaxIterations != 16 || cfg.ScheduledWorkerConcurrency != 1 || cfg.ScheduledMaxActivePerUser != 10 {
+		cfg.ScheduledWorkerTemperature != cfg.LLMTemperature || cfg.ScheduledWorkerMaxIterations != 16 ||
+		cfg.ScheduledWorkerConcurrency != 1 || cfg.ScheduledMaxActivePerUser != 10 {
 		t.Fatalf("scheduled defaults = %+v", cfg)
 	}
 	if err := validConfig().Validate(); err != nil {
@@ -370,14 +371,17 @@ func TestScheduledWorkerResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_LLM_MODEL", "main-model")
 	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
 	t.Setenv("KADENCE_LLM_API_KEY", "main-key")
+	t.Setenv("KADENCE_LLM_TEMPERATURE", "0.9")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_MODEL", "")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_BASE_URL", "")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_API_KEY", "")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_TEMPERATURE", "")
 
 	cfg := Load()
 	if cfg.ResolvedScheduledWorkerModel() != "main-model" ||
 		cfg.ResolvedScheduledWorkerBaseURL() != "https://main.example/v1" ||
-		cfg.ResolvedScheduledWorkerAPIKey() != "main-key" {
+		cfg.ResolvedScheduledWorkerAPIKey() != "main-key" ||
+		cfg.ScheduledWorkerTemperature != 0.9 {
 		t.Fatalf("scheduled worker resolvers should fall back to LLM values: %+v", cfg)
 	}
 }
@@ -386,11 +390,13 @@ func TestScheduledWorkerExplicitOverrides(t *testing.T) {
 	t.Setenv("KADENCE_SCHEDULED_WORKER_MODEL", "worker-model")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_BASE_URL", "https://worker.example/v1")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_API_KEY", "worker-key")
+	t.Setenv("KADENCE_SCHEDULED_WORKER_TEMPERATURE", "0.4")
 
 	cfg := Load()
 	if cfg.ResolvedScheduledWorkerModel() != "worker-model" ||
 		cfg.ResolvedScheduledWorkerBaseURL() != "https://worker.example/v1" ||
-		cfg.ResolvedScheduledWorkerAPIKey() != "worker-key" {
+		cfg.ResolvedScheduledWorkerAPIKey() != "worker-key" ||
+		cfg.ScheduledWorkerTemperature != 0.4 {
 		t.Fatalf("scheduled worker resolvers should use explicit overrides: %+v", cfg)
 	}
 }
