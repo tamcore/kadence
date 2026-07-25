@@ -13,16 +13,19 @@ const (
 
 // ChatEvent is a single server-sent event in a chat stream.
 type ChatEvent struct {
-	Type           string            `json:"type"`
-	Delta          string            `json:"delta,omitempty"`
-	ConversationID string            `json:"conversationId,omitempty"`
-	Message        string            `json:"message,omitempty"`
-	Tool           string            `json:"tool,omitempty"`
-	Status         string            `json:"status,omitempty"`
-	Arguments      string            `json:"arguments,omitempty"`
-	RequestID      string            `json:"requestId,omitempty"`
-	Reason         string            `json:"reason,omitempty"`
-	Fields         []CredentialField `json:"fields,omitempty"`
+	Type               string            `json:"type"`
+	Delta              string            `json:"delta,omitempty"`
+	ConversationID     string            `json:"conversationId,omitempty"`
+	UserMessageID      int64             `json:"userMessageId,omitempty"`
+	AssistantMessageID int64             `json:"assistantMessageId,omitempty"`
+	AssistantContent   *string           `json:"assistantContent,omitempty"`
+	Message            string            `json:"message,omitempty"`
+	Tool               string            `json:"tool,omitempty"`
+	Status             string            `json:"status,omitempty"`
+	Arguments          string            `json:"arguments,omitempty"`
+	RequestID          string            `json:"requestId,omitempty"`
+	Reason             string            `json:"reason,omitempty"`
+	Fields             []CredentialField `json:"fields,omitempty"`
 }
 
 // CredentialField describes one credential field being requested from the

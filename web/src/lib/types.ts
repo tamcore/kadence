@@ -22,6 +22,7 @@ export type MessagePart =
 	| { kind: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string };
 
 export interface ChatMessage {
+	id?: number;
 	role: 'user' | 'assistant';
 	content: string;
 	parts?: MessagePart[];
@@ -41,12 +42,12 @@ export interface CredentialRequest {
 }
 
 export type ChatEvent =
-	| { type: 'meta'; conversationId: string }
+	| { type: 'meta'; conversationId: string; userMessageId?: number }
 	| { type: 'token'; delta: string }
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }
-	| { type: 'done' }
-	| { type: 'error'; message: string; code?: number };
+	| { type: 'done'; assistantMessageId?: number; assistantContent?: string }
+	| { type: 'error'; message: string; code?: number; assistantMessageId?: number; assistantContent?: string };
 
 export interface Document {
 	id: number;

@@ -4,7 +4,9 @@
 		activeId,
 		chatError,
 		credentialRequest,
+		editMessage,
 		messages,
+		regenerateMessage,
 		sendMessage,
 		sending,
 		stopGeneration
@@ -13,10 +15,19 @@
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import CredentialPrompt from '$lib/components/CredentialPrompt.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import MessageActions from '$lib/components/MessageActions.svelte';
+	import MessageEditor from '$lib/components/MessageEditor.svelte';
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
 	let threadEl = $state<HTMLDivElement | null>(null);
+	let editingMessageId = $state<number | null>(null);
+	let pendingAction = $state<
+		| { kind: 'edit'; messageId: number; text: string }
+		| { kind: 'regenerate'; messageId: number }
+		| null
+	>(null);
 
 	async function scrollToBottom(): Promise<void> {
 		await tick();
@@ -52,42 +63,102 @@
 			return raw;
 		}
 	}
+
+	function hasLaterUserMessage(index: number): boolean {
+		return $messages.slice(index + 1).some((message) => message.role === 'user');
+	}
+
+	function beginEdit(messageId: number): void {
+		editingMessageId = messageId;
+	}
+
+	function saveEdit(index: number, messageId: number, text: string): void {
+		if (hasLaterUserMessage(index)) {
+			pendingAction = { kind: 'edit', messageId, text };
+			return;
+		}
+		editingMessageId = null;
+		void editMessage(messageId, text);
+	}
+
+	function requestRegenerate(index: number, messageId: number): void {
+		if (hasLaterUserMessage(index)) {
+			pendingAction = { kind: 'regenerate', messageId };
+			return;
+		}
+		void regenerateMessage(messageId);
+	}
+
+	function confirmPending(): void {
+		const action = pendingAction;
+		pendingAction = null;
+		editingMessageId = null;
+		if (!action) return;
+		if (action.kind === 'edit') {
+			void editMessage(action.messageId, action.text);
+		} else {
+			void regenerateMessage(action.messageId);
+		}
+	}
 </script>
 
 <div class="chat">
 	<div class="thread" bind:this={threadEl}>
 		<div class="thread-inner" data-testid="chat-thread">
 			{#each $messages as m, i (i)}
-				<div class="msg {m.role}" data-testid={`chat-message-${m.role}`}>
-					{#if m.role === 'assistant'}
-						{#if m.parts?.length}
-							{#each m.parts as part, j (j)}
-								{#if part.kind === 'text'}
-									{#if part.content}
-										<MarkdownMessage content={part.content} />
-									{/if}
-								{:else}
-									{@const toolPart = part as Extract<MessagePart, { kind: 'tool' }>}
-									{#if toolPart.arguments}
-										<details class="tool-chip {toolPart.status}">
-											<summary>{statusIcon(toolPart.status)} {toolLabel(toolPart.tool)}</summary>
-											<pre class="tool-payload">{formatArguments(toolPart.arguments)}</pre>
-										</details>
+				<div class="message-block {m.role}">
+					<div
+						class="msg {m.role}"
+						class:editing={m.role === 'user' && m.id === editingMessageId}
+						data-testid={`chat-message-${m.role}`}
+					>
+						{#if m.role === 'assistant'}
+							{#if m.parts?.length}
+								{#each m.parts as part, j (j)}
+									{#if part.kind === 'text'}
+										{#if part.content}
+											<MarkdownMessage content={part.content} />
+										{/if}
 									{:else}
-										<span class="tool-chip {toolPart.status} not-expandable">
-											{statusIcon(toolPart.status)} {toolLabel(toolPart.tool)}
-										</span>
+										{@const toolPart = part as Extract<MessagePart, { kind: 'tool' }>}
+										{#if toolPart.arguments}
+											<details class="tool-chip {toolPart.status}">
+												<summary>{statusIcon(toolPart.status)} {toolLabel(toolPart.tool)}</summary>
+												<pre class="tool-payload">{formatArguments(toolPart.arguments)}</pre>
+											</details>
+										{:else}
+											<span class="tool-chip {toolPart.status} not-expandable">
+												{statusIcon(toolPart.status)} {toolLabel(toolPart.tool)}
+											</span>
+										{/if}
 									{/if}
-								{/if}
-							{/each}
+								{/each}
+							{:else}
+								<MarkdownMessage content={m.content} />
+							{/if}
+							{#if m.stopped}
+								<span class="stopped-marker">Stopped</span>
+							{/if}
+						{:else if m.id !== undefined && m.id === editingMessageId}
+							<MessageEditor
+								initialText={m.content}
+								disabled={$sending}
+								onSave={(text) => saveEdit(i, m.id!, text)}
+								onCancel={() => (editingMessageId = null)}
+							/>
 						{:else}
-							<MarkdownMessage content={m.content} />
+							<p>{m.content}</p>
 						{/if}
-						{#if m.stopped}
-							<span class="stopped-marker">Stopped</span>
-						{/if}
-					{:else}
-						<p>{m.content}</p>
+					</div>
+					{#if !(m.role === 'user' && m.id === editingMessageId)}
+						<MessageActions
+							content={m.content}
+							disabled={$sending}
+							onEdit={m.role === 'user' && m.id !== undefined ? () => beginEdit(m.id!) : undefined}
+							onRegenerate={m.role === 'assistant' && m.id !== undefined
+								? () => requestRegenerate(i, m.id!)
+								: undefined}
+						/>
 					{/if}
 				</div>
 			{/each}
@@ -110,6 +181,17 @@
 	</div>
 </div>
 
+<ConfirmDialog
+	open={pendingAction !== null}
+	title="Rewrite this conversation?"
+	message={pendingAction?.kind === 'edit'
+		? 'Saving this edit will permanently delete all later turns.'
+		: 'Regenerating this response will permanently delete all later turns.'}
+	confirmLabel={pendingAction?.kind === 'edit' ? 'Edit and continue' : 'Regenerate'}
+	onConfirm={confirmPending}
+	onCancel={() => (pendingAction = null)}
+/>
+
 <style>
 	.chat {
 		--chat-content-width: 960px;
@@ -125,15 +207,28 @@
 	}
 	.msg {
 		min-width: 0;
-		max-width: 80%;
+		max-width: 100%;
 		box-sizing: border-box;
 		padding: 10px 14px;
 		border-radius: var(--radius);
 		overflow-wrap: anywhere;
 	}
-	.msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
+	.message-block {
+		min-width: 0;
+		max-width: 80%;
+		display: flex;
+		flex-direction: column;
+	}
+	.message-block.user { align-self: flex-end; align-items: flex-end; }
+	.message-block.assistant { align-self: flex-start; align-items: flex-start; }
+	.msg.user { background: var(--accent); color: #fff; }
+	.msg.user.editing {
+		width: 100%;
+		background: var(--surface);
+		color: var(--text);
+		border: 1px solid var(--border);
+	}
 	.msg.assistant {
-		align-self: flex-start;
 		background: var(--surface);
 		border: 1px solid var(--border);
 		display: flex; flex-direction: column; gap: 8px;

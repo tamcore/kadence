@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,12 @@ type ChatStreamer interface {
 	Stream(ctx context.Context, userID int64, uc chat.UserContext, conversationID string, text string, sink chat.EventSink) error
 }
 
+// ChatRewriter runs destructive edit/regenerate chat turns.
+type ChatRewriter interface {
+	Edit(ctx context.Context, userID int64, uc chat.UserContext, conversationID string, messageID int64, text string, sink chat.EventSink) error
+	Regenerate(ctx context.Context, userID int64, uc chat.UserContext, conversationID string, messageID int64, sink chat.EventSink) error
+}
+
 // ConvLister lists/gets/renames/deletes conversations for a user.
 type ConvLister interface {
 	ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error)
@@ -39,6 +46,7 @@ type ConvLister interface {
 // MsgLister lists messages for a conversation.
 type MsgLister interface {
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
+	GetByID(ctx context.Context, conversationID string, messageID int64) (model.Message, error)
 }
 
 // ScheduledConversationPauser preserves the definition/audit relationship
@@ -50,6 +58,7 @@ type ScheduledConversationPauser interface {
 // Chat handles the chat + conversation HTTP endpoints.
 type Chat struct {
 	svc       ChatStreamer
+	rewriter  ChatRewriter
 	convs     ConvLister
 	msgs      MsgLister
 	scheduled ScheduledConversationPauser
@@ -58,6 +67,7 @@ type Chat struct {
 // NewChat constructs the Chat handler.
 func NewChat(svc ChatStreamer, convs ConvLister, msgs MsgLister, scheduled ...ScheduledConversationPauser) *Chat {
 	h := &Chat{svc: svc, convs: convs, msgs: msgs}
+	h.rewriter, _ = svc.(ChatRewriter)
 	if len(scheduled) > 0 {
 		h.scheduled = scheduled[0]
 	}
@@ -112,33 +122,10 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	sink := &sseSink{w: w, rc: http.NewResponseController(w)}
-	done := make(chan struct{})
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		t := time.NewTicker(sseKeepaliveInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				_ = sink.keepalive()
-			}
-		}
-	}()
 	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe}
-	_ = h.svc.Stream(r.Context(), u.ID, uc, body.ConversationID, body.Message, sink)
-	// Signal the keepalive goroutine to stop and wait for it to exit before
-	// returning, so it can never write to w after the handler has returned.
-	close(done)
-	<-stopped
+	h.streamSSE(w, func(sink chat.EventSink) {
+		_ = h.svc.Stream(r.Context(), u.ID, uc, body.ConversationID, body.Message, sink)
+	})
 }
 
 type conversationDTO struct {
@@ -163,6 +150,7 @@ func (h *Chat) ListConversations(w http.ResponseWriter, r *http.Request) {
 }
 
 type messageDTO struct {
+	ID      int64  `json:"id"`
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
@@ -189,9 +177,114 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		if m.Role == model.MsgRoleSystem {
 			continue
 		}
-		out = append(out, messageDTO{Role: m.Role, Content: m.Content})
+		out = append(out, messageDTO{ID: m.ID, Role: m.Role, Content: m.Content})
 	}
 	RespondJSON(w, http.StatusOK, out)
+}
+
+// EditMessage handles POST /api/conversations/{id}/messages/{messageId}/edit.
+func (h *Chat) EditMessage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	body.Message = strings.TrimSpace(body.Message)
+	if body.Message == "" {
+		RespondError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	conversationID, messageID, ok := h.validateMessageAction(w, r, model.MsgRoleUser)
+	if !ok {
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe}
+	if h.rewriter == nil {
+		RespondError(w, http.StatusInternalServerError, "message editing is unavailable")
+		return
+	}
+	h.streamSSE(w, func(sink chat.EventSink) {
+		_ = h.rewriter.Edit(r.Context(), u.ID, uc, conversationID, messageID, body.Message, sink)
+	})
+}
+
+// RegenerateMessage handles
+// POST /api/conversations/{id}/messages/{messageId}/regenerate.
+func (h *Chat) RegenerateMessage(w http.ResponseWriter, r *http.Request) {
+	conversationID, messageID, ok := h.validateMessageAction(w, r, model.MsgRoleAssistant)
+	if !ok {
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe}
+	if h.rewriter == nil {
+		RespondError(w, http.StatusInternalServerError, "response regeneration is unavailable")
+		return
+	}
+	h.streamSSE(w, func(sink chat.EventSink) {
+		_ = h.rewriter.Regenerate(r.Context(), u.ID, uc, conversationID, messageID, sink)
+	})
+}
+
+func (h *Chat) validateMessageAction(
+	w http.ResponseWriter, r *http.Request, role string,
+) (string, int64, bool) {
+	conversationID := chi.URLParam(r, "id")
+	messageID, err := strconv.ParseInt(chi.URLParam(r, "messageId"), 10, 64)
+	if conversationID == "" || err != nil || messageID <= 0 {
+		RespondError(w, http.StatusBadRequest, "valid conversation and message ids are required")
+		return "", 0, false
+	}
+	u := auth.UserFromContext(r.Context())
+	conversation, err := h.convs.GetByID(r.Context(), conversationID, u.ID)
+	if err != nil || conversation.Kind != model.ConversationKindChat {
+		RespondError(w, http.StatusNotFound, "conversation not found")
+		return "", 0, false
+	}
+	message, err := h.msgs.GetByID(r.Context(), conversationID, messageID)
+	if errors.Is(err, store.ErrNotFound) {
+		RespondError(w, http.StatusNotFound, "message not found")
+		return "", 0, false
+	}
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not load message")
+		return "", 0, false
+	}
+	if message.Role != role {
+		RespondError(w, http.StatusConflict, "message has wrong role")
+		return "", 0, false
+	}
+	return conversationID, messageID, true
+}
+
+func (h *Chat) streamSSE(w http.ResponseWriter, run func(chat.EventSink)) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	sink := &sseSink{w: w, rc: http.NewResponseController(w)}
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(sseKeepaliveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				_ = sink.keepalive()
+			}
+		}
+	}()
+	run(sink)
+	close(done)
+	<-stopped
 }
 
 // PatchConversation handles PATCH /api/conversations/{id}, currently supporting

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
 import { goto } from '$app/navigation';
-import { streamChat } from './chat';
+import { editMessage, regenerateMessage, streamChat } from './chat';
 import { setCsrfToken } from './client';
 
 function streamResponse(frames: string[]): Response {
@@ -42,6 +42,55 @@ describe('streamChat', () => {
 		});
 		expect(events.filter((e) => e.type === 'token').map((e: any) => e.delta).join('')).toBe('Hello world');
 		expect(events.at(-1)).toEqual({ type: 'done' });
+	});
+
+	it('streams an edited message from its dedicated endpoint', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(streamResponse([
+			'data: {"type":"meta","conversationId":"conv-1","userMessageId":12}\n\n',
+			'data: {"type":"done","assistantMessageId":13}\n\n'
+		]));
+		vi.stubGlobal('fetch', fetchMock);
+
+		const events = [];
+		for await (const event of editMessage(
+			'conv-1',
+			12,
+			'edited prompt',
+			new AbortController().signal
+		)) {
+			events.push(event);
+		}
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			'/api/conversations/conv-1/messages/12/edit',
+			expect.objectContaining({
+				method: 'POST',
+				body: JSON.stringify({ message: 'edited prompt' })
+			})
+		);
+		expect(events).toEqual([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 12 },
+			{ type: 'done', assistantMessageId: 13 }
+		]);
+	});
+
+	it('streams regeneration from its dedicated endpoint', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(streamResponse([
+			'data: {"type":"done","assistantMessageId":14}\n\n'
+		]));
+		vi.stubGlobal('fetch', fetchMock);
+
+		for await (const _ of regenerateMessage('conv-1', 13, new AbortController().signal)) {
+			/* drain */
+		}
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			'/api/conversations/conv-1/messages/13/regenerate',
+			expect.objectContaining({
+				method: 'POST',
+				body: undefined
+			})
+		);
 	});
 
 	it('sends credentials, CSRF header, and the body', async () => {

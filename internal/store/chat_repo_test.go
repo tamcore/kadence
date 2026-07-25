@@ -5,13 +5,17 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
 	"github.com/tamcore/kadence/internal/store/testutil"
 )
 
-const testAliceUsername = "alice"
+const (
+	testAliceUsername = "alice"
+	testNewPrompt     = "new prompt"
+)
 
 // Shared test-fixture emails, reused across store_test files to avoid
 // goconst duplicate-literal warnings.
@@ -197,5 +201,223 @@ func TestConversationUpdateTitle(t *testing.T) {
 
 	if _, err := convs.UpdateTitle(ctx, "00000000-0000-0000-0000-000000000000", owner.ID, "x"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing id UpdateTitle err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestMessageRepositoryEditAndRewind(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	msgs := store.NewMessageRepository(pool)
+	chunks := store.NewChunkRepository(pool, "test-model")
+	audits := store.NewMCPAuditRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "rewind-edit", Email: "rewind-edit@example.com", PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := convs.Create(ctx, owner.ID, "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userMessage, err := msgs.Add(ctx, conversation.ID, model.MsgRoleUser, "old prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistantMessage, err := msgs.Add(ctx, conversation.ID, model.MsgRoleAssistant, "old answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterUser, err := msgs.Add(ctx, conversation.ID, model.MsgRoleUser, "later prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []model.Message{userMessage, assistantMessage, laterUser} {
+		sourceID := message.ID
+		if err := chunks.Insert(ctx, model.Chunk{
+			UserID: &owner.ID, ConversationID: &conversation.ID, Scope: model.ScopePrivate,
+			SourceKind: model.ChunkSourceMessage, SourceID: &sourceID, Content: message.Content,
+		}, make([]float32, 1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	auditID, err := audits.Start(ctx, model.MCPAuditCall{
+		ActorUserID: owner.ID, ActorUsername: owner.Username, ConversationID: conversation.ID,
+		Source: model.MCPAuditSourceChat, Model: "test-model", ToolCallID: "call-edit",
+		ToolName: "test__tool", Arguments: `{}`, StartedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	edited, err := msgs.EditAndRewind(ctx, conversation.ID, userMessage.ID, owner.ID, testNewPrompt)
+	if err != nil {
+		t.Fatalf("edit and rewind: %v", err)
+	}
+	if edited.ID != userMessage.ID || edited.Content != testNewPrompt {
+		t.Fatalf("edited message = %+v", edited)
+	}
+	remaining, err := msgs.ListByConversation(ctx, conversation.ID)
+	if err != nil || len(remaining) != 1 || remaining[0].Content != testNewPrompt {
+		t.Fatalf("remaining messages = %+v, err=%v", remaining, err)
+	}
+	var chunkCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM chunks WHERE conversation_id = $1::uuid`, conversation.ID,
+	).Scan(&chunkCount); err != nil || chunkCount != 0 {
+		t.Fatalf("remaining chunks = %d, err=%v", chunkCount, err)
+	}
+	if _, err := audits.Get(ctx, auditID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("audit must survive rewind: %v", err)
+	}
+}
+
+func TestMessageRepositoryRegenerateAndRewind(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	msgs := store.NewMessageRepository(pool)
+	chunks := store.NewChunkRepository(pool, "test-model")
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "rewind-regenerate", Email: "rewind-regenerate@example.com", PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := convs.Create(ctx, owner.ID, "regenerate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userMessage, err := msgs.Add(ctx, conversation.ID, model.MsgRoleUser, "prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistantMessage, err := msgs.Add(ctx, conversation.ID, model.MsgRoleAssistant, "first answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterUser, err := msgs.Add(ctx, conversation.ID, model.MsgRoleUser, "later")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []model.Message{userMessage, assistantMessage, laterUser} {
+		sourceID := message.ID
+		if err := chunks.Insert(ctx, model.Chunk{
+			UserID: &owner.ID, ConversationID: &conversation.ID, Scope: model.ScopePrivate,
+			SourceKind: model.ChunkSourceMessage, SourceID: &sourceID, Content: message.Content,
+		}, make([]float32, 1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prompt, err := msgs.RegenerateAndRewind(ctx, conversation.ID, assistantMessage.ID, owner.ID)
+	if err != nil {
+		t.Fatalf("regenerate and rewind: %v", err)
+	}
+	if prompt.ID != userMessage.ID || prompt.Content != "prompt" {
+		t.Fatalf("prompt = %+v", prompt)
+	}
+	remaining, err := msgs.ListByConversation(ctx, conversation.ID)
+	if err != nil || len(remaining) != 1 || remaining[0].ID != userMessage.ID {
+		t.Fatalf("remaining messages = %+v, err=%v", remaining, err)
+	}
+	var sourceIDs []int64
+	rows, err := pool.Query(ctx,
+		`SELECT source_id FROM chunks WHERE conversation_id = $1::uuid ORDER BY source_id`, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var sourceID int64
+		if err := rows.Scan(&sourceID); err != nil {
+			t.Fatal(err)
+		}
+		sourceIDs = append(sourceIDs, sourceID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(sourceIDs) != 1 || sourceIDs[0] != userMessage.ID {
+		t.Fatalf("remaining chunk source ids = %v", sourceIDs)
+	}
+}
+
+func TestMessageRepositoryRewindValidatesOwnerKindAndRole(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	msgs := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner, _ := users.Create(ctx, model.User{
+		Username: "rewind-owner", Email: "rewind-owner@example.com", PasswordHash: "h", Role: model.RoleUser,
+	})
+	other, _ := users.Create(ctx, model.User{
+		Username: "rewind-other", Email: "rewind-other@example.com", PasswordHash: "h", Role: model.RoleUser,
+	})
+	conversation, _ := convs.Create(ctx, owner.ID, "chat")
+	userMessage, _ := msgs.Add(ctx, conversation.ID, model.MsgRoleUser, "prompt")
+	assistantMessage, _ := msgs.Add(ctx, conversation.ID, model.MsgRoleAssistant, "answer")
+	scheduled, _ := convs.CreateWithKind(ctx, owner.ID, "scheduled", model.ConversationKindScheduled)
+	scheduledUser, _ := msgs.AddDefinition(ctx, scheduled.ID, model.MsgRoleUser, "definition")
+
+	if _, err := msgs.EditAndRewind(ctx, conversation.ID, userMessage.ID, other.ID, "hijack"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-owner edit err = %v, want ErrNotFound", err)
+	}
+	if _, err := msgs.EditAndRewind(ctx, scheduled.ID, scheduledUser.ID, owner.ID, "changed"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("scheduled edit err = %v, want ErrNotFound", err)
+	}
+	if _, err := msgs.EditAndRewind(ctx, conversation.ID, assistantMessage.ID, owner.ID, "wrong role"); !errors.Is(err, store.ErrWrongMessageRole) {
+		t.Fatalf("assistant edit err = %v, want ErrWrongMessageRole", err)
+	}
+	if _, err := msgs.RegenerateAndRewind(ctx, conversation.ID, userMessage.ID, owner.ID); !errors.Is(err, store.ErrWrongMessageRole) {
+		t.Fatalf("user regenerate err = %v, want ErrWrongMessageRole", err)
+	}
+}
+
+func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	msgs := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "stale-chat", Email: "stale-chat@example.com", PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := convs.Create(ctx, owner.ID, "stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleUser, err := msgs.AddChatUser(ctx, conversation.ID, "original prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := msgs.EditAndRewind(ctx, conversation.ID, staleUser.ID, owner.ID, "edited prompt"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := msgs.AddChatAssistantIfLatestUser(ctx, conversation.ID, staleUser, "stale response", nil); !errors.Is(err, store.ErrStaleChatTurn) {
+		t.Fatalf("stale assistant err = %v, want ErrStaleChatTurn", err)
+	}
+	remaining, err := msgs.ListByConversation(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].Content != "edited prompt" {
+		t.Fatalf("messages after stale assistant = %+v", remaining)
 	}
 }

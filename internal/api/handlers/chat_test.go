@@ -16,13 +16,42 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
-type fakeStreamer struct{ gotText string }
+const (
+	chatTestConversationID = "chat-conv-1"
+	messageIDParam         = "messageId"
+	editedMessageJSON      = `{"message":"edited"}`
+)
+
+type fakeStreamer struct {
+	gotText           string
+	gotConversationID string
+	gotMessageID      int64
+	gotAction         string
+}
 
 func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ chat.UserContext, _ string, text string, sink chat.EventSink) error {
 	f.gotText = text
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: "conv-uuid-1"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventToken, Delta: "hi"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone})
+	return sink.Flush()
+}
+func (f *fakeStreamer) Edit(
+	_ context.Context, _ int64, _ chat.UserContext, conversationID string,
+	messageID int64, text string, sink chat.EventSink,
+) error {
+	f.gotAction, f.gotConversationID, f.gotMessageID, f.gotText = "edit", conversationID, messageID, text
+	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: conversationID, UserMessageID: messageID})
+	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone, AssistantMessageID: messageID + 1})
+	return sink.Flush()
+}
+func (f *fakeStreamer) Regenerate(
+	_ context.Context, _ int64, _ chat.UserContext, conversationID string,
+	messageID int64, sink chat.EventSink,
+) error {
+	f.gotAction, f.gotConversationID, f.gotMessageID = "regenerate", conversationID, messageID
+	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: conversationID, UserMessageID: messageID - 1})
+	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone, AssistantMessageID: messageID + 1})
 	return sink.Flush()
 }
 
@@ -62,10 +91,20 @@ func (f fakeConvLister) UpdateTitle(_ context.Context, id string, userID int64, 
 	return model.Conversation{ID: id, UserID: userID, Title: title}, nil
 }
 
-type fakeMsgLister struct{ msgs []model.Message }
+type fakeMsgLister struct {
+	msgs   []model.Message
+	byID   model.Message
+	getErr error
+}
 
 func (f fakeMsgLister) ListByConversation(context.Context, string) ([]model.Message, error) {
 	return f.msgs, nil
+}
+func (f fakeMsgLister) GetByID(context.Context, string, int64) (model.Message, error) {
+	if f.getErr != nil {
+		return model.Message{}, f.getErr
+	}
+	return f.byID, nil
 }
 
 type fakeScheduledConversationPauser struct {
@@ -89,6 +128,14 @@ func withUser(r *http.Request, id int64) *http.Request { //nolint:unparam
 func withChiParam(r *http.Request, param, val string) *http.Request { //nolint:unparam
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(param, val)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+}
+
+func withChiParams(r *http.Request, params map[string]string) *http.Request {
+	rctx := chi.NewRouteContext()
+	for name, value := range params {
+		rctx.URLParams.Add(name, value)
+	}
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
@@ -129,8 +176,130 @@ func TestMessagesSuccess(t *testing.T) {
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.Messages(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"hi"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":1`) ||
+		!strings.Contains(rec.Body.String(), `"hi"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEditMessageStreamsReplacement(t *testing.T) {
+	streamer := &fakeStreamer{}
+	conversations := &fakeConvLister{getByIDResp: model.Conversation{
+		ID: chatTestConversationID, UserID: 7, Kind: model.ConversationKindChat,
+	}}
+	messages := fakeMsgLister{byID: model.Message{
+		ID: 12, ConversationID: chatTestConversationID, Role: model.MsgRoleUser, Content: "old",
+	}}
+	handler := handlers.NewChat(streamer, conversations, messages)
+	request := withChiParams(
+		withUser(httptest.NewRequest(http.MethodPost, "/api/conversations/conv-1/messages/12/edit",
+			strings.NewReader(`{"message":"  edited prompt  "}`)), 7),
+		map[string]string{"id": chatTestConversationID, messageIDParam: "12"})
+	response := httptest.NewRecorder()
+
+	handler.EditMessage(response, request)
+
+	if response.Code != http.StatusOK || streamer.gotAction != "edit" ||
+		streamer.gotConversationID != chatTestConversationID || streamer.gotMessageID != 12 ||
+		streamer.gotText != "edited prompt" {
+		t.Fatalf("status=%d streamer=%+v body=%s", response.Code, streamer, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"assistantMessageId":13`) {
+		t.Fatalf("missing persisted assistant id: %s", response.Body.String())
+	}
+}
+
+func TestRegenerateMessageStreamsReplacement(t *testing.T) {
+	streamer := &fakeStreamer{}
+	conversations := &fakeConvLister{getByIDResp: model.Conversation{
+		ID: chatTestConversationID, UserID: 7, Kind: model.ConversationKindChat,
+	}}
+	messages := fakeMsgLister{byID: model.Message{
+		ID: 12, ConversationID: chatTestConversationID, Role: model.MsgRoleAssistant, Content: "old",
+	}}
+	handler := handlers.NewChat(streamer, conversations, messages)
+	request := withChiParams(
+		withUser(httptest.NewRequest(http.MethodPost, "/api/conversations/conv-1/messages/12/regenerate", nil), 7),
+		map[string]string{"id": chatTestConversationID, messageIDParam: "12"})
+	response := httptest.NewRecorder()
+
+	handler.RegenerateMessage(response, request)
+
+	if response.Code != http.StatusOK || streamer.gotAction != "regenerate" ||
+		streamer.gotConversationID != chatTestConversationID || streamer.gotMessageID != 12 {
+		t.Fatalf("status=%d streamer=%+v body=%s", response.Code, streamer, response.Body.String())
+	}
+}
+
+func TestMessageRewriteValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		pathID     string
+		convs      *fakeConvLister
+		messages   fakeMsgLister
+		body       string
+		regenerate bool
+		wantStatus int
+	}{
+		{
+			name: "invalid message id", pathID: "bad", body: editedMessageJSON,
+			convs: &fakeConvLister{}, wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "blank edit", pathID: "12", body: `{"message":"   "}`,
+			convs: &fakeConvLister{}, wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "conversation missing", pathID: "12", body: editedMessageJSON,
+			convs: &fakeConvLister{getByIDError: store.ErrNotFound}, wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "scheduled conversation", pathID: "12", body: editedMessageJSON,
+			convs: &fakeConvLister{getByIDResp: model.Conversation{
+				ID: chatTestConversationID, UserID: 7, Kind: model.ConversationKindScheduled,
+			}}, wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "message missing", pathID: "12", body: editedMessageJSON,
+			convs: &fakeConvLister{getByIDResp: model.Conversation{
+				ID: chatTestConversationID, UserID: 7, Kind: model.ConversationKindChat,
+			}},
+			messages: fakeMsgLister{getErr: store.ErrNotFound}, wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "edit assistant conflict", pathID: "12", body: editedMessageJSON,
+			convs: &fakeConvLister{getByIDResp: model.Conversation{
+				ID: chatTestConversationID, UserID: 7, Kind: model.ConversationKindChat,
+			}},
+			messages:   fakeMsgLister{byID: model.Message{ID: 12, Role: model.MsgRoleAssistant}},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "regenerate user conflict", pathID: "12", regenerate: true,
+			convs: &fakeConvLister{getByIDResp: model.Conversation{
+				ID: chatTestConversationID, UserID: 7, Kind: model.ConversationKindChat,
+			}},
+			messages:   fakeMsgLister{byID: model.Message{ID: 12, Role: model.MsgRoleUser}},
+			wantStatus: http.StatusConflict,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := handlers.NewChat(&fakeStreamer{}, test.convs, test.messages)
+			request := withChiParams(
+				withUser(httptest.NewRequest(http.MethodPost, "/rewrite", strings.NewReader(test.body)), 7),
+				map[string]string{"id": chatTestConversationID, messageIDParam: test.pathID})
+			response := httptest.NewRecorder()
+			if test.regenerate {
+				handler.RegenerateMessage(response, request)
+			} else {
+				handler.EditMessage(response, request)
+			}
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+		})
 	}
 }
 

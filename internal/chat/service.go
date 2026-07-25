@@ -26,9 +26,11 @@ type ConversationStore interface {
 
 // MessageStore is the message persistence the service needs.
 type MessageStore interface {
-	Add(ctx context.Context, conversationID string, role, content string) (model.Message, error)
-	AddWithToolCalls(ctx context.Context, conversationID string, role, content string, toolCalls []model.MessageToolCall) (model.Message, error)
+	AddChatUser(ctx context.Context, conversationID, content string) (model.Message, error)
+	AddChatAssistantIfLatestUser(ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall) (model.Message, error)
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
+	EditAndRewind(ctx context.Context, conversationID string, messageID, userID int64, content string) (model.Message, error)
+	RegenerateAndRewind(ctx context.Context, conversationID string, messageID, userID int64) (model.Message, error)
 }
 
 // MCPTools is the MCP tool-calling surface the chat service needs. Satisfied
@@ -316,19 +318,77 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 		return err
 	}
 
-	if err := sink.Send(ChatEvent{Type: EventMeta, ConversationID: conversationID}); err != nil {
-		return err
-	}
-	_ = sink.Flush()
-
 	history, err := s.msgs.ListByConversation(ctx, conversationID)
 	if err != nil {
 		return s.fail(sink, "could not load history")
 	}
-	userMsg, err := s.msgs.Add(ctx, conversationID, model.MsgRoleUser, userText)
+	userMsg, err := s.msgs.AddChatUser(ctx, conversationID, userText)
 	if err != nil {
 		return s.fail(sink, "could not save message")
 	}
+	return s.streamPersistedTurn(ctx, userID, uc, conversationID, userMsg, history, true, sink)
+}
+
+// Edit rewrites one persisted user prompt, removes the later transcript, and
+// streams a replacement assistant response.
+func (s *Service) Edit(
+	ctx context.Context, userID int64, uc UserContext, conversationID string,
+	messageID int64, userText string, sink EventSink,
+) error {
+	userMsg, err := s.msgs.EditAndRewind(ctx, conversationID, messageID, userID, userText)
+	if err != nil {
+		return s.fail(sink, "could not edit message")
+	}
+	history, err := s.historyBefore(ctx, conversationID, userMsg.ID)
+	if err != nil {
+		return s.fail(sink, "could not load history")
+	}
+	return s.streamPersistedTurn(ctx, userID, uc, conversationID, userMsg, history, true, sink)
+}
+
+// Regenerate removes one persisted assistant response and the later
+// transcript, then streams a replacement from its preceding user prompt.
+func (s *Service) Regenerate(
+	ctx context.Context, userID int64, uc UserContext, conversationID string,
+	messageID int64, sink EventSink,
+) error {
+	userMsg, err := s.msgs.RegenerateAndRewind(ctx, conversationID, messageID, userID)
+	if err != nil {
+		return s.fail(sink, "could not regenerate response")
+	}
+	history, err := s.historyBefore(ctx, conversationID, userMsg.ID)
+	if err != nil {
+		return s.fail(sink, "could not load history")
+	}
+	return s.streamPersistedTurn(ctx, userID, uc, conversationID, userMsg, history, false, sink)
+}
+
+func (s *Service) historyBefore(
+	ctx context.Context, conversationID string, messageID int64,
+) ([]model.Message, error) {
+	messages, err := s.msgs.ListByConversation(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range messages {
+		if messages[i].ID == messageID {
+			return messages[:i], nil
+		}
+	}
+	return nil, fmt.Errorf("current user message not found")
+}
+
+func (s *Service) streamPersistedTurn(
+	ctx context.Context, userID int64, uc UserContext, conversationID string,
+	userMsg model.Message, history []model.Message, storeUserChunk bool, sink EventSink,
+) error {
+	userText := userMsg.Content
+	if err := sink.Send(ChatEvent{
+		Type: EventMeta, ConversationID: conversationID, UserMessageID: userMsg.ID,
+	}); err != nil {
+		return err
+	}
+	_ = sink.Flush()
 
 	req := provider.ChatRequest{
 		Model:       s.cfg.Model,
@@ -372,7 +432,7 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 	}
 	guardrailMsgs = append(guardrailMsgs, provider.Message{Role: model.MsgRoleUser, Content: userText})
 
-	if refused, err := s.applyGuardrail(ctx, streamCtx, conversationID, guardrailMsgs, sink); refused {
+	if refused, err := s.applyGuardrail(ctx, streamCtx, conversationID, userMsg, guardrailMsgs, sink); refused {
 		return err
 	}
 
@@ -404,8 +464,10 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 		for _, m := range ragInserts {
 			req.Messages = insertAfterSystem(req.Messages, m)
 		}
-		if err := s.rag.Store(ctx, userID, conversationID, userMsg.ID, userText, queryEmb); err != nil {
-			slog.Warn("rag store user chunk failed", "err", err)
+		if storeUserChunk {
+			if err := s.rag.Store(ctx, userID, conversationID, userMsg.ID, userText, queryEmb); err != nil {
+				slog.Warn("rag store user chunk failed", "err", err)
+			}
 		}
 	}
 
@@ -416,6 +478,10 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 		ctx, streamCtx, conversationID, userID, uc.Username, mcpSnap, req, redactor, sink,
 	)
 	if err != nil {
+		var providerFailure *providerStreamFailure
+		if errors.As(err, &providerFailure) {
+			return s.persistPartialAssistantAndFail(ctx, conversationID, userMsg, providerFailure.content, turnCalls, sink)
+		}
 		return err
 	}
 
@@ -423,9 +489,10 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 		full = secret.Redact(full, redactor.snapshot(s.secrets, userID))
 	}
 
-	assistantMsg, err := s.msgs.AddWithToolCalls(ctx, conversationID, model.MsgRoleAssistant, full, turnCalls)
+	assistantMsg, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, userMsg, full, turnCalls)
 	if err != nil {
 		slog.Error("persist assistant message", "err", err)
+		return s.fail(sink, "could not save response")
 	}
 
 	if s.rag != nil && full != "" {
@@ -436,7 +503,9 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 		}
 	}
 
-	if err := sink.Send(ChatEvent{Type: EventDone}); err != nil {
+	if err := sink.Send(ChatEvent{
+		Type: EventDone, AssistantMessageID: assistantMsg.ID, AssistantContent: &full,
+	}); err != nil {
 		return err
 	}
 	return sink.Flush()
@@ -538,7 +607,8 @@ func (s *Service) assembleRAGInserts(
 // refused=true when Stream should return immediately with the returned err
 // (which may be nil). A classifier failure fails open (refused=false).
 func (s *Service) applyGuardrail(
-	ctx, streamCtx context.Context, conversationID string, reqMessages []provider.Message, sink EventSink,
+	ctx, streamCtx context.Context, conversationID string, expectedUser model.Message,
+	reqMessages []provider.Message, sink EventSink,
 ) (refused bool, err error) {
 	if s.guardrail == nil {
 		return false, nil
@@ -562,11 +632,42 @@ func (s *Service) applyGuardrail(
 	}
 
 	refusal := s.guardrail.RefusalMessage()
-	_, _ = s.msgs.Add(ctx, conversationID, model.MsgRoleAssistant, refusal)
+	assistantMessage, saveErr := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, refusal, nil)
+	if saveErr != nil {
+		return true, s.fail(sink, "could not save response")
+	}
 	_ = sink.Send(ChatEvent{Type: EventToken, Delta: refusal})
 	_ = sink.Flush()
-	_ = sink.Send(ChatEvent{Type: EventDone})
+	_ = sink.Send(ChatEvent{
+		Type: EventDone, AssistantMessageID: assistantMessage.ID, AssistantContent: &refusal,
+	})
 	return true, sink.Flush()
+}
+
+// providerStreamFailure preserves an already-received partial provider result
+// so the caller can persist it with the same latest-user CAS as a completed
+// response before reporting the error to the client.
+type providerStreamFailure struct {
+	content string
+	err     error
+}
+
+func (e *providerStreamFailure) Error() string { return e.err.Error() }
+func (e *providerStreamFailure) Unwrap() error { return e.err }
+
+func (s *Service) persistPartialAssistantAndFail(
+	ctx context.Context, conversationID string, expectedUser model.Message, content string,
+	toolCalls []model.MessageToolCall, sink EventSink,
+) error {
+	if content == "" {
+		return s.fail(sink, "the assistant could not complete the response")
+	}
+	assistantMessage, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, content, toolCalls)
+	if err != nil {
+		slog.Error("persist partial assistant message", "err", err)
+		return s.fail(sink, "the assistant could not complete the response")
+	}
+	return s.failWithAssistant(sink, "the assistant could not complete the response", assistantMessage)
 }
 
 // runToolLoop streams the assistant reply, handling any MCP tool calls the
@@ -602,14 +703,9 @@ func (s *Service) runToolLoop(
 		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
 		if streamErr != nil {
 			slog.Error("chat stream failed", "err", streamErr, "conversation", conversationID)
-			if result.Content != "" {
-				content := result.Content
-				if s.secrets != nil {
-					content = secret.Redact(content, redactor.snapshot(s.secrets, userID))
-				}
-				_, _ = s.msgs.AddWithToolCalls(ctx, conversationID, model.MsgRoleAssistant, content, turnCalls)
+			return "", turnCalls, &providerStreamFailure{
+				content: s.redactAssistantContent(result.Content, redactor, userID), err: streamErr,
 			}
-			return "", turnCalls, s.fail(sink, "the assistant could not complete the response")
 		}
 		if len(result.ToolCalls) == 0 {
 			return s.completeIfTruncated(streamCtx, conversationID, req, result, onToken), turnCalls, nil
@@ -639,9 +735,18 @@ func (s *Service) runToolLoop(
 	final, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
 	if streamErr != nil {
 		slog.Error("final answer stream failed", "err", streamErr, "conversation", conversationID)
-		return "", turnCalls, s.fail(sink, "the assistant could not complete the response")
+		return "", turnCalls, &providerStreamFailure{
+			content: s.redactAssistantContent(final.Content, redactor, userID), err: streamErr,
+		}
 	}
 	return s.completeIfTruncated(streamCtx, conversationID, req, final, onToken), turnCalls, nil
+}
+
+func (s *Service) redactAssistantContent(content string, redactor *turnRedactor, userID int64) string {
+	if s.secrets == nil {
+		return content
+	}
+	return secret.Redact(content, redactor.snapshot(s.secrets, userID))
 }
 
 // maxContinuations bounds how many times a truncated (finish_reason=length)
@@ -1206,6 +1311,17 @@ func insertAfterSystem(msgs []provider.Message, m provider.Message) []provider.M
 
 func (s *Service) fail(sink EventSink, msg string) error {
 	_ = sink.Send(ChatEvent{Type: EventError, Message: msg})
+	_ = sink.Flush()
+	return errors.New(msg)
+}
+
+func (s *Service) failWithAssistant(sink EventSink, msg string, assistant model.Message) error {
+	_ = sink.Send(ChatEvent{
+		Type:               EventError,
+		Message:            msg,
+		AssistantMessageID: assistant.ID,
+		AssistantContent:   &assistant.Content,
+	})
 	_ = sink.Flush()
 	return errors.New(msg)
 }

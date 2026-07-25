@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendMessageMock = vi.fn();
 const stopGenerationMock = vi.fn();
+const editMessageMock = vi.fn();
+const regenerateMessageMock = vi.fn();
 
 vi.mock('$lib/stores/chat', async () => {
 	const { writable } = await import('svelte/store');
@@ -13,12 +15,21 @@ vi.mock('$lib/stores/chat', async () => {
 		activeId: writable(null),
 		credentialRequest: writable(null),
 		sendMessage: (...a: unknown[]) => sendMessageMock(...a),
-		stopGeneration: (...a: unknown[]) => stopGenerationMock(...a)
+		stopGeneration: (...a: unknown[]) => stopGenerationMock(...a),
+		editMessage: (...a: unknown[]) => editMessageMock(...a),
+		regenerateMessage: (...a: unknown[]) => regenerateMessageMock(...a)
 	};
 });
 
 import ChatView from './ChatView.svelte';
 import { messages, sending } from '$lib/stores/chat';
+
+beforeEach(() => {
+	Object.defineProperty(navigator, 'clipboard', {
+		value: { writeText: vi.fn().mockResolvedValue(undefined) },
+		configurable: true
+	});
+});
 
 afterEach(() => {
 	vi.clearAllMocks();
@@ -45,6 +56,82 @@ describe('ChatView', () => {
 		await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'hello' } });
 		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
 		await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith('hello'));
+	});
+
+	it('copies exact user text and assistant markdown', async () => {
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'plain prompt' },
+			{ id: 2, role: 'assistant', content: '**formatted** answer' }
+		]);
+		render(ChatView, { props: {} });
+
+		const copyButtons = screen.getAllByRole('button', { name: 'Copy message' });
+		await fireEvent.click(copyButtons[0]);
+		await fireEvent.click(copyButtons[1]);
+
+		expect(navigator.clipboard.writeText).toHaveBeenNthCalledWith(1, 'plain prompt');
+		expect(navigator.clipboard.writeText).toHaveBeenNthCalledWith(2, '**formatted** answer');
+	});
+
+	it('edits current prompt inline without confirmation', async () => {
+		editMessageMock.mockResolvedValueOnce('conv-1');
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'old prompt' },
+			{ id: 2, role: 'assistant', content: 'answer' }
+		]);
+		render(ChatView, { props: {} });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
+		const editor = screen.getByRole('textbox', { name: 'Edit message' });
+		expect(editor).toHaveValue('old prompt');
+		await fireEvent.input(editor, { target: { value: 'edited prompt' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Save edit' }));
+
+		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+		expect(editMessageMock).toHaveBeenCalledWith(1, 'edited prompt');
+	});
+
+	it('confirms an edit that removes a later user turn', async () => {
+		editMessageMock.mockResolvedValueOnce('conv-1');
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'old prompt' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'later prompt' },
+			{ id: 4, role: 'assistant', content: 'later answer' }
+		]);
+		render(ChatView, { props: {} });
+
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[0]);
+		await fireEvent.input(screen.getByRole('textbox', { name: 'Edit message' }), {
+			target: { value: 'edited prompt' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Save edit' }));
+
+		expect(screen.getByRole('dialog', { name: 'Rewrite this conversation?' })).toBeInTheDocument();
+		expect(editMessageMock).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit and continue' }));
+		expect(editMessageMock).toHaveBeenCalledWith(1, 'edited prompt');
+	});
+
+	it('regenerates current response immediately and confirms historical regeneration', async () => {
+		regenerateMessageMock.mockResolvedValue('conv-1');
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'first prompt' },
+			{ id: 2, role: 'assistant', content: 'first answer' },
+			{ id: 3, role: 'user', content: 'current prompt' },
+			{ id: 4, role: 'assistant', content: 'current answer' }
+		]);
+		render(ChatView, { props: {} });
+
+		const regenerateButtons = screen.getAllByRole('button', { name: 'Regenerate response' });
+		await fireEvent.click(regenerateButtons[1]);
+		expect(regenerateMessageMock).toHaveBeenCalledWith(4);
+
+		await fireEvent.click(regenerateButtons[0]);
+		expect(screen.getByRole('dialog', { name: 'Rewrite this conversation?' })).toBeInTheDocument();
+		expect(regenerateMessageMock).not.toHaveBeenCalledWith(2);
+		await fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+		expect(regenerateMessageMock).toHaveBeenCalledWith(2);
 	});
 
 	it('renders a running tool chip with the raw tool name', () => {

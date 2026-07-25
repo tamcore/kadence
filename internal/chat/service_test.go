@@ -21,6 +21,8 @@ import (
 	"github.com/tamcore/kadence/internal/secret"
 )
 
+const replacementReply = "replacement"
+
 type fakeProvider struct {
 	reply string
 	err   error
@@ -93,7 +95,10 @@ type fakeErr struct{}
 
 func (*fakeErr) Error() string { return "not found" }
 
-type fakeMsgs struct{ added []model.Message }
+type fakeMsgs struct {
+	added           []model.Message
+	rejectAssistant bool
+}
 
 func (f *fakeMsgs) Add(_ context.Context, convID string, role, content string) (model.Message, error) {
 	m := model.Message{ID: int64(len(f.added) + 1), ConversationID: convID, Role: role, Content: content}
@@ -105,8 +110,54 @@ func (f *fakeMsgs) AddWithToolCalls(_ context.Context, convID string, role, cont
 	f.added = append(f.added, m)
 	return m, nil
 }
+func (f *fakeMsgs) AddChatUser(ctx context.Context, convID, content string) (model.Message, error) {
+	return f.Add(ctx, convID, model.MsgRoleUser, content)
+}
+func (f *fakeMsgs) AddChatAssistantIfLatestUser(
+	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall,
+) (model.Message, error) {
+	if f.rejectAssistant {
+		return model.Message{}, errFakeNotFound
+	}
+	if len(f.added) == 0 {
+		return model.Message{}, errFakeNotFound
+	}
+	latest := f.added[len(f.added)-1]
+	if latest.Role != model.MsgRoleUser || latest.ID != expectedUser.ID || latest.Content != expectedUser.Content {
+		return model.Message{}, errFakeNotFound
+	}
+	return f.AddWithToolCalls(ctx, convID, model.MsgRoleAssistant, content, toolCalls)
+}
 func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Message, error) {
 	return f.added, nil
+}
+func (f *fakeMsgs) EditAndRewind(_ context.Context, _ string, messageID, _ int64, content string) (model.Message, error) {
+	for i := range f.added {
+		if f.added[i].ID != messageID {
+			continue
+		}
+		if f.added[i].Role != model.MsgRoleUser {
+			return model.Message{}, errFakeNotFound
+		}
+		f.added[i].Content = content
+		f.added = f.added[:i+1]
+		return f.added[i], nil
+	}
+	return model.Message{}, errFakeNotFound
+}
+func (f *fakeMsgs) RegenerateAndRewind(_ context.Context, _ string, messageID, _ int64) (model.Message, error) {
+	for i := range f.added {
+		if f.added[i].ID != messageID {
+			continue
+		}
+		if f.added[i].Role != model.MsgRoleAssistant || i == 0 {
+			return model.Message{}, errFakeNotFound
+		}
+		prompt := f.added[i-1]
+		f.added = f.added[:i]
+		return prompt, nil
+	}
+	return model.Message{}, errFakeNotFound
 }
 
 type chatAuditStore struct {
@@ -184,11 +235,12 @@ func TestStreamNewConversation(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	if sink.events[0].Type != chat.EventMeta || sink.events[0].ConversationID != testNewConvID {
-		t.Fatalf("first event = %+v, want meta with conv id", sink.events[0])
+	if sink.events[0].Type != chat.EventMeta || sink.events[0].ConversationID != testNewConvID ||
+		sink.events[0].UserMessageID != 1 {
+		t.Fatalf("first event = %+v, want meta with conv and user message ids", sink.events[0])
 	}
-	if sink.events[len(sink.events)-1].Type != chat.EventDone {
-		t.Fatalf("last event = %+v, want done", sink.events[len(sink.events)-1])
+	if last := sink.events[len(sink.events)-1]; last.Type != chat.EventDone || last.AssistantMessageID != 2 {
+		t.Fatalf("last event = %+v, want done with assistant message id", last)
 	}
 	var streamed strings.Builder
 	for _, e := range sink.events {
@@ -227,6 +279,107 @@ func TestStreamExistingConversation(t *testing.T) {
 	}
 }
 
+func TestEditRewindsAndGeneratesFromEditedPromptWithoutDuplicate(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
+	}}
+	msgs := &fakeMsgs{added: []model.Message{
+		{ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "first"},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "old prompt"},
+		{ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old response"},
+		{ID: 5, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "later"},
+	}}
+	provider := &requestCapturingProvider{reply: replacementReply}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	sink := &capturingSink{}
+	if err := svc.Edit(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 3, "edited prompt", sink,
+	); err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+
+	if len(msgs.added) != 4 || msgs.added[2].ID != 3 || msgs.added[2].Content != "edited prompt" ||
+		msgs.added[3].Role != model.MsgRoleAssistant || msgs.added[3].Content != replacementReply {
+		t.Fatalf("persisted messages = %+v", msgs.added)
+	}
+	if got := countProviderMessage(provider.request.Messages, model.MsgRoleUser, "edited prompt"); got != 1 {
+		t.Fatalf("edited prompt provider count = %d, want 1; messages=%+v", got, provider.request.Messages)
+	}
+	if sink.events[0].UserMessageID != 3 || sink.events[len(sink.events)-1].AssistantMessageID != 4 {
+		t.Fatalf("events = %+v", sink.events)
+	}
+}
+
+func TestRegenerateRewindsAndReusesPromptWithoutDuplicate(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
+	}}
+	msgs := &fakeMsgs{added: []model.Message{
+		{ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "first"},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "retry me"},
+		{ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old response"},
+		{ID: 5, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "later"},
+	}}
+	provider := &requestCapturingProvider{reply: replacementReply}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	sink := &capturingSink{}
+	if err := svc.Regenerate(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 4, sink,
+	); err != nil {
+		t.Fatalf("Regenerate: %v", err)
+	}
+
+	if len(msgs.added) != 4 || msgs.added[2].ID != 3 || msgs.added[3].Content != replacementReply {
+		t.Fatalf("persisted messages = %+v", msgs.added)
+	}
+	if got := countProviderMessage(provider.request.Messages, model.MsgRoleUser, "retry me"); got != 1 {
+		t.Fatalf("regenerated prompt provider count = %d, want 1; messages=%+v", got, provider.request.Messages)
+	}
+	if sink.events[0].UserMessageID != 3 || sink.events[len(sink.events)-1].AssistantMessageID != 4 {
+		t.Fatalf("events = %+v", sink.events)
+	}
+}
+
+type requestCapturingProvider struct {
+	reply   string
+	request provider.ChatRequest
+}
+
+func (p *requestCapturingProvider) StreamChat(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	result, err := p.StreamChatWithTools(ctx, req, onToken)
+	return result.Content, err
+}
+
+func (p *requestCapturingProvider) StreamChatWithTools(
+	_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc,
+) (provider.StreamResult, error) {
+	p.request = req
+	if err := onToken(p.reply); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: p.reply}, nil
+}
+
+func countProviderMessage(messages []provider.Message, role, content string) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == role && message.Content == content {
+			count++
+		}
+	}
+	return count
+}
+
 func TestStreamConversationNotFound(t *testing.T) {
 	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
@@ -258,6 +411,107 @@ func TestStreamProviderError(t *testing.T) {
 	}
 	if len(sink.events) == 0 || sink.events[len(sink.events)-1].Type != chat.EventError {
 		t.Fatalf("expected error event in sink, got: %v", sink.events)
+	}
+}
+
+type partialErrorProvider struct{}
+
+func (partialErrorProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", &providerErr{}
+}
+
+func (partialErrorProvider) StreamChatWithTools(
+	_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc,
+) (provider.StreamResult, error) {
+	if err := onToken("partial reply"); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: "partial reply"}, &providerErr{}
+}
+
+func TestStreamProviderErrorCarriesPersistedPartialAssistant(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
+	}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(partialErrorProvider{},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err == nil {
+		t.Fatal("Stream should fail after persisting the partial response")
+	}
+	last := sink.events[len(sink.events)-1]
+	if last.Type != chat.EventError || last.AssistantMessageID != 2 ||
+		last.AssistantContent == nil || *last.AssistantContent != "partial reply" {
+		t.Fatalf("provider error event = %+v, want persisted partial assistant", last)
+	}
+}
+
+func TestStreamProviderErrorOmitsAssistantIdentityWhenPartialIsStale(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
+	}}
+	msgs := &fakeMsgs{rejectAssistant: true}
+	svc := chat.NewService(partialErrorProvider{},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err == nil {
+		t.Fatal("Stream should fail when the partial response is stale")
+	}
+	last := sink.events[len(sink.events)-1]
+	if last.Type != chat.EventError || last.AssistantMessageID != 0 || last.AssistantContent != nil {
+		t.Fatalf("stale provider error event = %+v, want no assistant identity", last)
+	}
+	if len(msgs.added) != 1 || msgs.added[0].Role != model.MsgRoleUser {
+		t.Fatalf("messages after stale partial = %+v, want only the user message", msgs.added)
+	}
+}
+
+type preliminaryToolProvider struct{ calls int }
+
+func (p *preliminaryToolProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", errors.New("StreamChat should not be called")
+}
+
+func (p *preliminaryToolProvider) StreamChatWithTools(
+	_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc,
+) (provider.StreamResult, error) {
+	p.calls++
+	if p.calls == 1 {
+		if err := onToken("preliminary text"); err != nil {
+			return provider.StreamResult{}, err
+		}
+		return provider.StreamResult{Content: "preliminary text", ToolCalls: []provider.ToolCall{{
+			ID: "call-1", Name: testToolName, Arguments: "{}",
+		}}}, nil
+	}
+	if err := onToken("canonical answer"); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: "canonical answer"}, nil
+}
+
+func TestStreamDoneCarriesCanonicalAssistantContentAfterToolLoop(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	streamer := &preliminaryToolProvider{}
+	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}}
+	svc := chat.NewService(streamer,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
+
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	last := sink.events[len(sink.events)-1]
+	if last.Type != chat.EventDone || last.AssistantContent == nil ||
+		*last.AssistantContent != "canonical answer" {
+		t.Fatalf("done event = %+v, want canonical assistant content", last)
 	}
 }
 
@@ -415,6 +669,10 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 	}
 	if streamed.String() != testGuardrailRefusal {
 		t.Fatalf("streamed = %q", streamed.String())
+	}
+	if done := sink.events[len(sink.events)-1]; done.Type != chat.EventDone ||
+		done.AssistantMessageID != last.ID {
+		t.Fatalf("guardrail done event = %+v, want persisted assistant id %d", done, last.ID)
 	}
 }
 

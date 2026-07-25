@@ -2,10 +2,14 @@ import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const streamChatMock = vi.fn();
+const editMessageMock = vi.fn();
+const regenerateMessageMock = vi.fn();
 const listConversationsMock = vi.fn().mockResolvedValue([]);
 const renameConversationMock = vi.fn().mockResolvedValue({ id: '1', title: 'renamed' });
 vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
+	editMessage: (...a: unknown[]) => editMessageMock(...a),
+	regenerateMessage: (...a: unknown[]) => regenerateMessageMock(...a),
 	listConversations: (...a: unknown[]) => listConversationsMock(...a),
 	getMessages: vi.fn().mockResolvedValue([]),
 	renameConversation: (...a: unknown[]) => renameConversationMock(...a),
@@ -19,6 +23,8 @@ import {
 	credentialRequest,
 	messages,
 	newChat,
+	editMessage,
+	regenerateMessage,
 	refreshConversations,
 	renameConversation,
 	sendMessage,
@@ -33,6 +39,8 @@ async function* events(evs: unknown[]) {
 beforeEach(() => {
 	newChat();
 	streamChatMock.mockReset();
+	editMessageMock.mockReset();
+	regenerateMessageMock.mockReset();
 	listConversationsMock.mockReset().mockResolvedValue([]);
 	renameConversationMock.mockReset().mockResolvedValue({ id: '1', title: 'renamed' });
 });
@@ -41,10 +49,10 @@ afterEach(() => vi.clearAllMocks());
 describe('chat store', () => {
 	it('sendMessage appends user msg, streams tokens, and captures the new conversation id', async () => {
 		streamChatMock.mockReturnValueOnce(events([
-			{ type: 'meta', conversationId: '11111111-1111-1111-1111-111111111111' },
+			{ type: 'meta', conversationId: '11111111-1111-1111-1111-111111111111', userMessageId: 11 },
 			{ type: 'token', delta: 'Hel' },
 			{ type: 'token', delta: 'lo' },
-			{ type: 'done' }
+			{ type: 'done', assistantMessageId: 12 }
 		]));
 
 		const id = await sendMessage('hi coach');
@@ -52,12 +60,154 @@ describe('chat store', () => {
 		expect(id).toBe('11111111-1111-1111-1111-111111111111');
 		expect(get(activeId)).toBe('11111111-1111-1111-1111-111111111111');
 		const msgs = get(messages);
-		expect(msgs[0]).toEqual({ role: 'user', content: 'hi coach' });
+		expect(msgs[0]).toEqual({ id: 11, role: 'user', content: 'hi coach' });
 		expect(msgs[1]).toEqual({
+			id: 12,
 			role: 'assistant',
 			content: 'Hello',
 			parts: [{ kind: 'text', content: 'Hello' }]
 		});
+	});
+
+	it('editMessage rewinds later turns and streams a replacement', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'old prompt' },
+			{ id: 4, role: 'assistant', content: 'old response' },
+			{ id: 5, role: 'user', content: 'later prompt' }
+		]);
+		editMessageMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 3 },
+			{ type: 'token', delta: 'replacement' },
+			{ type: 'done', assistantMessageId: 6 }
+		]));
+
+		await editMessage(3, 'edited prompt');
+
+		expect(editMessageMock).toHaveBeenCalledWith(
+			'conv-1',
+			3,
+			'edited prompt',
+			expect.any(AbortSignal)
+		);
+		expect(get(messages)).toEqual([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'edited prompt' },
+			{
+				id: 6,
+				role: 'assistant',
+				content: 'replacement',
+				parts: [{ kind: 'text', content: 'replacement' }]
+			}
+		]);
+	});
+
+	it('regenerateMessage removes selected response and later turns before streaming', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'retry me' },
+			{ id: 4, role: 'assistant', content: 'old response' },
+			{ id: 5, role: 'user', content: 'later prompt' }
+		]);
+		regenerateMessageMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 3 },
+			{ type: 'token', delta: 'new response' },
+			{ type: 'done', assistantMessageId: 6 }
+		]));
+
+		await regenerateMessage(4);
+
+		expect(regenerateMessageMock).toHaveBeenCalledWith(
+			'conv-1',
+			4,
+			expect.any(AbortSignal)
+		);
+		expect(get(messages)).toEqual([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'retry me' },
+			{
+				id: 6,
+				role: 'assistant',
+				content: 'new response',
+				parts: [{ kind: 'text', content: 'new response' }]
+			}
+		]);
+	});
+
+	it('restores the edit snapshot when the server rejects before meta', async () => {
+		activeId.set('conv-1');
+		const original = [
+			{ id: 1, role: 'user' as const, content: 'first' },
+			{ id: 2, role: 'assistant' as const, content: 'answer' },
+			{ id: 3, role: 'user' as const, content: 'old prompt' },
+			{ id: 4, role: 'assistant' as const, content: 'old response' }
+		];
+		messages.set(original);
+		editMessageMock.mockReturnValueOnce(events([{ type: 'error', message: 'edit rejected' }]));
+
+		await editMessage(3, 'edited prompt');
+
+		expect(get(messages)).toEqual(original);
+		expect(get(chatError)).toBe('edit rejected');
+	});
+
+	it('keeps the rewound edit transcript when the server errors after meta', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'old prompt' },
+			{ id: 4, role: 'assistant', content: 'old response' }
+		]);
+		editMessageMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 3 },
+			{ type: 'error', message: 'provider failed' }
+		]));
+
+		await editMessage(3, 'edited prompt');
+
+		expect(get(messages)).toEqual([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'edited prompt' },
+			{ role: 'assistant', content: '', parts: [] }
+		]);
+		expect(get(chatError)).toBe('provider failed');
+	});
+
+	it('does not restore an old conversation when newChat aborts an edit before meta', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' },
+			{ id: 3, role: 'user', content: 'old prompt' },
+			{ id: 4, role: 'assistant', content: 'old response' }
+		]);
+		editMessageMock.mockImplementationOnce(async function* (
+			_conversationId: string,
+			_messageId: number,
+			_text: string,
+			signal: AbortSignal
+		) {
+			await new Promise((_resolve, reject) => {
+				signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+			});
+		});
+
+		const editPromise = editMessage(3, 'edited prompt');
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		newChat();
+		await editPromise;
+
+		expect(get(activeId)).toBeNull();
+		expect(get(messages)).toEqual([]);
+		expect(get(chatError)).toBeNull();
 	});
 
 	it('surfaces an error event', async () => {
@@ -134,6 +284,50 @@ describe('chat store', () => {
 			{ kind: 'text', content: 'You ran 10km.' }
 		]);
 		expect(assistant.content).toBe('You ran 10km.');
+	});
+
+	it('uses the persisted canonical text after a tool loop while preserving streamed parts', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: '77777777-7777-7777-7777-777777777777' },
+			{ type: 'token', delta: 'I will check that. ' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{ type: 'token', delta: 'Your streamed summary.' },
+			{ type: 'done', assistantMessageId: 12, assistantContent: 'Your canonical saved answer.' }
+		]));
+
+		await sendMessage('hi');
+
+		const assistant = get(messages)[1];
+		expect(assistant.id).toBe(12);
+		expect(assistant.content).toBe('Your canonical saved answer.');
+		expect(assistant.parts).toEqual([
+			{ kind: 'text', content: 'I will check that. ' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'text', content: 'Your streamed summary.' }
+		]);
+	});
+
+	it('keeps a persisted partial assistant actionable after a provider error', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: '88888888-8888-8888-8888-888888888888' },
+			{ type: 'token', delta: 'partial' },
+			{
+				type: 'error',
+				message: 'the assistant could not complete the response',
+				assistantMessageId: 12,
+				assistantContent: 'partial canonical'
+			}
+		]));
+
+		await sendMessage('hi');
+
+		expect(get(messages)[1]).toMatchObject({
+			id: 12,
+			role: 'assistant',
+			content: 'partial canonical'
+		});
+		expect(get(chatError)).toBe('the assistant could not complete the response');
 	});
 
 	it('places tool parts inline and in order before later text', async () => {

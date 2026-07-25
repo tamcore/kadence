@@ -430,10 +430,10 @@ func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	if _, err := repo.SaveProposal(ctx, stale, owner.ID, 1); !errors.Is(err, store.ErrStaleScheduledProposal) {
 		t.Fatalf("stale SaveProposal err=%v", err)
 	}
-	draft.CompiledPrompt = "new prompt"
+	draft.CompiledPrompt = testNewPrompt
 	draft.Name = "Edited"
 	saved, err := repo.SaveProposal(ctx, draft, owner.ID, 2)
-	if err != nil || saved.CompiledPrompt != "new prompt" {
+	if err != nil || saved.CompiledPrompt != testNewPrompt {
 		t.Fatalf("SaveProposal = %+v, %v", saved, err)
 	}
 	if _, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, 1, time.Now().UTC()); !errors.Is(err, store.ErrStaleScheduledProposal) {

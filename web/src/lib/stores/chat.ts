@@ -1,5 +1,5 @@
 import { get, writable } from 'svelte/store';
-import type { ChatMessage, Conversation, CredentialRequest, MessagePart } from '$lib/types';
+import type { ChatEvent, ChatMessage, Conversation, CredentialRequest, MessagePart } from '$lib/types';
 import * as chatApi from '$lib/api/chat';
 
 export const messages = writable<ChatMessage[]>([]);
@@ -99,36 +99,162 @@ function updateToolPart(
 
 // sendMessage streams a reply; returns the conversation id (new or existing), or null on error.
 export async function sendMessage(text: string): Promise<string | null> {
+	if (get(sending)) return null;
 	chatError.set(null);
 	credentialRequest.set(null);
 	sending.set(true);
+	const userIdx = get(messages).length;
 	messages.update((m) => [...m, { role: 'user', content: text }]);
 	messages.update((m) => [...m, { role: 'assistant', content: '', parts: [] }]);
 	const assistantIdx = get(messages).length - 1;
+	const localAbort = beginStream();
+	const body = { conversationId: get(activeId) ?? undefined, message: text };
+	const convId = await consumeStream(
+		chatApi.streamChat(body, localAbort.signal),
+		userIdx,
+		assistantIdx,
+		get(activeId),
+		localAbort
+	);
+	if (convId != null) void refreshConversations();
+	return convId;
+}
 
+// editMessage rewinds the local transcript at one persisted user message and
+// streams its server-side replacement turn.
+export async function editMessage(messageId: number, text: string): Promise<string | null> {
+	if (get(sending)) return null;
+	const conversationId = get(activeId);
+	const current = get(messages);
+	const userIdx = current.findIndex((message) => message.id === messageId && message.role === 'user');
+	if (conversationId == null || userIdx < 0) {
+		chatError.set('Could not edit message');
+		return null;
+	}
+
+	chatError.set(null);
+	credentialRequest.set(null);
+	sending.set(true);
+	messages.set([
+		...current.slice(0, userIdx),
+		{ ...current[userIdx], content: text },
+		{ role: 'assistant', content: '', parts: [] }
+	]);
+	const assistantIdx = userIdx + 1;
+	const localAbort = beginStream();
+	const convId = await consumeStream(
+		chatApi.editMessage(conversationId, messageId, text, localAbort.signal),
+		userIdx,
+		assistantIdx,
+		conversationId,
+		localAbort,
+		current
+	);
+	if (convId != null) void refreshConversations();
+	return convId;
+}
+
+// regenerateMessage rewinds the local transcript before one persisted
+// assistant response and streams its replacement.
+export async function regenerateMessage(messageId: number): Promise<string | null> {
+	if (get(sending)) return null;
+	const conversationId = get(activeId);
+	const current = get(messages);
+	const assistantIdx = current.findIndex(
+		(message) => message.id === messageId && message.role === 'assistant'
+	);
+	if (
+		conversationId == null ||
+		assistantIdx <= 0 ||
+		current[assistantIdx - 1].role !== 'user'
+	) {
+		chatError.set('Could not regenerate response');
+		return null;
+	}
+
+	chatError.set(null);
+	credentialRequest.set(null);
+	sending.set(true);
+	messages.set([
+		...current.slice(0, assistantIdx),
+		{ role: 'assistant', content: '', parts: [] }
+	]);
+	const localAbort = beginStream();
+	const convId = await consumeStream(
+		chatApi.regenerateMessage(conversationId, messageId, localAbort.signal),
+		assistantIdx - 1,
+		assistantIdx,
+		conversationId,
+		localAbort,
+		current
+	);
+	if (convId != null) void refreshConversations();
+	return convId;
+}
+
+function beginStream(): AbortController {
+	const localAbort = new AbortController();
+	abort = localAbort;
+	return localAbort;
+}
+
+async function consumeStream(
+	stream: AsyncIterable<ChatEvent>,
+	userIdx: number,
+	assistantIdx: number,
+	initialConversationId: string | null,
+	localAbort: AbortController,
+	restoreBeforeMeta?: ChatMessage[]
+): Promise<string | null> {
 	function updateAssistantParts(update: (parts: MessagePart[]) => MessagePart[]): void {
 		messages.update((m) => {
 			const copy = [...m];
 			const current = copy[assistantIdx];
+			if (!current) return m;
 			const nextParts = update(current.parts ?? []);
 			const textContent = nextParts
 				.filter((p): p is Extract<MessagePart, { kind: 'text' }> => p.kind === 'text')
 				.map((p) => p.content)
 				.join('');
-			copy[assistantIdx] = { role: 'assistant', content: textContent, parts: nextParts };
+			copy[assistantIdx] = { ...current, role: 'assistant', content: textContent, parts: nextParts };
 			return copy;
 		});
 	}
 
-	const localAbort = new AbortController();
-	abort = localAbort;
-	const body = { conversationId: get(activeId) ?? undefined, message: text };
-	let convId: string | null = get(activeId);
+	let convId = initialConversationId;
+	let receivedMeta = false;
+	function restoreRejectedRewrite(): void {
+		if (!receivedMeta && restoreBeforeMeta) messages.set(restoreBeforeMeta);
+	}
+	function applyPersistedAssistant(
+		event: Extract<ChatEvent, { type: 'done' | 'error' }>
+	): void {
+		if (event.assistantMessageId === undefined && event.assistantContent === undefined) return;
+		messages.update((current) => {
+			const copy = [...current];
+			const assistant = copy[assistantIdx];
+			if (!assistant) return current;
+			copy[assistantIdx] = {
+				...assistant,
+				...(event.assistantMessageId === undefined ? {} : { id: event.assistantMessageId }),
+				...(event.assistantContent === undefined ? {} : { content: event.assistantContent })
+			};
+			return copy;
+		});
+	}
 	try {
-		for await (const ev of chatApi.streamChat(body, localAbort.signal)) {
+		for await (const ev of stream) {
 			if (ev.type === 'meta') {
+				receivedMeta = true;
 				convId = ev.conversationId;
 				if (get(activeId) === null) activeId.set(convId);
+				if (ev.userMessageId !== undefined) {
+					messages.update((current) => {
+						const copy = [...current];
+						if (copy[userIdx]) copy[userIdx] = { ...copy[userIdx], id: ev.userMessageId };
+						return copy;
+					});
+				}
 			} else if (ev.type === 'token') {
 				updateAssistantParts((parts) => appendTextDelta(parts, ev.delta));
 			} else if (ev.type === 'tool') {
@@ -149,10 +275,13 @@ export async function sendMessage(text: string): Promise<string | null> {
 					fields: ev.fields
 				});
 			} else if (ev.type === 'error') {
+				applyPersistedAssistant(ev);
+				restoreRejectedRewrite();
 				chatError.set(ev.message);
 				credentialRequest.set(null);
 				break;
 			} else if (ev.type === 'done') {
+				applyPersistedAssistant(ev);
 				credentialRequest.set(null);
 				break;
 			}
@@ -161,7 +290,13 @@ export async function sendMessage(text: string): Promise<string | null> {
 		// Intentional aborts should not surface as errors to the user; mark the
 		// partial assistant reply as stopped instead so the UI can end cleanly.
 		if (!localAbort.signal.aborted) {
+			restoreRejectedRewrite();
 			chatError.set('The chat stream was interrupted');
+		} else if (!receivedMeta && restoreBeforeMeta) {
+			// Navigation/new-chat already replaced this conversation state.
+			// Only restore an unaccepted rewrite when the same conversation
+			// remains active (for example, Stop was pressed before meta).
+			if (get(activeId) === initialConversationId) messages.set(restoreBeforeMeta);
 		} else {
 			messages.update((m) => {
 				const copy = [...m];
@@ -179,6 +314,5 @@ export async function sendMessage(text: string): Promise<string | null> {
 			abort = null;
 		}
 	}
-	void refreshConversations();
 	return convId;
 }

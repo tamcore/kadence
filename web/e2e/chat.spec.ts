@@ -18,6 +18,37 @@ test('sending a chat message shows the stub assistant reply with no error', asyn
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+test('edits and regenerates persisted chat turns', async ({ page }) => {
+	await login(page, USERNAME, PASSWORD);
+	await page.goto('/chat');
+
+	const composer = page.getByLabel('Message');
+	await composer.fill('First prompt');
+	await composer.press('Enter');
+	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(1);
+
+	await composer.fill('Later prompt');
+	await composer.press('Enter');
+	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(2);
+
+	const firstUserBlock = page.getByTestId('chat-message-user').first().locator('..');
+	await firstUserBlock.getByRole('button', { name: 'Edit message' }).click();
+	await page.getByRole('textbox', { name: 'Edit message' }).fill('Edited first prompt');
+	await page.getByRole('button', { name: 'Save edit' }).click();
+	await expect(page.getByRole('dialog', { name: 'Rewrite this conversation?' })).toBeVisible();
+	await page.getByRole('button', { name: 'Edit and continue' }).click();
+
+	await expect(page.getByTestId('chat-message-user')).toHaveCount(1);
+	await expect(page.getByTestId('chat-message-user')).toContainText('Edited first prompt');
+	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(1);
+
+	const regenerate = page.getByRole('button', { name: 'Regenerate response' });
+	await regenerate.click();
+	await expect(regenerate).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(1);
+	await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('keeps the desktop chat thread and composer in a shared 960px column', async ({ page }) => {
 	await page.setViewportSize({ width: 1600, height: 1000 });
 	await login(page, USERNAME, PASSWORD);

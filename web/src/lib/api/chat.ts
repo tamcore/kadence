@@ -11,16 +11,49 @@ export async function* streamChat(
 	body: ChatRequestBody,
 	signal: AbortSignal
 ): AsyncIterable<ChatEvent> {
+	yield* streamRequest('/api/chat', body, signal);
+}
+
+export async function* editMessage(
+	conversationId: string,
+	messageId: number,
+	message: string,
+	signal: AbortSignal
+): AsyncIterable<ChatEvent> {
+	yield* streamRequest(
+		`/api/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}/edit`,
+		{ message },
+		signal
+	);
+}
+
+export async function* regenerateMessage(
+	conversationId: string,
+	messageId: number,
+	signal: AbortSignal
+): AsyncIterable<ChatEvent> {
+	yield* streamRequest(
+		`/api/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}/regenerate`,
+		undefined,
+		signal
+	);
+}
+
+async function* streamRequest(
+	path: string,
+	body: unknown,
+	signal: AbortSignal
+): AsyncIterable<ChatEvent> {
 	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 	const token = getCsrfToken();
 	if (token) headers['X-CSRF-Token'] = token;
 
-	const resp = await fetch('/api/chat', {
+	const resp = await fetch(path, {
 		method: 'POST',
 		credentials: 'include',
 		signal,
 		headers,
-		body: JSON.stringify(body)
+		body: body === undefined ? undefined : JSON.stringify(body)
 	});
 	const rotated = resp.headers.get('X-CSRF-Token');
 	if (rotated) setCsrfToken(rotated);
