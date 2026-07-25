@@ -13,6 +13,16 @@ import Login from './+page.svelte';
 afterEach(() => vi.clearAllMocks());
 
 describe('login page', () => {
+	it('shows decorative artwork without changing the Kadence heading name', () => {
+		render(Login);
+
+		const heading = screen.getByRole('heading', { name: 'Kadence' });
+		const icon = heading.querySelector('img');
+		expect(icon).toHaveAttribute('alt', '');
+		expect(icon).toHaveAttribute('width', '72');
+		expect(icon).toHaveAttribute('height', '72');
+	});
+
 	it('renders username + password fields and a submit button', () => {
 		render(Login);
 		expect(screen.getByLabelText(/username/i)).toBeInTheDocument();

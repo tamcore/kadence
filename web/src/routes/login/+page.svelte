@@ -58,7 +58,10 @@
 
 <main class="login">
 	<form class="card" onsubmit={handleSubmit}>
-		<h1>Kadence</h1>
+		<h1>
+			<img src="/icons/icon-192.png" alt="" width="72" height="72" />
+			<span>Kadence</span>
+		</h1>
 		<Input label="Username" name="username" required autocomplete="username" bind:value={username} />
 		<Input label="Password" name="password" type="password" required autocomplete="current-password" bind:value={password} />
 		<label class="remember">
@@ -80,7 +83,11 @@
 		background: var(--surface); padding: 32px; border-radius: var(--radius);
 		box-shadow: var(--shadow); width: 100%; max-width: 360px;
 	}
-	h1 { margin: 0 0 24px; text-align: center; }
+	h1 {
+		display: flex; flex-direction: column; align-items: center; gap: 10px;
+		margin: 0 0 24px; text-align: center;
+	}
+	h1 img { border-radius: 16px; }
 	.remember { display: flex; align-items: center; gap: 8px; margin: 8px 0 16px; font-size: 0.9rem; }
 	.error { color: var(--danger); font-size: 0.9rem; margin-bottom: 12px; }
 	.divider {

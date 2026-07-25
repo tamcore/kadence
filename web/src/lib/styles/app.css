@@ -31,7 +31,8 @@ a { color: var(--accent); }
 .main { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
 .main > main { flex: 1; min-height: 0; overflow-y: auto; }
 .mobilebar { display: none; }
-.brand-sm { font-weight: 600; }
+.brand-sm { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.brand-sm img { flex: 0 0 auto; border-radius: 5px; }
 /* Padded, centered content wrapper for non-chat pages (documents, admin). */
 .page { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
 .scrim { display: none; }

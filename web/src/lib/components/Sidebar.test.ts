@@ -79,6 +79,16 @@ afterEach(() => {
 });
 
 describe('Sidebar', () => {
+	it('shows decorative artwork without changing the Kadence link name', () => {
+		render(Sidebar, { props: {} });
+
+		const brand = screen.getByRole('link', { name: 'Kadence' });
+		const icon = brand.querySelector('img');
+		expect(icon).toHaveAttribute('alt', '');
+		expect(icon).toHaveAttribute('width', '24');
+		expect(icon).toHaveAttribute('height', '24');
+	});
+
 	it('shows Scheduled only when enabled and marks descendant routes active', () => {
 		(currentUser as unknown as { set: (v: unknown) => void }).set({
 			username: 'alice',

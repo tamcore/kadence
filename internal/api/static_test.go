@@ -17,6 +17,9 @@ func newTestFS() fstest.MapFS {
 		"assets/app.js": &fstest.MapFile{
 			Data: []byte("console.log('kadence');"),
 		},
+		"manifest.json": &fstest.MapFile{
+			Data: []byte(`{"name":"Kadence"}`),
+		},
 	}
 }
 
@@ -42,6 +45,24 @@ func TestStaticHandlerServesExistingFile(t *testing.T) {
 	want := "console.log('kadence');"
 	if string(body) != want {
 		t.Fatalf("body = %q, want %q", string(body), want)
+	}
+}
+
+func TestStaticHandlerServesManifestAsJSON(t *testing.T) {
+	srv := httptest.NewServer(staticHandler(newTestFS()))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/manifest.json")
+	if err != nil {
+		t.Fatalf("GET /manifest.json: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
 }
 

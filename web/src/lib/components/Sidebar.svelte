@@ -94,7 +94,10 @@
 </script>
 
 <div class="sidebar-inner">
-	<a href="/" class="brand">Kadence</a>
+	<a href="/" class="brand">
+		<img src="/icons/icon-192.png" alt="" width="24" height="24" />
+		<span>Kadence</span>
+	</a>
 
 	<button class="new" onclick={startNew}>+ New chat</button>
 
@@ -191,11 +194,18 @@
 		gap: 12px;
 	}
 	.brand {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 		font-weight: 700;
 		text-decoration: none;
 		color: var(--text);
 		font-size: 1.1rem;
 		padding: 0 4px;
+	}
+	.brand img {
+		flex: 0 0 auto;
+		border-radius: 5px;
 	}
 	.new {
 		width: 100%;

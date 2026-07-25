@@ -121,7 +121,10 @@
 		<div class="main">
 			<div class="mobilebar">
 				<button class="hamburger" onclick={toggleSidebar} aria-label="Menu">☰</button>
-				<span class="brand-sm">Kadence</span>
+				<span class="brand-sm">
+					<img src="/icons/icon-192.png" alt="" width="24" height="24" />
+					<span>Kadence</span>
+				</span>
 			</div>
 			<main>{@render children()}</main>
 		</div>
