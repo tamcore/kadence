@@ -77,7 +77,7 @@ func TestSystemPromptAddsSchedulingGuidanceOnlyWhenEnabled(t *testing.T) {
 	enabled := NewService(nil, ServiceConfig{}, Deps{Scheduled: scheduledHandoffStub{}})
 	prompt := enabled.systemPrompt(UserContext{})
 	for _, want := range []string{
-		draftScheduledTaskToolName, "current user", "independently confirmable", "Delegate data work", "never claim activation",
+		draftScheduledTaskToolName, "explicitly requests scheduling in the current user turn", "independently confirmable", "Delegate data work", "never claim activation",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("scheduling guidance missing %q: %s", want, prompt)
