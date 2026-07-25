@@ -17,3 +17,55 @@ test('sending a chat message shows the stub assistant reply with no error', asyn
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
+
+test('keeps the desktop chat thread and composer in a shared 960px column', async ({ page }) => {
+	await page.setViewportSize({ width: 1600, height: 1000 });
+	await login(page, USERNAME, PASSWORD);
+	await page.goto('/chat');
+
+	const thread = page.getByTestId('chat-thread');
+	const composer = page.getByTestId('chat-composer');
+	await expect(thread).toHaveCSS('max-width', '960px');
+	await expect(composer).toHaveCSS('max-width', '960px');
+	await expect(thread).toHaveJSProperty('clientWidth', 960);
+	await expect(composer).toHaveJSProperty('clientWidth', 960);
+});
+
+test('uses a flat full-width assistant reply and a capped right-aligned user bubble', async ({ page }) => {
+	await page.setViewportSize({ width: 1600, height: 1000 });
+	await login(page, USERNAME, PASSWORD);
+	await page.goto('/chat');
+
+	const composer = page.getByLabel('Message');
+	await composer.fill('A long message '.repeat(100));
+	await composer.press('Enter');
+	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
+
+	const thread = page.getByTestId('chat-thread');
+	const assistant = page.getByTestId('chat-message-assistant').last();
+	const user = page.getByTestId('chat-message-user').last();
+	const [threadBox, assistantBox, userBox] = await Promise.all([
+		thread.boundingBox(),
+		assistant.boundingBox(),
+		user.boundingBox()
+	]);
+
+	expect(threadBox).not.toBeNull();
+	expect(assistantBox).not.toBeNull();
+	expect(userBox).not.toBeNull();
+	expect(assistantBox!.width).toBeCloseTo(threadBox!.width, 0);
+	expect(userBox!.width).toBeLessThanOrEqual(threadBox!.width * 0.8 + 1);
+	expect(userBox!.x + userBox!.width).toBeCloseTo(threadBox!.x + threadBox!.width, 0);
+	await expect(assistant).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+	await expect(assistant).toHaveCSS('border-top-width', '0px');
+});
+
+test('does not overflow horizontally on a narrow mobile viewport', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await login(page, USERNAME, PASSWORD);
+	await page.goto('/chat');
+
+	await expect
+		.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+		.toBe(true);
+});

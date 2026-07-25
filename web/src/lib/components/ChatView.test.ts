@@ -32,6 +32,13 @@ describe('ChatView', () => {
 		expect(screen.getByText('hi').tagName.toLowerCase()).toBe('strong');
 	});
 
+	it('exposes stable geometry hooks for browser layout checks', () => {
+		const { container } = render(ChatView, { props: {} });
+		expect(screen.getByTestId('chat-thread')).toBeInTheDocument();
+		expect(screen.getByTestId('chat-composer')).toBeInTheDocument();
+		expect(container.querySelector('[data-testid="chat-message-assistant"]')).toBeInTheDocument();
+	});
+
 	it('calls sendMessage on submit', async () => {
 		sendMessageMock.mockResolvedValueOnce(9);
 		render(ChatView, { props: {} });

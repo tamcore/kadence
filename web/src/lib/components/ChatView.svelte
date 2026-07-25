@@ -56,9 +56,9 @@
 
 <div class="chat">
 	<div class="thread" bind:this={threadEl}>
-		<div class="thread-inner">
+		<div class="thread-inner" data-testid="chat-thread">
 			{#each $messages as m, i (i)}
-				<div class="msg {m.role}">
+				<div class="msg {m.role}" data-testid={`chat-message-${m.role}`}>
 					{#if m.role === 'assistant'}
 						{#if m.parts?.length}
 							{#each m.parts as part, j (j)}
@@ -97,26 +97,37 @@
 
 	<div class="composer-area">
 		{#if $credentialRequest}
-			<CredentialPrompt request={$credentialRequest} />
+			<div class="credential-column">
+				<CredentialPrompt request={$credentialRequest} />
+			</div>
 		{/if}
 		{#if $sending}
 			<button class="stop-btn" type="button" onclick={stopGeneration}>Stop generating</button>
 		{/if}
-		<Composer disabled={$sending} onSubmit={(t) => submit(t)} />
+		<div class="composer-column" data-testid="chat-composer">
+			<Composer disabled={$sending} onSubmit={(t) => submit(t)} />
+		</div>
 	</div>
 </div>
 
 <style>
-	.chat { display: flex; flex-direction: column; height: 100%; }
+	.chat {
+		--chat-content-width: 960px;
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+	}
 	.thread { flex: 1; overflow-y: auto; padding: 24px 20px 0; }
 	.thread-inner {
-		max-width: 760px; margin: 0 auto;
+		width: 100%; max-width: var(--chat-content-width); margin: 0 auto;
+		box-sizing: border-box;
 		display: flex; flex-direction: column; gap: 16px; padding-bottom: 16px;
 	}
-	.msg { max-width: 80%; padding: 10px 14px; border-radius: var(--radius); }
+	.msg { max-width: 80%; box-sizing: border-box; padding: 10px 14px; border-radius: var(--radius); }
 	.msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 	.msg.assistant {
-		align-self: flex-start; background: var(--surface); border: 1px solid var(--border);
+		align-self: stretch; width: 100%; max-width: none; padding: 0;
+		background: transparent; border: 0;
 		display: flex; flex-direction: column; gap: 8px;
 	}
 	.msg p { margin: 0; }
@@ -146,7 +157,7 @@
 	}
 	.stop-btn {
 		align-self: center;
-		max-width: 760px;
+		max-width: var(--chat-content-width);
 		width: 100%;
 		box-sizing: border-box;
 		padding: 8px 14px;
@@ -166,6 +177,13 @@
 		flex-direction: column;
 		gap: 12px;
 	}
-	.composer-area :global(.composer) { max-width: 760px; margin: 0 auto; width: 100%; box-sizing: border-box; }
-	.composer-area :global(.credential-prompt) { max-width: 760px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+	.composer-column,
+	.credential-column {
+		width: 100%;
+		max-width: var(--chat-content-width);
+		margin: 0 auto;
+		box-sizing: border-box;
+	}
+	.composer-column :global(.composer),
+	.credential-column :global(.credential-prompt) { width: 100%; box-sizing: border-box; }
 </style>
