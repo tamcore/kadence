@@ -50,6 +50,7 @@ go.work.sum
 docs/superpowers
 IDEA.md
 AGENTS.md.local
+.worktrees/
 
 # Playwright MCP local state
 .playwright-mcp/
