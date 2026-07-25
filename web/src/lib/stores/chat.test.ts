@@ -293,6 +293,26 @@ describe('chat store', () => {
 		]);
 	});
 
+	it('keeps generic tool updates before scheduled cards after an artifact', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-2', ordinal: 2, artifactState: 'ready' } },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{ type: 'done', assistantMessageId: 2 }
+		]));
+
+		await sendMessage('delegate this');
+
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: '' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
+		]);
+	});
+
 	it('refetches canonical artifacts and reports interruption after an accepted edit ends without a terminal event', async () => {
 		activeId.set('conv-1');
 		messages.set([

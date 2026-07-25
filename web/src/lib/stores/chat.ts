@@ -265,7 +265,15 @@ async function consumeStream(
 				.filter((p): p is Extract<MessagePart, { kind: 'text' }> => p.kind === 'text')
 				.map((p) => p.content)
 				.join('');
-			copy[assistantIdx] = { ...current, role: 'assistant', content: textContent, parts: nextParts };
+			const scheduledArtifacts = current.scheduledArtifacts ?? [];
+			copy[assistantIdx] = {
+				...current,
+				role: 'assistant',
+				content: textContent,
+				parts: scheduledArtifacts.length
+					? textFirstParts({ ...current, content: textContent, parts: nextParts }, scheduledArtifacts)
+					: nextParts
+			};
 			return copy;
 		});
 	}
