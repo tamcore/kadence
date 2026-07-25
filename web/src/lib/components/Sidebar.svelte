@@ -156,6 +156,7 @@
 		{#if $isAdmin}
 			<a href="/admin/users" onclick={closeSidebar}>Users</a>
 			<a href="/admin/documents" onclick={closeSidebar}>Public Docs</a>
+			<a href="/admin/mcp-audit" onclick={closeSidebar}>MCP Audit</a>
 		{/if}
 	</nav>
 

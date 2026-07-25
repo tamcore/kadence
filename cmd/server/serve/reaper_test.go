@@ -84,3 +84,47 @@ func TestRunSessionReaperLogsErrorAndKeepsRunning(t *testing.T) {
 		t.Fatal("runSessionReaper did not exit after context cancellation despite errors")
 	}
 }
+
+type fakeMCPAuditReaper struct {
+	mu      sync.Mutex
+	cutoffs []time.Time
+}
+
+func (f *fakeMCPAuditReaper) DeleteBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cutoffs = append(f.cutoffs, cutoff)
+	return 1, nil
+}
+
+func (f *fakeMCPAuditReaper) snapshot() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Time(nil), f.cutoffs...)
+}
+
+func TestRunMCPAuditReaperRunsImmediatelyWithTTLThenTicks(t *testing.T) {
+	repo := &fakeMCPAuditReaper{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	go func() {
+		runMCPAuditReaper(ctx, repo, 48*time.Hour, 5*time.Millisecond, slog.Default(), func() time.Time { return now })
+		close(done)
+	}()
+
+	deadline := time.Now().Add(reaperTestTimeout)
+	for len(repo.snapshot()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cutoffs := repo.snapshot()
+	if len(cutoffs) < 2 || !cutoffs[0].Equal(now.Add(-48*time.Hour)) {
+		t.Fatalf("cutoffs = %v", cutoffs)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(reaperTestTimeout):
+		t.Fatal("runMCPAuditReaper did not exit after context cancellation")
+	}
+}

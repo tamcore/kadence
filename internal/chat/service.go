@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/chat/skill"
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/secret"
@@ -186,6 +187,7 @@ type Service struct {
 	secrets       *secret.Broker
 	fitRoutes     []FITRoute
 	toolCatalog   *UnattendedCatalog
+	audit         *mcpaudit.Recorder
 }
 
 // FITRoute binds one bridge to the exact MCP server/scope whose pod owns the
@@ -217,6 +219,7 @@ type Deps struct {
 	// substitution/redaction runs.
 	Secrets   *secret.Broker
 	FITRoutes []FITRoute
+	Audit     *mcpaudit.Recorder
 }
 
 // NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
@@ -244,8 +247,9 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		maxIterations: maxIterations, maxTools: maxTools, contextBudget: contextBudget, now: now,
 		skills:      deps.Skills,
 		secrets:     deps.Secrets,
+		audit:       deps.Audit,
 		fitRoutes:   append([]FITRoute(nil), deps.FITRoutes...),
-		toolCatalog: NewUnattendedCatalog(deps.MCP, deps.FITRoutes),
+		toolCatalog: NewUnattendedCatalog(deps.MCP, deps.FITRoutes, deps.Audit),
 	}
 }
 
@@ -408,7 +412,9 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 	req.Tools = s.assembleTools(ctx, mcpSnap)
 
 	redactor := &turnRedactor{}
-	full, turnCalls, err := s.runToolLoop(ctx, streamCtx, conversationID, userID, mcpSnap, req, redactor, sink)
+	full, turnCalls, err := s.runToolLoop(
+		ctx, streamCtx, conversationID, userID, uc.Username, mcpSnap, req, redactor, sink,
+	)
 	if err != nil {
 		return err
 	}
@@ -568,7 +574,8 @@ func (s *Service) applyGuardrail(
 // tool-free assistant content (persistence and RAG-embedding happen in the
 // caller).
 func (s *Service) runToolLoop(
-	ctx, streamCtx context.Context, conversationID string, userID int64, mcpSnap MCPUserSnapshot,
+	ctx, streamCtx context.Context, conversationID string, userID int64, username string,
+	mcpSnap MCPUserSnapshot,
 	req provider.ChatRequest, redactor *turnRedactor, sink EventSink,
 ) (string, []model.MessageToolCall, error) {
 	maxIter := s.maxIterations
@@ -617,7 +624,9 @@ func (s *Service) runToolLoop(
 				args = secret.Redact(args, redactor.snapshot(s.secrets, userID))
 			}
 			turnCalls = append(turnCalls, model.MessageToolCall{Name: tc.Name, Arguments: args})
-			req.Messages = append(req.Messages, s.dispatchTool(ctx, streamCtx, userID, mcpSnap, tc, gated, redactor, sink))
+			req.Messages = append(req.Messages, s.dispatchTool(
+				ctx, streamCtx, conversationID, userID, username, mcpSnap, tc, gated, redactor, sink,
+			))
 		}
 	}
 
@@ -833,9 +842,21 @@ func (s *Service) skillTool() provider.ToolDefinition {
 // everything else goes to MCP. gated tracks which skills have already
 // pre-gated a call this turn (so the retried call executes for real).
 func (s *Service) dispatchTool(
-	ctx, streamCtx context.Context, userID int64, mcpSnap MCPUserSnapshot, tc provider.ToolCall,
+	ctx, streamCtx context.Context, conversationID string, userID int64, username string,
+	mcpSnap MCPUserSnapshot, tc provider.ToolCall,
 	gated map[string]bool, redactor *turnRedactor, sink EventSink,
 ) provider.Message {
+	ctx = mcpaudit.WithMetadata(ctx, mcpaudit.Metadata{
+		ActorUserID: userID, ActorUsername: username, ConversationID: conversationID,
+		Source: model.MCPAuditSourceChat, Model: s.cfg.Model, ToolCallID: tc.ID,
+		RequestedTool: tc.Name, SafeArguments: tc.Arguments,
+		Sanitize: func(value string) string {
+			if s.secrets == nil {
+				return value
+			}
+			return secret.Redact(value, redactor.snapshot(s.secrets, userID))
+		},
+	})
 	if s.secrets != nil && tc.Name == credsToolName {
 		return s.handleRequestCredentials(streamCtx, userID, tc, sink)
 	}
@@ -851,6 +872,9 @@ func (s *Service) dispatchTool(
 	if tc.Name == convertPaceToolName {
 		return s.handlePaceConversion(tc, sink)
 	}
+	if tc.Name == analyzeGarminFITToolName {
+		return s.handleFITAnalysis(ctx, mcpSnap, tc, sink)
+	}
 	return s.runToolCall(ctx, userID, mcpSnap, tc, redactor, sink)
 }
 
@@ -861,6 +885,7 @@ func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot
 		mcp:       mcpSnap,
 		allowed:   map[string]struct{}{analyzeGarminFITToolName: {}},
 		fitRoutes: resolveFITRoutes(mcpSnap, s.fitRoutes),
+		audit:     s.audit,
 	}
 	out, err := snapshot.Call(ctx, tc.Name, tc.Arguments)
 	status := toolStatusDone
@@ -1027,7 +1052,9 @@ func (s *Service) runToolCall(
 	var out string
 	var cErr error
 	if mcpSnap != nil {
-		out, cErr = mcpSnap.Call(ctx, tc.Name, callArgs)
+		out, cErr = s.audit.Call(ctx, tc.Name, callArgs, func(callCtx context.Context) (string, error) {
+			return mcpSnap.Call(callCtx, tc.Name, callArgs)
+		})
 	} else {
 		cErr = fmt.Errorf("mcp: no MCP servers available for tool %q", tc.Name)
 	}

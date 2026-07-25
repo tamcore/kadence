@@ -29,6 +29,7 @@ internal/
   knowledge/         dependency-free text analytics (keywords/entities for the context view)
   webauthn/          passkey ceremonies (registration/assertion) + encrypted ceremony cookie
   model/             domain types
+  mcpaudit/          fail-open remote-call audit lifecycle + secret-safe persistence
   store/             pgx pool, goose migrations, repositories
 web/                 SvelteKit SPA, embedded via //go:embed under -tags prodfrontend
 charts/kadence/      Helm chart
@@ -142,6 +143,16 @@ short and independent of each server's own filtering. TLS to MCP servers is opti
 (`KADENCE_MCP_CA_FILE` for a custom CA); the deployed sidecars add basic auth and
 network isolation on top.
 
+Each LLM-driven remote invocation is independently recorded in `mcp_call_audit`.
+Records attribute the actor, conversation, chat or Scheduled source, model,
+provider tool-call id, remote tool, timing, and terminal status. Arguments are the
+model-visible form before credential substitution; results and errors pass through
+the same broker-secret redaction used by chat persistence. Recording fails open so
+an audit outage cannot change tool availability. Admin list/detail endpoints expose
+retained records; a global TTL hides expired rows at query time and a startup/hourly
+reaper deletes them. Discovery, health, ingestion, and native-only calls are not
+included, while remote calls nested inside native tools are.
+
 ## Native pace conversion (`pace/`)
 
 Kadence always exposes `kadence__convert_pace` in interactive and unattended
@@ -215,6 +226,8 @@ All timestamps are UTC. Migrations are embedded SQL run by `goose` on startup
 - **documents** / **chunks** — ingested material and their embeddings; `scope`
   distinguishes private from the admin public corpus. Chunks store the embedding model.
 - **user_mcp_servers** — user-registered MCP servers (auth password encrypted).
+- **mcp_call_audit** — bounded full payload/result audit of LLM-driven remote MCP
+  calls, with actor, conversation, source, model, status, and timing snapshots.
 - **webauthn_credentials** — registered passkeys (credential id, public key, sign
   count, backup flags, transports, last used).
 
@@ -231,6 +244,8 @@ All timestamps are UTC. Migrations are embedded SQL run by `goose` on startup
 - **Credential broker** — when a tool needs a secret (e.g. a service login), the LLM
   only ever sees an opaque one-time placeholder token; the real value is substituted
   at dispatch time and redacted from logs and transcripts.
+- **MCP audit** — stores only model-visible placeholder arguments and broker-redacted
+  outputs/errors; raw substituted credential values are never persisted.
 - **MCP isolation** — each MCP server is deployed behind a basic-auth nginx sidecar,
   reachable only from the main app by NetworkPolicy, optionally over TLS.
 - **FIT-file isolation** — transient FIT files live in a per-pod `emptyDir`; the

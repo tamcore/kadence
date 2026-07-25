@@ -119,6 +119,12 @@ func TestUnattendedCatalogResolvesExactOwnerSnapshotAndNativeFIT(t *testing.T) {
 }
 
 func TestUnattendedCatalogFailsClosed(t *testing.T) {
+	var nilCatalog *UnattendedCatalog
+	if snapshot, err := nilCatalog.SnapshotFor(t.Context(), testUnattendedUsername); err != nil ||
+		len(toolNames(t, snapshot)) != 1 {
+		t.Fatalf("nil catalog snapshot = %+v, %v", snapshot, err)
+	}
+
 	catalog := NewUnattendedCatalog(nil, nil)
 	snapshot, err := catalog.SnapshotFor(t.Context(), testUnattendedUsername)
 	if err != nil {

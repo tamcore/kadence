@@ -126,6 +126,8 @@ type Config struct {
 
 	// MCP orchestration.
 	MCPMaxIterations int
+	// MCPAuditTTL controls retention for full MCP call audit records.
+	MCPAuditTTL time.Duration
 	// MCPMaxTools caps the number of MCP tool definitions injected into a
 	// single chat request, as defense-in-depth against provider tool-count
 	// limits (e.g. OpenAI's 128-tool cap) when many MCP servers are configured.
@@ -155,6 +157,7 @@ type Config struct {
 	// literal built directly rather than via Load(), e.g. in tests.
 	encryptionKeyErr error
 	fitRoutesErr     error
+	mcpAuditTTLErr   error
 
 	// Rate limiting (per-IP, sliding window). 0 disables the respective limiter.
 	// RateLimitGlobal caps all /api requests; RateLimitAuth caps the
@@ -263,6 +266,7 @@ func Load() Config {
 
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 16)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
+	cfg.MCPAuditTTL, cfg.mcpAuditTTLErr = loadDuration("KADENCE_MCP_AUDIT_TTL", 48*time.Hour)
 	cfg.MCPCAFile = os.Getenv("KADENCE_MCP_CA_FILE")
 	cfg.FITRoutes, cfg.fitRoutesErr = loadFITRoutes(os.Environ())
 	cfg.FITMaxBytes = envIntOr("KADENCE_FIT_MAX_BYTES", 32<<20)
@@ -450,20 +454,8 @@ func (c Config) Validate() error {
 	if c.RAGTopK <= 0 {
 		return errors.New("KADENCE_RAG_TOP_K must be a positive integer")
 	}
-	if c.MCPMaxIterations <= 0 {
-		return errors.New("KADENCE_MCP_MAX_ITERATIONS must be a positive integer")
-	}
-	if c.MCPMaxTools <= 0 {
-		return errors.New("KADENCE_MCP_MAX_TOOLS must be a positive integer")
-	}
-	if c.fitRoutesErr != nil {
-		return fmt.Errorf("FIT routes are invalid: %w", c.fitRoutesErr)
-	}
-	if err := validateFITRoutes(c.FITRoutes); err != nil {
+	if err := c.validateMCP(); err != nil {
 		return err
-	}
-	if c.FITEnabled() && c.FITMaxBytes <= 0 {
-		return errors.New("KADENCE_FIT_MAX_BYTES must be a positive integer when FIT analysis is enabled")
 	}
 	if c.UploadMaxBytes <= 0 {
 		return errors.New("KADENCE_UPLOAD_MAX_BYTES must be a positive integer")
@@ -476,6 +468,31 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateScheduled(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (c Config) validateMCP() error {
+	if c.MCPMaxIterations <= 0 {
+		return errors.New("KADENCE_MCP_MAX_ITERATIONS must be a positive integer")
+	}
+	if c.MCPMaxTools <= 0 {
+		return errors.New("KADENCE_MCP_MAX_TOOLS must be a positive integer")
+	}
+	if c.mcpAuditTTLErr != nil {
+		return fmt.Errorf("KADENCE_MCP_AUDIT_TTL is invalid: %w", c.mcpAuditTTLErr)
+	}
+	if c.MCPAuditTTL <= 0 {
+		return errors.New("KADENCE_MCP_AUDIT_TTL must be a positive duration")
+	}
+	if c.fitRoutesErr != nil {
+		return fmt.Errorf("FIT routes are invalid: %w", c.fitRoutesErr)
+	}
+	if err := validateFITRoutes(c.FITRoutes); err != nil {
+		return err
+	}
+	if c.FITEnabled() && c.FITMaxBytes <= 0 {
+		return errors.New("KADENCE_FIT_MAX_BYTES must be a positive integer when FIT analysis is enabled")
 	}
 	return nil
 }
@@ -610,6 +627,18 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 		}
 	}
 	return fallback
+}
+
+func loadDuration(key string, fallback time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback, err
+	}
+	return d, nil
 }
 
 func envBoolOr(key string, fallback bool) bool {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/chat/skill"
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/secret"
@@ -106,6 +107,21 @@ func (f *fakeMsgs) AddWithToolCalls(_ context.Context, convID string, role, cont
 }
 func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Message, error) {
 	return f.added, nil
+}
+
+type chatAuditStore struct {
+	started  model.MCPAuditCall
+	finished model.MCPAuditCall
+}
+
+func (s *chatAuditStore) Start(_ context.Context, call model.MCPAuditCall) (int64, error) {
+	s.started = call
+	return 9, nil
+}
+
+func (s *chatAuditStore) Finish(_ context.Context, id int64, status, result, errorText string, finishedAt time.Time) error {
+	s.finished = model.MCPAuditCall{ID: id, Status: status, Result: result, Error: errorText, FinishedAt: &finishedAt}
+	return nil
 }
 
 type capturingSink struct{ events []chat.ChatEvent }
@@ -730,6 +746,31 @@ func TestStreamPersistsToolCallsOnAssistantMessage(t *testing.T) {
 	}
 	if last.ToolCalls[0].Name != testToolName || last.ToolCalls[0].Arguments != testToolArgs {
 		t.Fatalf("persisted tool call = %+v, want {%s %s}", last.ToolCalls[0], testToolName, testToolArgs)
+	}
+}
+
+func TestStreamAuditsRemoteMCPCallWithChatAndModel(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &toolThenContentProvider{toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply}
+	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}, callResult: testToolReply}
+	auditStore := &chatAuditStore{}
+	recorder := mcpaudit.NewRecorder(auditStore, slog.Default(), time.Now)
+	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, MCP: mcp, Audit: recorder,
+	})
+
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "audit this", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if auditStore.started.ActorUserID != testUserID || auditStore.started.ActorUsername != testUsername ||
+		auditStore.started.ConversationID != testNewConvID || auditStore.started.Model != testModel ||
+		auditStore.started.ToolName != testToolName || auditStore.started.Arguments != testToolArgs {
+		t.Fatalf("started audit = %+v", auditStore.started)
+	}
+	if auditStore.finished.Status != model.MCPAuditStatusSucceeded || auditStore.finished.Result != testToolReply {
+		t.Fatalf("finished audit = %+v", auditStore.finished)
 	}
 }
 

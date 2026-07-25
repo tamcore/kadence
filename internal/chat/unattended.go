@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	fitactivity "github.com/tamcore/kadence/internal/fit"
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/provider"
 )
 
@@ -19,6 +20,7 @@ import (
 type UnattendedCatalog struct {
 	mcp       MCPTools
 	fitRoutes []FITRoute
+	audit     *mcpaudit.Recorder
 }
 
 type resolvedFITRoute struct {
@@ -28,8 +30,12 @@ type resolvedFITRoute struct {
 }
 
 // NewUnattendedCatalog constructs an owner-scoped tool catalog.
-func NewUnattendedCatalog(mcp MCPTools, fitRoutes []FITRoute) *UnattendedCatalog {
-	return &UnattendedCatalog{mcp: mcp, fitRoutes: append([]FITRoute(nil), fitRoutes...)}
+func NewUnattendedCatalog(mcp MCPTools, fitRoutes []FITRoute, audit ...*mcpaudit.Recorder) *UnattendedCatalog {
+	catalog := &UnattendedCatalog{mcp: mcp, fitRoutes: append([]FITRoute(nil), fitRoutes...)}
+	if len(audit) > 0 {
+		catalog.audit = audit[0]
+	}
+	return catalog
 }
 
 // UnattendedSnapshot is one user's immutable tool list and dispatch route.
@@ -38,6 +44,7 @@ type UnattendedSnapshot struct {
 	tools     []provider.ToolDefinition
 	allowed   map[string]struct{}
 	fitRoutes []resolvedFITRoute
+	audit     *mcpaudit.Recorder
 }
 
 // SnapshotFor resolves username once, eagerly lists its tools, and freezes the
@@ -50,6 +57,7 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 	if c == nil || c.mcp == nil || !c.mcp.Enabled() {
 		return snapshot, nil
 	}
+	snapshot.audit = c.audit
 	snapshot.mcp = c.mcp.SnapshotFor(ctx, username)
 	if snapshot.mcp == nil {
 		return snapshot, nil
@@ -106,7 +114,7 @@ func (s *UnattendedSnapshot) Call(ctx context.Context, toolName, argsJSON string
 	if s.mcp == nil {
 		return "", errors.New("chat: no MCP snapshot")
 	}
-	return s.mcp.Call(ctx, toolName, argsJSON)
+	return s.callRemote(ctx, toolName, argsJSON)
 }
 
 // ToolHints retains the MCPUserSnapshot contract for interactive chat.
@@ -151,7 +159,7 @@ func (s *UnattendedSnapshot) callFIT(ctx context.Context, argsJSON string) (stri
 	if analyzer == nil {
 		return "", errors.New("no FIT source is available")
 	}
-	activity, err := analyzer.Analyze(ctx, s.mcp, args.ActivityID)
+	activity, err := analyzer.Analyze(ctx, remoteCaller{snapshot: s}, args.ActivityID)
 	if err != nil {
 		slog.Warn("FIT analysis failed", "stage", fitactivity.FailureStage(err))
 		return "", errors.New("could not analyze FIT activity")
@@ -161,6 +169,18 @@ func (s *UnattendedSnapshot) callFIT(ctx context.Context, argsJSON string) (stri
 		return "", errors.New("could not encode activity analysis")
 	}
 	return string(data), nil
+}
+
+type remoteCaller struct{ snapshot *UnattendedSnapshot }
+
+func (c remoteCaller) Call(ctx context.Context, toolName, arguments string) (string, error) {
+	return c.snapshot.callRemote(ctx, toolName, arguments)
+}
+
+func (s *UnattendedSnapshot) callRemote(ctx context.Context, toolName, arguments string) (string, error) {
+	return s.audit.Call(ctx, toolName, arguments, func(callCtx context.Context) (string, error) {
+		return s.mcp.Call(callCtx, toolName, arguments)
+	})
 }
 
 func resolveFITRoutes(mcpSnap MCPUserSnapshot, configured []FITRoute) []resolvedFITRoute {

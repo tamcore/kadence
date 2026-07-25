@@ -147,14 +147,14 @@ func TestPaceToolLoadsDedicatedSkillBeforeLocalRetry(t *testing.T) {
 	sink := &fitEventSink{}
 
 	first := service.dispatchTool(
-		t.Context(), t.Context(), 1, nil, call, gated, &turnRedactor{}, sink,
+		t.Context(), t.Context(), "", 1, "", nil, call, gated, &turnRedactor{}, sink,
 	)
 	if !strings.Contains(first.Content, "one tool call per pace") {
 		t.Fatalf("first result = %q", first.Content)
 	}
 
 	second := service.dispatchTool(
-		t.Context(), t.Context(), 1, nil, call, gated, &turnRedactor{}, sink,
+		t.Context(), t.Context(), "", 1, "", nil, call, gated, &turnRedactor{}, sink,
 	)
 	if second.Content != testMetricPaceResult {
 		t.Fatalf("second result = %q", second.Content)
@@ -171,7 +171,7 @@ func TestExplicitPaceSkillLoadSatisfiesPreGate(t *testing.T) {
 	sink := &fitEventSink{}
 
 	loaded := service.dispatchTool(
-		t.Context(), t.Context(), 1, nil, provider.ToolCall{
+		t.Context(), t.Context(), "", 1, "", nil, provider.ToolCall{
 			ID:        "skill-1",
 			Name:      loadSkillToolName,
 			Arguments: `{"name":"pace-conversion"}`,
@@ -182,7 +182,7 @@ func TestExplicitPaceSkillLoadSatisfiesPreGate(t *testing.T) {
 	}
 
 	converted := service.dispatchTool(
-		t.Context(), t.Context(), 1, nil, provider.ToolCall{
+		t.Context(), t.Context(), "", 1, "", nil, provider.ToolCall{
 			ID:        testPaceCallID,
 			Name:      convertPaceToolName,
 			Arguments: testMetricPaceArgs,
@@ -206,7 +206,7 @@ func TestWorkoutSkillRequiresPaceConverter(t *testing.T) {
 	}
 
 	result := service.dispatchTool(
-		t.Context(), t.Context(), 1, nil, call, map[string]bool{}, &turnRedactor{}, &fitEventSink{},
+		t.Context(), t.Context(), "", 1, "", nil, call, map[string]bool{}, &turnRedactor{}, &fitEventSink{},
 	)
 	if !strings.Contains(result.Content, testConvertPaceToolName) {
 		t.Fatalf("workout guidance did not require converter: %q", result.Content)

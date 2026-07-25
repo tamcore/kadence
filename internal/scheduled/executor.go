@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -226,7 +227,15 @@ func (e *Executor) gather(ctx context.Context, actor Actor, claimed model.Claime
 			return WorkerOutcome{}, &executionError{failureEvidenceTooLarge}
 		}
 		for _, call := range result.ToolCalls {
-			output, toolErr := snapshot.Call(streamCtx, call.Name, call.Arguments)
+			callCtx := mcpaudit.WithMetadata(streamCtx, mcpaudit.Metadata{
+				ActorUserID: claimed.Task.UserID, ActorUsername: actor.Username,
+				ConversationID:  claimed.Task.ConversationID,
+				Source:          model.MCPAuditSourceScheduled,
+				ScheduledTaskID: &claimed.Task.ID, ScheduledRunID: &claimed.Run.ID,
+				Model: e.cfg.WorkerModel, ToolCallID: call.ID,
+				RequestedTool: call.Name, SafeArguments: call.Arguments,
+			})
+			output, toolErr := snapshot.Call(callCtx, call.Name, call.Arguments)
 			if toolErr != nil {
 				return WorkerOutcome{}, &executionError{failureTool}
 			}

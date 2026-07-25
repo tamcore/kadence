@@ -41,6 +41,7 @@ type Deps struct {
 	SessionsAPI *handlers.Sessions
 	WebAuthn    *handlers.WebAuthn
 	Scheduled   *handlers.Scheduled
+	MCPAudit    *handlers.MCPAudit
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -212,6 +213,10 @@ func mountAuth(r chi.Router, deps Deps) {
 				r.Post(adminDocumentsPath, deps.Documents.UploadPublic)
 				r.Get(adminDocumentsPath, deps.Documents.ListPublic)
 				r.Delete("/api/admin/documents/{id}", deps.Documents.DeletePublic)
+			}
+			if deps.MCPAudit != nil {
+				r.Get("/api/admin/mcp-audit", deps.MCPAudit.List)
+				r.Get("/api/admin/mcp-audit/{id}", deps.MCPAudit.Detail)
 			}
 		})
 	})

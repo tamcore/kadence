@@ -36,9 +36,39 @@ func validConfig() Config {
 		RAGTopK:                5,
 		MCPMaxIterations:       16,
 		MCPMaxTools:            100,
+		MCPAuditTTL:            48 * time.Hour,
 		FITMaxBytes:            32 << 20,
 		UploadMaxBytes:         10485760,
 		IngestChunkChars:       1000,
+	}
+}
+
+func TestLoadMCPAuditTTL(t *testing.T) {
+	t.Setenv("KADENCE_MCP_AUDIT_TTL", "")
+	if got := Load().MCPAuditTTL; got != 48*time.Hour {
+		t.Fatalf("default MCPAuditTTL = %s, want 48h", got)
+	}
+
+	t.Setenv("KADENCE_MCP_AUDIT_TTL", "6h30m")
+	if got := Load().MCPAuditTTL; got != 6*time.Hour+30*time.Minute {
+		t.Fatalf("configured MCPAuditTTL = %s, want 6h30m", got)
+	}
+}
+
+func TestValidateRejectsNonPositiveMCPAuditTTL(t *testing.T) {
+	cfg := validConfig()
+	cfg.MCPAuditTTL = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_MCP_AUDIT_TTL") {
+		t.Fatalf("Validate() = %v, want MCP audit TTL error", err)
+	}
+}
+
+func TestValidateRejectsMalformedMCPAuditTTL(t *testing.T) {
+	t.Setenv("KADENCE_MCP_AUDIT_TTL", "tomorrow")
+	t.Setenv("KADENCE_DATABASE_URL", testDatabaseURL)
+	cfg := Load()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_MCP_AUDIT_TTL") {
+		t.Fatalf("Validate() = %v, want malformed MCP audit TTL error", err)
 	}
 }
 

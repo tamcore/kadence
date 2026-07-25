@@ -161,9 +161,19 @@ linked conversation and immutable run audit records.
 |---|---|---|
 | `KADENCE_MCP_MAX_ITERATIONS` | `16` | Max agentic tool-loop iterations per chat turn. |
 | `KADENCE_MCP_MAX_TOOLS` | `100` | Cap on tool definitions injected per request. |
+| `KADENCE_MCP_AUDIT_TTL` | `48h` | Retention for full remote MCP call audit records. Must be a positive Go duration. Expired records are hidden immediately and deleted on startup, then hourly. |
 | `KADENCE_MCP_CA_FILE` | — | PEM CA bundle for verifying MCP/markitdown TLS. Empty = system trust store. |
 | `KADENCE_USER_MCP_ALLOWED_HOSTS` | — | Comma-separated host allowlist for user-registered MCP servers. Enables the feature only when set together with `KADENCE_ENCRYPTION_KEY`. |
 | `KADENCE_USER_MCP_MAX_SERVERS` | `10` | Max user-defined MCP servers a single owner may register. `POST /api/mcp` returns 400 over the cap. |
+
+LLM-selected remote MCP calls from chats and Scheduled workers are recorded with
+their model-visible arguments, secret-redacted result or error, actor, conversation
+UUID, source, tool-call id, model, status, and timing. Audit persistence fails open:
+an audit database error never blocks the tool call. Admins can inspect retained
+records under **MCP Audit**. Health checks, tool discovery, ingestion calls, and
+purely native tools are outside this audit; a native tool's nested remote MCP call
+is included. Existing per-message `tool_calls` remain part of chat history and are
+not governed by this TTL.
 
 ### MCP server env contract
 

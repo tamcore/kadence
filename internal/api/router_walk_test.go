@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -50,6 +51,7 @@ func fullDeps() api.Deps {
 		SessionsAPI: handlers.NewSessions(nil),
 		WebAuthn:    handlers.NewWebAuthn(nil, nil, nil, nil, nil, cfg),
 		Scheduled:   handlers.NewScheduled(nil),
+		MCPAudit:    handlers.NewMCPAudit(nil, 48*time.Hour, time.Now),
 	}
 }
 
@@ -111,6 +113,7 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 		"PATCH /api/scheduled/tasks/{id}", "DELETE /api/scheduled/tasks/{id}",
 		"POST /api/scheduled/tasks/{id}/messages", "POST /api/scheduled/tasks/{id}/confirm",
 		"POST /api/scheduled/tasks/{id}/run", "POST /api/scheduled/tasks/{id}/read",
+		"GET /api/admin/mcp-audit", "GET /api/admin/mcp-audit/{id}",
 	} {
 		if !seen[key] {
 			t.Errorf("scheduled route %q was never registered", key)

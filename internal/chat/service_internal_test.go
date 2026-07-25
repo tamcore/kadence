@@ -7,7 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -16,6 +18,7 @@ const (
 	testFITServerOne    = "GARMIN1"
 	testFITServerTwo    = "GARMIN2"
 	testFITDownloadTool = "download_activity_file"
+	testFITRemoteTool   = "garmin__download_activity_file"
 	testFITGenericTool  = "download_fit"
 	testFITBridgeOne    = "http://garmin1:8081"
 	testFITBridgeTwo    = "http://garmin2:8081"
@@ -61,6 +64,23 @@ func (s *fitEventSink) Send(event ChatEvent) error {
 
 func (*fitEventSink) Flush() error { return nil }
 
+type fitAuditStore struct {
+	started  model.MCPAuditCall
+	finished model.MCPAuditCall
+}
+
+func (s *fitAuditStore) Start(_ context.Context, call model.MCPAuditCall) (int64, error) {
+	s.started = call
+	return 12, nil
+}
+
+func (s *fitAuditStore) Finish(_ context.Context, id int64, status, result, errorText string, finishedAt time.Time) error {
+	s.finished = model.MCPAuditCall{
+		ID: id, Status: status, Result: result, Error: errorText, FinishedAt: &finishedAt,
+	}
+	return nil
+}
+
 func TestFITRoutesForSnapshotSelectsExactUserScopedMCP(t *testing.T) {
 	s := NewService(nil, ServiceConfig{}, Deps{
 		FITRoutes: []FITRoute{
@@ -83,7 +103,7 @@ func TestFITRoutesForSnapshotSelectsExactUserScopedMCP(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("len(routes) = %d, want only bob's route", len(routes))
 	}
-	if routes[0].source != testFITAlias || routes[0].downloadTool != "garmin__download_activity_file" {
+	if routes[0].source != testFITAlias || routes[0].downloadTool != testFITRemoteTool {
 		t.Fatalf("resolved route = %+v, want bob's effective download tool", routes[0])
 	}
 }
@@ -162,7 +182,9 @@ func TestAssembleToolsRequiresSourceWhenMultipleFITRoutesAreVisible(t *testing.T
 }
 
 func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
-	s := NewService(nil, ServiceConfig{}, Deps{
+	auditStore := &fitAuditStore{}
+	s := NewService(nil, ServiceConfig{Model: "coach"}, Deps{
+		Audit: mcpaudit.NewRecorder(auditStore, nil, time.Now),
 		FITRoutes: []FITRoute{{
 			ServerName: testFITServerTwo, ServerScope: testFITBobScope,
 			DownloadTool: testFITDownloadTool, BridgeURL: "http://127.0.0.1:1",
@@ -176,18 +198,29 @@ func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
 		calledTool: &calledTool,
 	}
 
-	msg := s.handleFITAnalysis(
+	msg := s.dispatchTool(
 		context.Background(),
+		context.Background(),
+		"chat-id",
+		7,
+		"bob",
 		snapshot,
 		provider.ToolCall{ID: "call-1", Name: analyzeGarminFITToolName, Arguments: `{"activity_id":42}`},
+		map[string]bool{},
+		&turnRedactor{},
 		&fitEventSink{},
 	)
 
-	if calledTool != "garmin__download_activity_file" {
+	if calledTool != testFITRemoteTool {
 		t.Fatalf("called tool = %q, want bob's visible download tool", calledTool)
 	}
 	if msg.Content != fitAnalysisErrorMessage {
 		t.Fatalf("tool result = %q, want safe decode failure", msg.Content)
+	}
+	if auditStore.started.ToolName != testFITRemoteTool ||
+		auditStore.started.ConversationID != "chat-id" || auditStore.started.Model != "coach" ||
+		auditStore.finished.Status != model.MCPAuditStatusSucceeded {
+		t.Fatalf("nested FIT audit start=%+v finish=%+v", auditStore.started, auditStore.finished)
 	}
 }
 

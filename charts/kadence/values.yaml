@@ -124,6 +124,8 @@ config:
   KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS: 16
   KADENCE_SCHEDULED_WORKER_CONCURRENCY: 1
   KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER: 10
+  # Full remote MCP call audit retention. Positive Go duration.
+  KADENCE_MCP_AUDIT_TTL: 48h
   KADENCE_EMBED_BASE_URL: ""
   # Changing KADENCE_EMBED_MODEL re-embeds existing RAG chunks in place (no data
   # loss): on startup the app tags any untagged chunks as the current model, then

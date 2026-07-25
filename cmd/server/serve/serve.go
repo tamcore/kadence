@@ -23,6 +23,7 @@ import (
 	"github.com/tamcore/kadence/internal/embed"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/reindex"
 	"github.com/tamcore/kadence/internal/scheduled"
@@ -108,6 +109,8 @@ func Run() error {
 
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
+	auditRepo := store.NewMCPAuditRepository(pool)
+	auditRecorder := mcpaudit.NewRecorder(auditRepo, slog.Default(), time.Now)
 
 	if err := auth.BootstrapAdmin(startupCtx, users, cfg); err != nil {
 		return fmt.Errorf("bootstrap admin: %w", err)
@@ -118,8 +121,14 @@ func Run() error {
 	bgWG.Go(func() {
 		runSessionReaper(rootCtx, sessions, sessionReapInterval, slog.Default())
 	})
+	bgWG.Go(func() {
+		runMCPAuditReaper(
+			rootCtx, auditRepo, cfg.MCPAuditTTL, mcpAuditReapInterval, slog.Default(), time.Now,
+		)
+	})
 
 	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
+	deps.MCPAudit = handlers.NewMCPAudit(auditRepo, cfg.MCPAuditTTL, time.Now)
 	deps.Profile = handlers.NewProfile(users, sessions, cfg)
 	deps.SessionsAPI = handlers.NewSessions(sessions)
 
@@ -239,7 +248,7 @@ func Run() error {
 				})
 			}
 		}
-		unattendedTools := chat.NewUnattendedCatalog(mcpTools, fitRoutes)
+		unattendedTools := chat.NewUnattendedCatalog(mcpTools, fitRoutes, auditRecorder)
 		skills, err := skill.Load()
 		if err != nil {
 			return fmt.Errorf("load skills: %w", err)
@@ -261,6 +270,7 @@ func Run() error {
 			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
 			FITRoutes: fitRoutes,
 			Secrets:   broker,
+			Audit:     auditRecorder,
 		})
 		if cfg.ScheduledEnabled {
 			tasks := store.NewScheduledTaskRepository(pool, cfg.ScheduledMaxActivePerUser)

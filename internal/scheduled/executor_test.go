@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -18,6 +19,7 @@ const (
 	executorInvalidTimezone = "bad"
 	executorDataTool        = "data__read"
 	executorTestTaskID      = "task"
+	executorToolCallID      = "call"
 	executorDailyRRULE      = "FREQ=DAILY"
 )
 
@@ -89,19 +91,23 @@ func (c *executorCatalog) SnapshotFor(_ context.Context, username string) (Execu
 }
 
 type executorSnapshot struct {
-	tools   []provider.ToolDefinition
-	results map[string]string
-	calls   []string
-	listErr error
-	callErr error
+	tools    []provider.ToolDefinition
+	results  map[string]string
+	calls    []string
+	listErr  error
+	callErr  error
+	metadata []mcpaudit.Metadata
 }
 
 func (s *executorSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
 	return append([]provider.ToolDefinition(nil), s.tools...), s.listErr
 }
 
-func (s *executorSnapshot) Call(_ context.Context, name, args string) (string, error) {
+func (s *executorSnapshot) Call(ctx context.Context, name, args string) (string, error) {
 	s.calls = append(s.calls, name+":"+args)
+	if metadata, ok := mcpaudit.MetadataFromContext(ctx); ok {
+		s.metadata = append(s.metadata, metadata)
+	}
 	if s.callErr != nil {
 		return "", s.callErr
 	}
@@ -225,7 +231,7 @@ func TestExecutorUsesExactFreshOwnerToolsAndRejectsMissingOrUnauthorized(t *test
 func TestExecutorGatherCallsOnlyAuthorizedToolsAndSynthesizesToolFree(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	worker := &executorProvider{toolReplies: []provider.StreamResult{
-		{ToolCalls: []provider.ToolCall{{ID: "call", Name: executorDataTool, Arguments: `{"limit":1}`}}},
+		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: `{"limit":1}`}}},
 		{Content: `{"status":"deliver","summary":"New run","evidence":["5 km"],"monitoringState":{"cursor":1}}`},
 	}}
 	synthesis := &executorProvider{reply: "You ran 5 km."}
@@ -245,6 +251,18 @@ func TestExecutorGatherCallsOnlyAuthorizedToolsAndSynthesizesToolFree(t *testing
 	}
 	if !slices.Equal(catalog.users, []string{executorTestUsername}) || !slices.Equal(snapshot.calls, []string{`data__read:{"limit":1}`}) {
 		t.Fatalf("owner dispatch users=%v calls=%v", catalog.users, snapshot.calls)
+	}
+	if len(snapshot.metadata) != 1 {
+		t.Fatalf("audit metadata calls = %d, want 1", len(snapshot.metadata))
+	}
+	metadata := snapshot.metadata[0]
+	if metadata.ActorUserID != 7 || metadata.ActorUsername != executorTestUsername ||
+		metadata.ConversationID != claimed.Task.ConversationID ||
+		metadata.Source != model.MCPAuditSourceScheduled || metadata.Model != "worker" ||
+		metadata.ToolCallID != executorToolCallID || metadata.ScheduledTaskID == nil ||
+		*metadata.ScheduledTaskID != claimed.Task.ID || metadata.ScheduledRunID == nil ||
+		*metadata.ScheduledRunID != claimed.Run.ID {
+		t.Fatalf("audit metadata = %+v", metadata)
 	}
 	if synthesis.chatCalls != 1 || len(synthesis.requests[0].Tools) != 0 {
 		t.Fatalf("synthesis request = %+v", synthesis.requests)
@@ -507,7 +525,7 @@ func TestExecutorCoversGatherValidationFailures(t *testing.T) {
 func repeatedToolCalls(count int) []provider.ToolCall {
 	calls := make([]provider.ToolCall, count)
 	for i := range calls {
-		calls[i] = provider.ToolCall{ID: "call", Name: executorDataTool, Arguments: `{}`}
+		calls[i] = provider.ToolCall{ID: executorToolCallID, Name: executorDataTool, Arguments: `{}`}
 	}
 	return calls
 }
