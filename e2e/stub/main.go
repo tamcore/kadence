@@ -21,6 +21,17 @@ const (
 	// vector(1024) column without the caller having to ask for it explicitly.
 	defaultEmbeddingVectorLen = 1024
 	stubModelName             = "stub"
+	functionToolType          = "function"
+	messageRoleTool           = "tool"
+	draftScheduledToolName    = "kadence__draft_scheduled_task"
+	browserNavigateTool       = "browser__browser_navigate"
+	browserSnapshotTool       = "browser__browser_snapshot"
+	preRaceWeatherInstruction = "Fetch fresh race weather two days before the race and deliver updated " +
+		"pacing, hydration, and kit guidance."
+	raceDayWeatherInstruction = "Fetch fresh race weather on race morning and deliver updated pacing, " +
+		"hydration, and kit guidance."
+	weatherSuggestionReply = "Two future weather checks would help: one two days before your race and " +
+		"another on race morning. Please explicitly ask me to schedule them if you want drafts."
 )
 
 // chatContentTokens are the deterministic content deltas streamed back for
@@ -86,15 +97,54 @@ const (
 			"staticMessage": "Time to drink some water."
 		}
 	}`
+	preRaceWeatherProposalReply = `{
+		"assistantText": "Your pre-race weather check is ready for review.",
+		"proposal": {
+			"name": "Pre-race weather check",
+			"taskKind": "data",
+			"compiledPrompt": "` + preRaceWeatherInstruction + `",
+			"executionMode": "data",
+			"schedule": {"at": "2040-01-03T08:00:00Z", "timezone": "UTC"},
+			"timezone": "UTC",
+			"authorizedTools": ["` + browserNavigateTool + `", "` + browserSnapshotTool + `"],
+			"deliveryPolicy": "always",
+			"initialRun": "wait"
+		}
+	}`
+	raceDayWeatherProposalReply = `{
+		"assistantText": "Your race-day weather check is ready for review.",
+		"proposal": {
+			"name": "Race-day weather check",
+			"taskKind": "data",
+			"compiledPrompt": "` + raceDayWeatherInstruction + `",
+			"executionMode": "data",
+			"schedule": {"at": "2040-01-05T05:30:00Z", "timezone": "UTC"},
+			"timezone": "UTC",
+			"authorizedTools": ["` + browserNavigateTool + `", "` + browserSnapshotTool + `"],
+			"deliveryPolicy": "always",
+			"initialRun": "wait"
+		}
+	}`
 )
 
 type chatCompletionRequest struct {
 	Messages []chatCompletionRequestMessage `json:"messages"`
+	Tools    []chatCompletionToolDefinition `json:"tools"`
 }
 
 type chatCompletionRequestMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	ToolCalls  []json.RawMessage `json:"tool_calls"`
+	ToolCallID string            `json:"tool_call_id"`
+	Name       string            `json:"name"`
+}
+
+type chatCompletionToolDefinition struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
 }
 
 // chatCompletionChunk mirrors the shape the openai-go/v3 stream decoder
@@ -105,11 +155,25 @@ type chatCompletionChunk struct {
 }
 
 type chatCompletionChunkChoice struct {
-	Delta chatCompletionChunkDelta `json:"delta"`
+	Delta        chatCompletionChunkDelta `json:"delta"`
+	FinishReason string                   `json:"finish_reason,omitempty"`
 }
 
 type chatCompletionChunkDelta struct {
-	Content string `json:"content"`
+	Content   string                        `json:"content,omitempty"`
+	ToolCalls []chatCompletionChunkToolCall `json:"tool_calls,omitempty"`
+}
+
+type chatCompletionChunkToolCall struct {
+	Index    int                             `json:"index"`
+	ID       string                          `json:"id,omitempty"`
+	Type     string                          `json:"type,omitempty"`
+	Function chatCompletionChunkToolFunction `json:"function"`
+}
+
+type chatCompletionChunkToolFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // embeddingsRequest is the subset of the OpenAI embeddings request body this
@@ -170,6 +234,36 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
+	writeChunk := func(chunk chatCompletionChunk) bool {
+		if err := writeSSEChunk(w, chunk); err != nil {
+			slog.Error("write chat completion chunk", "error", err)
+			return false
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	if !isScheduledCompiler(req.Messages) {
+		switch {
+		case hasToolResult(req.Messages):
+			tokens = []string{"I prepared two weather checks for review."}
+		case hasDraftScheduledTool(req.Tools) && explicitlySchedulesWeatherChecks(req.Messages):
+			for _, chunk := range scheduledToolCallChunks() {
+				if !writeChunk(chunk) {
+					return
+				}
+			}
+			if !writeChunk(chatCompletionChunk{Choices: []chatCompletionChunkChoice{{FinishReason: "tool_calls"}}}) {
+				return
+			}
+			writeDone(w, canFlush, flusher)
+			return
+		case asksForWeatherForecast(req.Messages):
+			tokens = []string{weatherSuggestionReply}
+		}
+	}
 
 	for _, token := range tokens {
 		chunk := chatCompletionChunk{
@@ -177,15 +271,76 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				{Delta: chatCompletionChunkDelta{Content: token}},
 			},
 		}
-		if err := writeSSEChunk(w, chunk); err != nil {
-			slog.Error("write chat completion chunk", "error", err)
+		if !writeChunk(chunk) {
 			return
-		}
-		if canFlush {
-			flusher.Flush()
 		}
 	}
 
+	writeDone(w, canFlush, flusher)
+}
+
+func isScheduledCompiler(messages []chatCompletionRequestMessage) bool {
+	_, ok := scheduledReply(messages)
+	return ok
+}
+
+func asksForWeatherForecast(messages []chatCompletionRequestMessage) bool {
+	for _, message := range messages {
+		if message.Role == messageRoleUser && strings.Contains(strings.ToLower(message.Content), "weather") {
+			return true
+		}
+	}
+	return false
+}
+
+func explicitlySchedulesWeatherChecks(messages []chatCompletionRequestMessage) bool {
+	for _, message := range messages {
+		if message.Role == messageRoleUser && strings.Contains(strings.ToLower(message.Content), "schedule it") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasToolResult(messages []chatCompletionRequestMessage) bool {
+	for _, message := range messages {
+		if message.Role == messageRoleTool && message.ToolCallID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDraftScheduledTool(tools []chatCompletionToolDefinition) bool {
+	for _, tool := range tools {
+		if tool.Type == functionToolType && tool.Function.Name == draftScheduledToolName {
+			return true
+		}
+	}
+	return false
+}
+
+func scheduledToolCallChunks() []chatCompletionChunk {
+	return []chatCompletionChunk{
+		{Choices: []chatCompletionChunkChoice{{Delta: chatCompletionChunkDelta{ToolCalls: []chatCompletionChunkToolCall{
+			draftToolCall(0, "call_weather_before", `{"instruction":"fetch fresh race weather two `),
+			draftToolCall(1, "call_weather_race_day", `{"instruction":"fetch fresh race weather on `),
+		}}}}},
+		{Choices: []chatCompletionChunkChoice{{Delta: chatCompletionChunkDelta{ToolCalls: []chatCompletionChunkToolCall{
+			draftToolCall(0, "", `days before the race and deliver updated pacing, hydration, and kit guidance."}`),
+			draftToolCall(1, "", `race morning and deliver updated pacing, hydration, and kit guidance."}`),
+		}}}}},
+	}
+}
+
+func draftToolCall(index int, id, arguments string) chatCompletionChunkToolCall {
+	return chatCompletionChunkToolCall{
+		Index: index, ID: id, Type: functionToolType,
+		Function: chatCompletionChunkToolFunction{Name: draftScheduledToolName, Arguments: arguments},
+	}
+}
+
+func writeDone(w http.ResponseWriter, canFlush bool, flusher http.Flusher) {
 	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
 		slog.Error("write [DONE] frame", "error", err)
 		return
@@ -215,6 +370,12 @@ func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
 	}
 	if strings.Contains(strings.ToLower(firstUser), "drink water") {
 		return scheduledReminderReply, true
+	}
+	if strings.Contains(strings.ToLower(firstUser), "fetch fresh race weather") {
+		if strings.Contains(strings.ToLower(firstUser), "race morning") {
+			return raceDayWeatherProposalReply, true
+		}
+		return preRaceWeatherProposalReply, true
 	}
 	if userMessages > 1 {
 		return scheduledProposalReply, true

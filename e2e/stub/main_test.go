@@ -11,6 +11,12 @@ import (
 const (
 	stubMessageRoleKey    = "role"
 	stubMessageContentKey = "content"
+	stubRequestModelKey   = "model"
+	stubRequestStreamKey  = "stream"
+	stubDoneFrame         = "[DONE]"
+	stubToolCallIDKey     = "tool_call_id"
+	stubToolCallNameKey   = "name"
+	scheduleWeatherPrompt = "Please schedule it as suggested"
 )
 
 func TestChatCompletionsStreamsSSEChunks(t *testing.T) {
@@ -38,8 +44,8 @@ func TestChatCompletionsStreamsSSEChunks(t *testing.T) {
 	}
 
 	last := frames[len(frames)-1]
-	if last != "[DONE]" {
-		t.Fatalf("last frame = %q, want %q", last, "[DONE]")
+	if last != stubDoneFrame {
+		t.Fatalf("last frame = %q, want %q", last, stubDoneFrame)
 	}
 
 	var sawContent bool
@@ -124,6 +130,115 @@ func TestChatCompletionsProposesStaticScheduledReminderDirectly(t *testing.T) {
 	})
 	if !strings.Contains(reply, `"proposal"`) || !strings.Contains(reply, `"Hydration reminder"`) {
 		t.Fatalf("static Scheduled reply = %s", reply)
+	}
+}
+
+// TestChatSchedulingToolScript locks the deliberately two-step provider script
+// used by the inline Scheduled E2E flow. A weather question only suggests the
+// two checks; an explicit scheduling request is required before the stub emits
+// either native draft tool call.
+func TestChatSchedulingToolScript(t *testing.T) {
+	weatherMessage := map[string]any{
+		stubMessageRoleKey: messageRoleUser, stubMessageContentKey: "What is the weather forecast for my race?",
+	}
+	weatherFrames := chatStubFrames(t, stubChatRequest([]map[string]any{weatherMessage}, true))
+	if got := joinedStubContent(weatherFrames); !strings.Contains(strings.ToLower(got), "two future weather checks") {
+		t.Fatalf("weather reply = %q, want two future weather checks", got)
+	}
+	if got := stubToolCalls(weatherFrames); len(got) != 0 {
+		t.Fatalf("weather request emitted implicit tool calls = %+v", got)
+	}
+
+	noDefinitionFrames := chatStubFrames(t, stubChatRequest(
+		[]map[string]any{{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: scheduleWeatherPrompt}}, false,
+	))
+	if got := stubToolCalls(noDefinitionFrames); len(got) != 0 {
+		t.Fatalf("request without draft-tool definition emitted calls = %+v", got)
+	}
+
+	scheduledFrames := chatStubFrames(t, stubChatRequest(
+		[]map[string]any{{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: scheduleWeatherPrompt}}, true,
+	))
+	calls := stubToolCalls(scheduledFrames)
+	if len(calls) != 2 {
+		t.Fatalf("scheduled tool calls = %+v, want two", calls)
+	}
+	for i, call := range calls {
+		if call.Index != i || call.ID == "" || call.Type != functionToolType || call.Name != draftScheduledToolName {
+			t.Fatalf("call[%d] = %+v", i, call)
+		}
+		if !strings.Contains(call.Arguments, "fetch fresh race weather") ||
+			!strings.Contains(call.Arguments, "pacing, hydration, and kit guidance") {
+			t.Fatalf("call[%d] instruction = %q", i, call.Arguments)
+		}
+	}
+	if !stubFinishReason(scheduledFrames, "tool_calls") {
+		t.Fatalf("scheduled response did not end with tool_calls: %s", strings.Join(scheduledFrames, "\n"))
+	}
+	deltas := stubToolCallDeltas(scheduledFrames)
+	if len(deltas) != 4 || deltas[0].Index != 0 || deltas[1].Index != 1 || deltas[2].Index != 0 || deltas[3].Index != 1 {
+		t.Fatalf("indexed tool-call deltas = %+v", deltas)
+	}
+	if strings.HasSuffix(deltas[0].Arguments, "}") || strings.HasSuffix(deltas[1].Arguments, "}") ||
+		!strings.HasSuffix(deltas[2].Arguments, "}") || !strings.HasSuffix(deltas[3].Arguments, "}") {
+		t.Fatalf("tool-call JSON was not split across deltas: %+v", deltas)
+	}
+
+	finalFrames := chatStubFrames(t, stubChatRequest([]map[string]any{
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: scheduleWeatherPrompt},
+		scheduledToolRequestMessage(calls),
+		stubToolResultMessage(calls[0], `{"taskId":"weather-check-one"}`),
+		stubToolResultMessage(calls[1], `{"taskId":"weather-check-two"}`),
+	}, true))
+	if got := joinedStubContent(finalFrames); got != "I prepared two weather checks for review." {
+		t.Fatalf("final reply = %q", got)
+	}
+	if got := stubToolCalls(finalFrames); len(got) != 0 {
+		t.Fatalf("final reply emitted tool calls = %+v", got)
+	}
+}
+
+// TestScheduledWeatherProposal ensures each delegated instruction compiles to
+// a separate, one-off data task with the exact browser tools it is allowed to
+// use. Keeping these checks in the stub makes the browser scenario independent
+// of an external model provider.
+func TestScheduledWeatherProposal(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		instruction string
+		proposal    string
+	}{
+		{name: "pre-race", instruction: preRaceWeatherInstruction, proposal: "Pre-race weather check"},
+		{name: "race-day", instruction: raceDayWeatherInstruction, proposal: "Race-day weather check"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := scheduledStubReply(t, []map[string]string{
+				{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
+				{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: tc.instruction},
+			})
+			var body struct {
+				Proposal struct {
+					Name            string   `json:"name"`
+					TaskKind        string   `json:"taskKind"`
+					ExecutionMode   string   `json:"executionMode"`
+					AuthorizedTools []string `json:"authorizedTools"`
+					Schedule        struct {
+						At string `json:"at"`
+					} `json:"schedule"`
+				} `json:"proposal"`
+			}
+			if err := json.Unmarshal([]byte(reply), &body); err != nil {
+				t.Fatalf("decode weather proposal: %v\n%s", err, reply)
+			}
+			if body.Proposal.Name != tc.proposal || body.Proposal.TaskKind != "data" ||
+				body.Proposal.ExecutionMode != "data" || body.Proposal.Schedule.At == "" {
+				t.Fatalf("weather proposal = %+v", body.Proposal)
+			}
+			wantTools := browserNavigateTool + "," + browserSnapshotTool
+			if got := strings.Join(body.Proposal.AuthorizedTools, ","); got != wantTools {
+				t.Fatalf("authorized tools = %q, want %q", got, wantTools)
+			}
+		})
 	}
 }
 
@@ -260,7 +375,7 @@ func scheduledStubReply(t *testing.T, messages []map[string]string) string {
 	frames := extractDataFrames(t, rec.Body.String())
 	var reply strings.Builder
 	for _, frame := range frames {
-		if frame == "[DONE]" {
+		if frame == stubDoneFrame {
 			continue
 		}
 		var chunk chatCompletionChunk
@@ -273,3 +388,183 @@ func scheduledStubReply(t *testing.T, messages []map[string]string) string {
 	}
 	return reply.String()
 }
+
+type stubToolCall struct {
+	Index     int
+	ID        string
+	Type      string
+	Name      string
+	Arguments string
+}
+
+func chatStubFrames(t *testing.T, payload map[string]any) []string {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(raw)))
+	rec := httptest.NewRecorder()
+	handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stub status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	return extractDataFrames(t, rec.Body.String())
+}
+
+func stubChatRequest(messages []map[string]any, includeDraftTool bool) map[string]any {
+	payload := map[string]any{
+		stubRequestModelKey:  stubModelName,
+		"messages":           messages,
+		stubRequestStreamKey: true,
+	}
+	if includeDraftTool {
+		payload["tools"] = []map[string]any{{
+			"type": functionToolType,
+			"function": map[string]any{
+				"name": draftScheduledToolName,
+			},
+		}}
+	}
+	return payload
+}
+
+func scheduledToolRequestMessage(calls []stubToolCall) map[string]any {
+	toolCalls := make([]map[string]any, 0, len(calls))
+	for _, call := range calls {
+		toolCalls = append(toolCalls, map[string]any{
+			"id": call.ID, "type": functionToolType,
+			"function": map[string]any{"name": call.Name, "arguments": callArguments(call)},
+		})
+	}
+	return map[string]any{
+		stubMessageRoleKey: "assistant", stubMessageContentKey: "", "tool_calls": toolCalls,
+	}
+}
+
+func stubToolResultMessage(call stubToolCall, content string) map[string]any {
+	return map[string]any{
+		stubMessageRoleKey:    messageRoleTool,
+		stubToolCallIDKey:     call.ID,
+		stubToolCallNameKey:   call.Name,
+		stubMessageContentKey: content,
+	}
+}
+
+func joinedStubContent(frames []string) string {
+	var content strings.Builder
+	for _, frame := range frames {
+		if frame == stubDoneFrame {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(frame), &chunk) == nil && len(chunk.Choices) > 0 {
+			content.WriteString(chunk.Choices[0].Delta.Content)
+		}
+	}
+	return content.String()
+}
+
+func stubToolCalls(frames []string) []stubToolCall {
+	calls := map[int]stubToolCall{}
+	for _, frame := range frames {
+		if frame == stubDoneFrame {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(frame), &chunk) != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		for _, delta := range chunk.Choices[0].Delta.ToolCalls {
+			call := calls[delta.Index]
+			call.Index = delta.Index
+			if delta.ID != "" {
+				call.ID = delta.ID
+			}
+			if delta.Type != "" {
+				call.Type = delta.Type
+			}
+			if delta.Function.Name != "" {
+				call.Name = delta.Function.Name
+			}
+			call.Arguments += delta.Function.Arguments
+			calls[delta.Index] = call
+		}
+	}
+	ordered := make([]stubToolCall, 0, len(calls))
+	for index := 0; index < len(calls); index++ {
+		if call, ok := calls[index]; ok {
+			ordered = append(ordered, call)
+		}
+	}
+	return ordered
+}
+
+func stubToolCallDeltas(frames []string) []stubToolCall {
+	var calls []stubToolCall
+	for _, frame := range frames {
+		if frame == stubDoneFrame {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(frame), &chunk) != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		for _, call := range chunk.Choices[0].Delta.ToolCalls {
+			calls = append(calls, stubToolCall{
+				Index: call.Index, ID: call.ID, Type: call.Type, Name: call.Function.Name, Arguments: call.Function.Arguments,
+			})
+		}
+	}
+	return calls
+}
+
+func stubFinishReason(frames []string, want string) bool {
+	for _, frame := range frames {
+		var chunk struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(frame), &chunk) == nil && len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason == want {
+			return true
+		}
+	}
+	return false
+}
+
+func callArguments(call stubToolCall) string { return call.Arguments }
