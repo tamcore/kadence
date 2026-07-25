@@ -201,7 +201,7 @@ func hasToolNamed(tools []provider.ToolDefinition, name string) bool {
 }
 
 func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
-	s := NewService(nil, ServiceConfig{MCPMaxTools: 1}, Deps{
+	s := NewService(nil, ServiceConfig{MCPMaxTools: 2}, Deps{
 		FITRoutes: []FITRoute{{
 			ServerName: "ACTIVITY", ServerScope: testFITGlobalScope, DownloadTool: testFITGenericTool,
 			BridgeURL: "http://bridge", BridgeAuthUser: "u", BridgeAuthPass: "p", MaxBytes: 1024,
@@ -212,8 +212,11 @@ func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
 		prefixes: map[string]string{"ACTIVITY\x00GLOBAL": "activity"},
 	})
 
-	if len(tools) != 1 || tools[0].Name != analyzeGarminFITToolName {
-		t.Fatalf("tools = %+v, want only %s within cap", tools, analyzeGarminFITToolName)
+	if len(tools) != 2 ||
+		!hasToolNamed(tools, analyzeGarminFITToolName) ||
+		!hasToolNamed(tools, convertPaceToolName) ||
+		hasToolNamed(tools, "activity__list") {
+		t.Fatalf("tools = %+v, want native FIT and pace tools within cap", tools)
 	}
 }
 
@@ -247,10 +250,10 @@ func TestFITAnalysisReturnsSafeToolError(t *testing.T) {
 // only for "imperial", falling back to metric for anything else (including
 // empty/unknown values).
 func TestUnitPromptLine(t *testing.T) {
-	if l := unitPromptLine("imperial"); !strings.Contains(l, "miles") || !strings.Contains(l, "min/mile") {
+	if l := unitPromptLine(testImperialUnit); !strings.Contains(l, "miles") || !strings.Contains(l, "min/mile") {
 		t.Fatalf("imperial line = %q", l)
 	}
-	for _, u := range []string{"metric", "", "bogus"} {
+	for _, u := range []string{testMetricUnit, "", "bogus"} {
 		l := unitPromptLine(u)
 		if !strings.Contains(l, "kilometers") || !strings.Contains(l, "min/km") {
 			t.Fatalf("unit %q line = %q, want metric", u, l)
@@ -262,7 +265,7 @@ func TestUnitPromptLine(t *testing.T) {
 // unit-system sentence for the given unit preference.
 func TestSystemPromptIncludesUnitLine(t *testing.T) {
 	s := NewService(nil, ServiceConfig{}, Deps{})
-	if !strings.Contains(s.systemPrompt(UserContext{UnitSystem: "imperial"}), "miles") {
+	if !strings.Contains(s.systemPrompt(UserContext{UnitSystem: testImperialUnit}), "miles") {
 		t.Fatal("imperial systemPrompt missing miles line")
 	}
 	if !strings.Contains(s.systemPrompt(UserContext{UnitSystem: "metric"}), "kilometers") {

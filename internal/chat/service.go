@@ -253,7 +253,7 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 // units to use. Any value other than "imperial" (including empty/unknown)
 // falls back to metric.
 func unitPromptLine(unitSystem string) string {
-	if unitSystem == "imperial" {
+	if unitSystem == imperialUnitSystem {
 		return "UNITS: the user uses imperial. ALWAYS convert every distance to miles and every pace/split to min/mile before reporting — tools (e.g. Garmin) return metric, so you MUST convert; never show kilometers or min/km in your reply."
 	}
 	return "UNITS: the user uses metric. ALWAYS report every distance in kilometers and every pace/split in min/km — if a tool returns miles, convert first; never show miles or min/mile in your reply."
@@ -701,19 +701,19 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 		if toolsErr != nil {
 			slog.Warn("mcp tools list failed, proceeding", "err", toolsErr)
 		} else {
-			if fitEnabled {
-				filtered := mcpTools[:0]
-				for _, definition := range mcpTools {
-					if definition.Name != analyzeGarminFITToolName {
-						filtered = append(filtered, definition)
-					}
+			filtered := mcpTools[:0]
+			for _, definition := range mcpTools {
+				if definition.Name == convertPaceToolName ||
+					(fitEnabled && definition.Name == analyzeGarminFITToolName) {
+					continue
 				}
-				mcpTools = filtered
+				filtered = append(filtered, definition)
 			}
+			mcpTools = filtered
 			// Reserve one slot per enabled built-in tool so the total never
 			// exceeds the configured cap.
 			mcpCap := s.maxTools
-			builtins := 0
+			builtins := 1
 			if s.skills != nil {
 				builtins++
 			}
@@ -735,6 +735,7 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 			tools = mcpTools
 		}
 	}
+	tools = append(tools, paceToolDefinition())
 	if s.skills != nil {
 		tools = append(tools, s.skillTool())
 	}
@@ -846,6 +847,9 @@ func (s *Service) dispatchTool(
 			gated[sk.Name] = true
 			return s.gateWithSkill(tc, sk, sink)
 		}
+	}
+	if tc.Name == convertPaceToolName {
+		return s.handlePaceConversion(tc, sink)
 	}
 	return s.runToolCall(ctx, userID, mcpSnap, tc, redactor, sink)
 }

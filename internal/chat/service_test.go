@@ -998,7 +998,10 @@ func (p *capturingToolsProvider) StreamChatWithTools(_ context.Context, req prov
 	return provider.StreamResult{Content: p.reply}, nil
 }
 
-const testMCPMaxTools = 100
+const (
+	testMCPMaxTools         = 100
+	testConvertPaceToolName = "kadence__convert_pace"
+)
 
 func manyToolDefs(n int) []provider.ToolDefinition {
 	defs := make([]provider.ToolDefinition, n)
@@ -1039,8 +1042,15 @@ func TestStreamSmallToolSetPassesThroughUncapped(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	if len(prov.gotTools) != 3 {
-		t.Fatalf("provider received %d tools, want 3 (uncapped)", len(prov.gotTools))
+	hasPaceTool := false
+	for _, tool := range prov.gotTools {
+		if tool.Name == testConvertPaceToolName {
+			hasPaceTool = true
+			break
+		}
+	}
+	if len(prov.gotTools) != 4 || !hasPaceTool {
+		t.Fatalf("provider tools = %+v, want 3 MCP tools plus pace converter", prov.gotTools)
 	}
 }
 

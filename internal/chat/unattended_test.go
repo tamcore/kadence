@@ -54,7 +54,8 @@ func TestUnattendedCatalogResolvesExactOwnerSnapshotAndNativeFIT(t *testing.T) {
 			{Name: testSharedPrivateTool, Description: testUnattendedUsername},
 			{Name: loadSkillToolName},
 			{Name: credsToolName},
-			{Name: analyzeGarminFITToolName, Description: "spoofed"},
+			{Name: analyzeGarminFITToolName, Description: testSpoofedToolDescription},
+			{Name: convertPaceToolName, Description: testSpoofedToolDescription},
 		},
 		prefixes: map[string]string{"GARMIN/USER_alice": "shared"},
 		result:   "alice-result",
@@ -82,10 +83,14 @@ func TestUnattendedCatalogResolvesExactOwnerSnapshotAndNativeFIT(t *testing.T) {
 	}
 	aliceTools := toolNames(t, aliceSnapshot)
 	bobTools := toolNames(t, bobSnapshot)
-	if !slices.Equal(aliceTools, []string{testSharedPrivateTool, analyzeGarminFITToolName}) {
+	if !slices.Contains(aliceTools, testSharedPrivateTool) ||
+		!slices.Contains(aliceTools, analyzeGarminFITToolName) ||
+		countName(aliceTools, convertPaceToolName) != 1 {
 		t.Fatalf("alice tools = %v", aliceTools)
 	}
-	if !slices.Equal(bobTools, []string{testSharedPrivateTool, analyzeGarminFITToolName}) {
+	if !slices.Contains(bobTools, testSharedPrivateTool) ||
+		!slices.Contains(bobTools, analyzeGarminFITToolName) ||
+		countName(bobTools, convertPaceToolName) != 1 {
 		t.Fatalf("bob tools = %v", bobTools)
 	}
 
@@ -97,6 +102,13 @@ func TestUnattendedCatalogResolvesExactOwnerSnapshotAndNativeFIT(t *testing.T) {
 	}
 	if !slices.Equal(alice.calls, []string{testSharedPrivateTool}) || !slices.Equal(bob.calls, []string{testSharedPrivateTool}) {
 		t.Fatalf("calls crossed owners: alice=%v bob=%v", alice.calls, bob.calls)
+	}
+	if got, err := aliceSnapshot.Call(t.Context(), convertPaceToolName, testMetricPaceArgs); err != nil ||
+		got != testMetricPaceResult {
+		t.Fatalf("pace call = %q, %v", got, err)
+	}
+	if !slices.Equal(alice.calls, []string{testSharedPrivateTool}) {
+		t.Fatalf("local pace call reached MCP: %v", alice.calls)
 	}
 	if _, err := aliceSnapshot.Call(t.Context(), analyzeGarminFITToolName, `{"activity_id":1,"unexpected":true}`); err == nil {
 		t.Fatal("native FIT accepted unknown arguments")
@@ -112,8 +124,17 @@ func TestUnattendedCatalogFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tools, err := snapshot.ToolsFor(t.Context()); err != nil || len(tools) != 0 {
+	if tools, err := snapshot.ToolsFor(t.Context()); err != nil ||
+		len(tools) != 1 ||
+		tools[0].Name != convertPaceToolName {
 		t.Fatalf("tools = %v, %v", tools, err)
+	}
+	if got, err := snapshot.Call(
+		t.Context(),
+		convertPaceToolName,
+		`{"unit":"metric","targetpace":"4:52","output":"imperial"}`,
+	); err != nil || got != `{"value":"7:50","unit":"min/mi"}` {
+		t.Fatalf("pace call = %q, %v", got, err)
 	}
 	if _, err := snapshot.Call(t.Context(), "missing", `{}`); err == nil {
 		t.Fatal("missing tool call succeeded")
@@ -139,4 +160,14 @@ func toolNames(t *testing.T, snapshot *UnattendedSnapshot) []string {
 		names[i] = definition.Name
 	}
 	return names
+}
+
+func countName(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
 }

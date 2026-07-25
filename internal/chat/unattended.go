@@ -15,7 +15,7 @@ import (
 
 // UnattendedCatalog resolves immutable, owner-scoped tool snapshots suitable
 // for both chat and unattended workers. Interactive-only built-ins are never
-// included.
+// included; shared local tools are.
 type UnattendedCatalog struct {
 	mcp       MCPTools
 	fitRoutes []FITRoute
@@ -43,7 +43,10 @@ type UnattendedSnapshot struct {
 // SnapshotFor resolves username once, eagerly lists its tools, and freezes the
 // exact definitions and routes used for all later calls.
 func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*UnattendedSnapshot, error) {
-	snapshot := &UnattendedSnapshot{allowed: make(map[string]struct{})}
+	snapshot := &UnattendedSnapshot{
+		tools:   []provider.ToolDefinition{paceToolDefinition()},
+		allowed: map[string]struct{}{convertPaceToolName: {}},
+	}
 	if c == nil || c.mcp == nil || !c.mcp.Enabled() {
 		return snapshot, nil
 	}
@@ -57,7 +60,9 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 	}
 	snapshot.fitRoutes = resolveFITRoutes(snapshot.mcp, c.fitRoutes)
 	for _, definition := range definitions {
-		if definition.Name == credsToolName || definition.Name == loadSkillToolName {
+		if definition.Name == credsToolName ||
+			definition.Name == loadSkillToolName ||
+			definition.Name == convertPaceToolName {
 			continue
 		}
 		if len(snapshot.fitRoutes) > 0 && definition.Name == analyzeGarminFITToolName {
@@ -91,6 +96,9 @@ func (s *UnattendedSnapshot) Call(ctx context.Context, toolName, argsJSON string
 	}
 	if _, ok := s.allowed[toolName]; !ok {
 		return "", fmt.Errorf("chat: tool %q is not authorized in snapshot", toolName)
+	}
+	if toolName == convertPaceToolName {
+		return callPaceTool(argsJSON)
 	}
 	if toolName == analyzeGarminFITToolName {
 		return s.callFIT(ctx, argsJSON)
