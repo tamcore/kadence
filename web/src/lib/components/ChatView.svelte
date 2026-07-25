@@ -133,8 +133,9 @@
 	}
 	.msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 	.msg.assistant {
-		align-self: stretch; width: 100%; max-width: none; padding: 0;
-		background: transparent; border: 0;
+		align-self: flex-start;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		display: flex; flex-direction: column; gap: 8px;
 	}
 	.msg p { margin: 0; }
