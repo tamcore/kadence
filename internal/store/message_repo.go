@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -14,6 +15,15 @@ import (
 
 // MessageRepository accesses the messages table.
 type MessageRepository struct{ pool *pgxpool.Pool }
+
+// ChatUserInput is one ordinary user turn plus its ordered files and selected
+// knowledge documents. Attachment ordinals follow slice order; document
+// metadata is loaded from visible documents rather than trusted from callers.
+type ChatUserInput struct {
+	Content     string
+	Attachments []model.MessageAttachment
+	DocumentIDs []int64
+}
 
 // ErrWrongMessageRole reports that a rewind target exists but has the wrong
 // role for the requested operation.
@@ -65,6 +75,158 @@ func (r *MessageRepository) AddChatUser(ctx context.Context, conversationID, con
 		return model.Message{}, fmt.Errorf("commit add chat user: %w", err)
 	}
 	return message, nil
+}
+
+// AddChatUserInput atomically appends one ordinary chat user message and its
+// attachments/document references while holding the owned conversation lock.
+func (r *MessageRepository) AddChatUserInput(
+	ctx context.Context, conversationID string, userID int64, input ChatUserInput,
+) (model.Message, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return model.Message{}, fmt.Errorf("begin add chat user input: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+		return model.Message{}, err
+	}
+	message, err := addMessageWithPurpose(
+		ctx, tx, conversationID, model.MsgRoleUser, input.Content, nil, messagePurposeChat,
+	)
+	if err != nil {
+		return model.Message{}, err
+	}
+	message.Attachments, err = insertMessageAttachments(ctx, tx, message.ID, input.Attachments)
+	if err != nil {
+		return model.Message{}, err
+	}
+	message.DocumentReferences, err = insertMessageDocumentReferences(
+		ctx, tx, message.ID, userID, input.DocumentIDs,
+	)
+	if err != nil {
+		return model.Message{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Message{}, fmt.Errorf("commit add chat user input: %w", err)
+	}
+	return message, nil
+}
+
+func insertMessageAttachments(
+	ctx context.Context, tx pgx.Tx, messageID int64, attachments []model.MessageAttachment,
+) ([]model.MessageAttachment, error) {
+	if len(attachments) == 0 {
+		return nil, nil
+	}
+	out := make([]model.MessageAttachment, 0, len(attachments))
+	for ordinal, attachment := range attachments {
+		var stored model.MessageAttachment
+		err := tx.QueryRow(ctx,
+			`INSERT INTO message_attachments (
+			     message_id, filename, mime_type, kind, size_bytes, raw_bytes,
+			     extracted_markdown, image_width, image_height, ordinal
+			 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 RETURNING id, message_id, filename, mime_type, kind, size_bytes,
+			           image_width, image_height, ordinal`,
+			messageID, attachment.Filename, attachment.MIME, attachment.Kind,
+			int64(len(attachment.RawBytes)), attachment.RawBytes, attachment.ExtractedMarkdown,
+			attachment.ImageWidth, attachment.ImageHeight, ordinal,
+		).Scan(
+			&stored.ID, &stored.MessageID, &stored.Filename, &stored.MIME,
+			&stored.Kind, &stored.SizeBytes, &stored.ImageWidth, &stored.ImageHeight,
+			&stored.Ordinal,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("insert message attachment: %w", err)
+		}
+		stored.RawBytes = attachment.RawBytes
+		stored.ExtractedMarkdown = attachment.ExtractedMarkdown
+		out = append(out, stored)
+	}
+	return out, nil
+}
+
+type visibleDocumentSnapshot struct {
+	id       int64
+	filename string
+	scope    string
+}
+
+func insertMessageDocumentReferences(
+	ctx context.Context, tx pgx.Tx, messageID, userID int64, documentIDs []int64,
+) ([]model.MessageDocumentReference, error) {
+	if len(documentIDs) == 0 {
+		return nil, nil
+	}
+	documents, err := loadVisibleDocumentSnapshots(ctx, tx, userID, documentIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.MessageDocumentReference, 0, len(documents))
+	for ordinal, document := range documents {
+		var reference model.MessageDocumentReference
+		err := tx.QueryRow(ctx,
+			`INSERT INTO message_document_references (
+			     message_id, document_id, filename_snapshot, scope_snapshot, ordinal
+			 ) VALUES ($1, $2, $3, $4, $5)
+			 RETURNING id, message_id, document_id, filename_snapshot, scope_snapshot, ordinal`,
+			messageID, document.id, document.filename, document.scope, ordinal,
+		).Scan(
+			&reference.ID, &reference.MessageID, &reference.DocumentID,
+			&reference.Filename, &reference.Scope, &reference.Ordinal,
+		)
+		if err != nil {
+			if isDocumentReferenceForeignKeyViolation(err) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("insert message document reference: %w", err)
+		}
+		reference.Available = true
+		out = append(out, reference)
+	}
+	return out, nil
+}
+
+func loadVisibleDocumentSnapshots(
+	ctx context.Context, tx pgx.Tx, userID int64, documentIDs []int64,
+) ([]visibleDocumentSnapshot, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT id, filename, scope
+		   FROM documents
+		  WHERE id = ANY($1::bigint[])
+		    AND (scope = $2 OR (scope = $3 AND owner_user_id = $4))
+		  ORDER BY array_position($1::bigint[], id)
+		  FOR KEY SHARE`,
+		documentIDs, model.ScopePublic, model.ScopePrivate, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load visible document references: %w", err)
+	}
+	defer rows.Close()
+
+	documents := make([]visibleDocumentSnapshot, 0, len(documentIDs))
+	for rows.Next() {
+		var document visibleDocumentSnapshot
+		if err := rows.Scan(&document.id, &document.filename, &document.scope); err != nil {
+			return nil, fmt.Errorf("scan visible document reference: %w", err)
+		}
+		documents = append(documents, document)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load visible document references: %w", err)
+	}
+	if len(documents) != len(documentIDs) {
+		return nil, ErrNotFound
+	}
+	return documents, nil
+}
+
+func isDocumentReferenceForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23503" &&
+		pgErr.ConstraintName == "message_document_references_document_id_fkey"
 }
 
 // AddChatAssistantIfLatestUser appends an ordinary chat assistant message
@@ -161,7 +323,14 @@ func (r *MessageRepository) ListByConversation(ctx context.Context, conversation
 	if err != nil {
 		return nil, fmt.Errorf("list messages: %w", err)
 	}
-	return scanMessages(rows)
+	messages, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // GetByID returns one message scoped to its conversation.
@@ -178,7 +347,11 @@ func (r *MessageRepository) GetByID(
 	if err != nil {
 		return model.Message{}, fmt.Errorf("get message: %w", err)
 	}
-	return message, nil
+	messages := []model.Message{message}
+	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
+		return model.Message{}, err
+	}
+	return messages[0], nil
 }
 
 // ListRecentByConversation returns at most limit newest messages while
@@ -197,7 +370,14 @@ func (r *MessageRepository) ListRecentByConversation(ctx context.Context, conver
 	if err != nil {
 		return nil, fmt.Errorf("list recent messages: %w", err)
 	}
-	return scanMessages(rows)
+	messages, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // ListRecentDefinitionByConversation returns only Scheduled definition
@@ -218,7 +398,14 @@ func (r *MessageRepository) ListRecentDefinitionByConversation(ctx context.Conte
 	if err != nil {
 		return nil, fmt.Errorf("list recent scheduled definition messages: %w", err)
 	}
-	return scanMessages(rows)
+	messages, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // EditAndRewind updates one owned ordinary-chat user message and removes every
@@ -256,6 +443,11 @@ func (r *MessageRepository) EditAndRewind(
 		conversationID, messageID, content); err != nil {
 		return model.Message{}, fmt.Errorf("update edited message: %w", err)
 	}
+	targets := []model.Message{target}
+	if err := hydrateMessageRelations(ctx, tx, targets, true); err != nil {
+		return model.Message{}, err
+	}
+	target = targets[0]
 	if err := tx.Commit(ctx); err != nil {
 		return model.Message{}, fmt.Errorf("commit edit rewind: %w", err)
 	}
@@ -304,6 +496,11 @@ func (r *MessageRepository) RegenerateAndRewind(
 		conversationID, messageID); err != nil {
 		return model.Message{}, fmt.Errorf("delete regenerated message suffix: %w", err)
 	}
+	prompts := []model.Message{prompt}
+	if err := hydrateMessageRelations(ctx, tx, prompts, true); err != nil {
+		return model.Message{}, err
+	}
+	prompt = prompts[0]
 	if err := tx.Commit(ctx); err != nil {
 		return model.Message{}, fmt.Errorf("commit regenerate rewind: %w", err)
 	}
@@ -411,4 +608,102 @@ func scanMessages(rows pgx.Rows) ([]model.Message, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+type messageRelationsQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func hydrateMessageRelations(
+	ctx context.Context, db messageRelationsQuerier, messages []model.Message,
+	includeAttachmentPayload bool,
+) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	messageIndexes := make(map[int64]int, len(messages))
+	messageIDs := make([]int64, 0, len(messages))
+	for index := range messages {
+		messageIndexes[messages[index].ID] = index
+		messageIDs = append(messageIDs, messages[index].ID)
+	}
+
+	attachmentQuery := `SELECT id, message_id, filename, mime_type, kind, size_bytes,
+	                           image_width, image_height, ordinal`
+	if includeAttachmentPayload {
+		attachmentQuery += `, raw_bytes, extracted_markdown`
+	}
+	attachmentQuery += `
+	                      FROM message_attachments
+	                     WHERE message_id = ANY($1::bigint[])
+	                     ORDER BY message_id, ordinal`
+	attachmentRows, err := db.Query(ctx, attachmentQuery, messageIDs)
+	if err != nil {
+		return fmt.Errorf("list message attachments: %w", err)
+	}
+	for attachmentRows.Next() {
+		var attachment model.MessageAttachment
+		destinations := []any{
+			&attachment.ID, &attachment.MessageID, &attachment.Filename,
+			&attachment.MIME, &attachment.Kind, &attachment.SizeBytes,
+			&attachment.ImageWidth, &attachment.ImageHeight, &attachment.Ordinal,
+		}
+		if includeAttachmentPayload {
+			destinations = append(
+				destinations, &attachment.RawBytes, &attachment.ExtractedMarkdown,
+			)
+		}
+		if err := attachmentRows.Scan(destinations...); err != nil {
+			attachmentRows.Close()
+			return fmt.Errorf("scan message attachment: %w", err)
+		}
+		index, ok := messageIndexes[attachment.MessageID]
+		if !ok {
+			attachmentRows.Close()
+			return fmt.Errorf("scan message attachment: message %d was not requested", attachment.MessageID)
+		}
+		messages[index].Attachments = append(messages[index].Attachments, attachment)
+	}
+	if err := attachmentRows.Err(); err != nil {
+		attachmentRows.Close()
+		return fmt.Errorf("list message attachments: %w", err)
+	}
+	attachmentRows.Close()
+
+	referenceRows, err := db.Query(ctx,
+		`SELECT id, message_id, document_id, filename_snapshot, scope_snapshot, ordinal
+		   FROM message_document_references
+		  WHERE message_id = ANY($1::bigint[])
+		  ORDER BY message_id, ordinal`,
+		messageIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("list message document references: %w", err)
+	}
+	for referenceRows.Next() {
+		var reference model.MessageDocumentReference
+		if err := referenceRows.Scan(
+			&reference.ID, &reference.MessageID, &reference.DocumentID,
+			&reference.Filename, &reference.Scope, &reference.Ordinal,
+		); err != nil {
+			referenceRows.Close()
+			return fmt.Errorf("scan message document reference: %w", err)
+		}
+		reference.Available = reference.DocumentID != nil
+		index, ok := messageIndexes[reference.MessageID]
+		if !ok {
+			referenceRows.Close()
+			return fmt.Errorf(
+				"scan message document reference: message %d was not requested",
+				reference.MessageID,
+			)
+		}
+		messages[index].DocumentReferences = append(messages[index].DocumentReferences, reference)
+	}
+	if err := referenceRows.Err(); err != nil {
+		referenceRows.Close()
+		return fmt.Errorf("list message document references: %w", err)
+	}
+	referenceRows.Close()
+	return nil
 }
