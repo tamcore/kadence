@@ -49,12 +49,62 @@ func (r *DocumentRepository) GetByID(ctx context.Context, id int64) (model.Docum
 	return d, nil
 }
 
+// ListVisibleByIDs returns every requested document in request order,
+// including extracted markdown. A document is visible when it is public or
+// private and owned by userID. Missing, deleted, and invisible documents all
+// fail closed with ErrNotFound and no partial result.
+func (r *DocumentRepository) ListVisibleByIDs(
+	ctx context.Context, userID int64, ids []int64,
+) ([]model.Document, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT d.id, d.owner_user_id, d.scope, d.filename, d.mime,
+		        d.source_type, d.extracted_markdown, d.created_at
+		   FROM unnest($1::bigint[]) WITH ORDINALITY AS requested(id, ordinal)
+		   JOIN documents d
+		     ON d.id = requested.id
+		    AND (d.scope = $2 OR (d.scope = $3 AND d.owner_user_id = $4))
+		  ORDER BY requested.ordinal`,
+		ids, model.ScopePublic, model.ScopePrivate, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list visible documents: %w", err)
+	}
+	defer rows.Close()
+
+	documents := make([]model.Document, 0, len(ids))
+	for rows.Next() {
+		var document model.Document
+		if err := rows.Scan(
+			&document.ID, &document.OwnerUserID, &document.Scope, &document.Filename,
+			&document.Mime, &document.SourceType, &document.ExtractedMarkdown,
+			&document.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan visible document: %w", err)
+		}
+		documents = append(documents, document)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list visible documents: %w", err)
+	}
+	if len(documents) != len(ids) {
+		return nil, ErrNotFound
+	}
+	return documents, nil
+}
+
 // ListByOwner returns a user's documents, newest first. The (potentially
 // large) extracted_markdown column is omitted and left empty.
 func (r *DocumentRepository) ListByOwner(ctx context.Context, ownerUserID int64) ([]model.Document, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, owner_user_id, scope, filename, mime, source_type, created_at
-		 FROM documents WHERE owner_user_id = $1 ORDER BY created_at DESC`, ownerUserID)
+		 FROM documents
+		 WHERE owner_user_id = $1 AND scope = $2
+		 ORDER BY created_at DESC`,
+		ownerUserID, model.ScopePrivate,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("list documents by owner: %w", err)
 	}

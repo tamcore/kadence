@@ -96,8 +96,11 @@ type fakeErr struct{}
 func (*fakeErr) Error() string { return "not found" }
 
 type fakeMsgs struct {
-	added           []model.Message
-	rejectAssistant bool
+	added                      []model.Message
+	rejectAssistant            bool
+	lastInput                  model.ChatUserInput
+	assistantSaveContextErrors []error
+	assistantSaveHadDeadlines  []bool
 }
 
 func (f *fakeMsgs) Add(_ context.Context, convID string, role, content string) (model.Message, error) {
@@ -113,9 +116,60 @@ func (f *fakeMsgs) AddWithToolCalls(_ context.Context, convID string, role, cont
 func (f *fakeMsgs) AddChatUser(ctx context.Context, convID, content string) (model.Message, error) {
 	return f.Add(ctx, convID, model.MsgRoleUser, content)
 }
+func (f *fakeMsgs) AddChatUserInput(
+	_ context.Context, convID string, _ int64, input model.ChatUserInput,
+) (model.Message, error) {
+	f.lastInput = input
+	attachments := append([]model.MessageAttachment(nil), input.Attachments...)
+	for i := range attachments {
+		attachments[i].ID = int64(i + 1)
+		attachments[i].MessageID = int64(len(f.added) + 1)
+		attachments[i].Ordinal = i
+	}
+	m := model.Message{
+		ID: int64(len(f.added) + 1), ConversationID: convID,
+		Role: model.MsgRoleUser, Content: input.Content,
+		Attachments: attachments,
+	}
+	for ordinal, documentID := range input.DocumentIDs {
+		id := documentID
+		m.DocumentReferences = append(m.DocumentReferences, model.MessageDocumentReference{
+			DocumentID: &id, Filename: "selected.md", Scope: model.ScopePrivate,
+			Ordinal: ordinal, Available: true,
+		})
+	}
+	f.added = append(f.added, m)
+	return m, nil
+}
+func (f *fakeMsgs) UpdateChatAttachmentExtractions(
+	_ context.Context, convID string, messageID, _ int64,
+	attachments []model.MessageAttachment,
+) (model.Message, error) {
+	for i := range f.added {
+		if f.added[i].ConversationID != convID || f.added[i].ID != messageID {
+			continue
+		}
+		if len(f.added[i].Attachments) != len(attachments) {
+			return model.Message{}, errFakeNotFound
+		}
+		for j := range attachments {
+			if f.added[i].Attachments[j].ID != attachments[j].ID {
+				return model.Message{}, errFakeNotFound
+			}
+			f.added[i].Attachments[j].ExtractedMarkdown =
+				attachments[j].ExtractedMarkdown
+			f.added[i].Attachments[j].ExtractionComplete = true
+		}
+		return f.added[i], nil
+	}
+	return model.Message{}, errFakeNotFound
+}
 func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall,
 ) (model.Message, error) {
+	_, hadDeadline := ctx.Deadline()
+	f.assistantSaveHadDeadlines = append(f.assistantSaveHadDeadlines, hadDeadline)
+	f.assistantSaveContextErrors = append(f.assistantSaveContextErrors, ctx.Err())
 	if f.rejectAssistant {
 		return model.Message{}, errFakeNotFound
 	}
@@ -161,21 +215,29 @@ func (f *fakeMsgs) RegenerateAndRewind(_ context.Context, _ string, messageID, _
 }
 
 type chatAuditStore struct {
-	started     model.MCPAuditCall
-	finished    model.MCPAuditCall
-	startCount  int
-	finishCount int
+	started                model.MCPAuditCall
+	finished               model.MCPAuditCall
+	startCount             int
+	finishCount            int
+	startDeadlineRemaining time.Duration
+	startContextErr        error
+	finishContextErr       error
 }
 
-func (s *chatAuditStore) Start(_ context.Context, call model.MCPAuditCall) (int64, error) {
+func (s *chatAuditStore) Start(ctx context.Context, call model.MCPAuditCall) (int64, error) {
 	s.started = call
 	s.startCount++
+	if deadline, ok := ctx.Deadline(); ok {
+		s.startDeadlineRemaining = time.Until(deadline)
+	}
+	s.startContextErr = ctx.Err()
 	return 9, nil
 }
 
-func (s *chatAuditStore) Finish(_ context.Context, id int64, status, result, errorText string, finishedAt time.Time) error {
+func (s *chatAuditStore) Finish(ctx context.Context, id int64, status, result, errorText string, finishedAt time.Time) error {
 	s.finished = model.MCPAuditCall{ID: id, Status: status, Result: result, Error: errorText, FinishedAt: &finishedAt}
 	s.finishCount++
+	s.finishContextErr = ctx.Err()
 	return nil
 }
 
@@ -618,6 +680,110 @@ func TestStreamAppliesTimeout(t *testing.T) {
 	}
 }
 
+type timeoutPartialProvider struct{}
+
+func (timeoutPartialProvider) StreamChat(
+	ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc,
+) (string, error) {
+	result, err := (timeoutPartialProvider{}).StreamChatWithTools(ctx, req, onToken)
+	return result.Content, err
+}
+
+func (timeoutPartialProvider) StreamChatWithTools(
+	ctx context.Context, _ provider.ChatRequest, onToken provider.TokenFunc,
+) (provider.StreamResult, error) {
+	if err := onToken("partial before timeout"); err != nil {
+		return provider.StreamResult{}, err
+	}
+	<-ctx.Done()
+	return provider.StreamResult{Content: "partial before timeout"}, ctx.Err()
+}
+
+type nearDeadlineProvider struct{}
+
+func (nearDeadlineProvider) StreamChat(
+	ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc,
+) (string, error) {
+	result, err := (nearDeadlineProvider{}).StreamChatWithTools(ctx, req, onToken)
+	return result.Content, err
+}
+
+func (nearDeadlineProvider) StreamChatWithTools(
+	ctx context.Context, _ provider.ChatRequest, onToken provider.TokenFunc,
+) (provider.StreamResult, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return provider.StreamResult{}, errors.New("provider context has no deadline")
+	}
+	wait := time.Until(deadline) / 2
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return provider.StreamResult{}, ctx.Err()
+	case <-timer.C:
+	}
+	if err := onToken("completed near deadline"); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: "completed near deadline"}, nil
+}
+
+func TestTurnDeadlineDoesNotReplaceAssistantPersistenceContext(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider provider.Provider
+		wantErr  bool
+	}{
+		{name: "partial timeout", provider: timeoutPartialProvider{}, wantErr: true},
+		{name: "near deadline completion", provider: nearDeadlineProvider{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msgs := &fakeMsgs{}
+			svc := chat.NewService(tc.provider,
+				chat.ServiceConfig{
+					Model: testModel, MaxTokens: testMaxTokens,
+					Timeout: 40 * time.Millisecond,
+				},
+				chat.Deps{
+					Convs: &fakeConvs{byID: map[string]model.Conversation{
+						testConvID: {
+							ID: testConvID, UserID: testUserID, Title: testConvTitle,
+						},
+					}},
+					Msgs: msgs,
+				},
+			)
+
+			err := svc.Stream(
+				context.Background(), testUserID,
+				chat.UserContext{Username: testUsername},
+				testConvID, "persist this", &capturingSink{},
+			)
+			if tc.wantErr && err == nil {
+				t.Fatal("Stream error = nil, want provider timeout")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			if len(msgs.assistantSaveContextErrors) != 1 {
+				t.Fatalf(
+					"assistant save contexts = %v, want one persistence attempt",
+					msgs.assistantSaveContextErrors,
+				)
+			}
+			if msgs.assistantSaveContextErrors[0] != nil ||
+				msgs.assistantSaveHadDeadlines[0] {
+				t.Fatalf(
+					"assistant persistence inherited external deadline: err=%v deadline=%v",
+					msgs.assistantSaveContextErrors[0],
+					msgs.assistantSaveHadDeadlines[0],
+				)
+			}
+		})
+	}
+}
+
 // recordingProvider records whether StreamChat was called; returns a canned reply.
 const (
 	testGuardrailClassifierModel = "c"
@@ -695,7 +861,7 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 }
 
 // TestStreamGuardrailRefusalSkipsEmbedding is a regression test for a data
-// egress ordering bug: assembleRAGInserts (which embeds the raw user
+// egress ordering bug: RAG retrieval (which embeds the raw user
 // message via an external embedding provider) must never run for a message
 // the guardrail refuses. A refused message must never leave the app.
 func TestStreamGuardrailRefusalSkipsEmbedding(t *testing.T) {
@@ -1039,6 +1205,95 @@ func TestStreamAuditsRemoteMCPCallWithChatAndModel(t *testing.T) {
 	}
 }
 
+func TestStreamToolCallUsesExternalDeadlineWithoutShorteningDurableAuditContext(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	msgs := &fakeMsgs{}
+	prov := &toolThenContentProvider{
+		toolName: testToolName, toolArgs: testToolArgs, finalReply: testReply,
+	}
+	mcp := &fakeMCPTools{
+		enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}},
+		callResult: testToolReply,
+	}
+	auditStore := &chatAuditStore{}
+	recorder := mcpaudit.NewRecorder(auditStore, slog.Default(), time.Now)
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			Timeout: 40 * time.Millisecond,
+		},
+		chat.Deps{
+			Convs: convs, Msgs: msgs, MCP: mcp, Audit: recorder,
+		},
+	)
+
+	if err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		"call the tool", &capturingSink{},
+	); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if !mcp.callHadDeadline ||
+		mcp.callDeadlineRemaining <= 0 ||
+		mcp.callDeadlineRemaining > 100*time.Millisecond {
+		t.Fatalf(
+			"MCP call deadline = present:%v remaining:%v, want shared short turn deadline",
+			mcp.callHadDeadline, mcp.callDeadlineRemaining,
+		)
+	}
+	if auditStore.startContextErr != nil ||
+		auditStore.finishContextErr != nil ||
+		auditStore.startDeadlineRemaining < time.Second {
+		t.Fatalf(
+			"audit persistence inherited external deadline: start_remaining=%v start_err=%v finish_err=%v",
+			auditStore.startDeadlineRemaining,
+			auditStore.startContextErr,
+			auditStore.finishContextErr,
+		)
+	}
+	if len(msgs.assistantSaveHadDeadlines) != 1 ||
+		msgs.assistantSaveHadDeadlines[0] ||
+		msgs.assistantSaveContextErrors[0] != nil {
+		t.Fatalf(
+			"assistant persistence context = deadline:%v err:%v",
+			msgs.assistantSaveHadDeadlines,
+			msgs.assistantSaveContextErrors,
+		)
+	}
+}
+
+func TestStreamToolDiscoveryUsesExternalDeadline(t *testing.T) {
+	mcp := &fakeMCPTools{
+		enabled: true,
+		tools:   []provider.ToolDefinition{{Name: testToolName}},
+	}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			Timeout: 40 * time.Millisecond,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:  &fakeMsgs{}, MCP: mcp,
+		},
+	)
+
+	if err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		"discover tools", &capturingSink{},
+	); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if !mcp.toolsHadDeadline ||
+		mcp.toolsDeadlineRemaining <= 0 ||
+		mcp.toolsDeadlineRemaining > 100*time.Millisecond {
+		t.Fatalf(
+			"MCP tool discovery deadline = present:%v remaining:%v, want shared short turn deadline",
+			mcp.toolsHadDeadline, mcp.toolsDeadlineRemaining,
+		)
+	}
+}
+
 // toolThenContentProvider returns a tool call on the first StreamChatWithTools
 // call and plain content on the second.
 type toolThenContentProvider struct {
@@ -1088,16 +1343,20 @@ func (p *alwaysToolProvider) StreamChatWithTools(_ context.Context, _ provider.C
 // hands out a *fakeMCPSnapshot bound back to this fake, so tests can still
 // assert on Call/ToolsFor invocations via the parent.
 type fakeMCPTools struct {
-	enabled       bool
-	tools         []provider.ToolDefinition
-	hints         []string
-	callResult    string
-	callErr       error
-	gotUsername   string
-	gotToolName   string
-	gotArgsJSON   string
-	callInvoked   bool
-	snapshotCalls int
+	enabled                bool
+	tools                  []provider.ToolDefinition
+	hints                  []string
+	callResult             string
+	callErr                error
+	gotUsername            string
+	gotToolName            string
+	gotArgsJSON            string
+	callInvoked            bool
+	callHadDeadline        bool
+	callDeadlineRemaining  time.Duration
+	toolsHadDeadline       bool
+	toolsDeadlineRemaining time.Duration
+	snapshotCalls          int
 }
 
 func (f *fakeMCPTools) Enabled() bool { return f.enabled }
@@ -1113,14 +1372,22 @@ type fakeMCPSnapshot struct {
 	parent *fakeMCPTools
 }
 
-func (s *fakeMCPSnapshot) ToolsFor(_ context.Context) ([]provider.ToolDefinition, error) {
+func (s *fakeMCPSnapshot) ToolsFor(ctx context.Context) ([]provider.ToolDefinition, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		s.parent.toolsHadDeadline = true
+		s.parent.toolsDeadlineRemaining = time.Until(deadline)
+	}
 	return s.parent.tools, nil
 }
 
-func (s *fakeMCPSnapshot) Call(_ context.Context, toolName, argsJSON string) (string, error) {
+func (s *fakeMCPSnapshot) Call(ctx context.Context, toolName, argsJSON string) (string, error) {
 	s.parent.callInvoked = true
 	s.parent.gotToolName = toolName
 	s.parent.gotArgsJSON = argsJSON
+	if deadline, ok := ctx.Deadline(); ok {
+		s.parent.callHadDeadline = true
+		s.parent.callDeadlineRemaining = time.Until(deadline)
+	}
 	return s.parent.callResult, s.parent.callErr
 }
 
@@ -2008,9 +2275,8 @@ func TestStreamTruncatesTitleMultibyte(t *testing.T) {
 
 // TestStreamBoundsHistoryToContextBudget verifies Stream trims the loaded
 // conversation history to the configured ContextBudgetTokens before sending
-// it to the provider: the first user message is always present, an
-// oldest-middle turn is dropped, and the newest turn (plus the live user
-// text) still reaches the provider.
+// it to the provider: oldest history can be dropped and the newest turn plus
+// the live user text still reach the provider.
 func TestStreamBoundsHistoryToContextBudget(t *testing.T) {
 	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle}}}
 	msgs := &fakeMsgs{}
@@ -2028,10 +2294,8 @@ func TestStreamBoundsHistoryToContextBudget(t *testing.T) {
 	newestTurnUserContent := msgs.added[4].Content
 
 	captP := &capturingProvider{reply: "ok"}
-	// Budget fits the system prompt (including the always-on weather nudge
-	// line) + live user text + the first turn (~380 tokens) + the newest turn
-	// (250 more, ~630 total), but not also the middle turn (would need
-	// ~880), so the middle turn must be dropped.
+	// The constrained budget prioritizes current text, then newest whole
+	// history turns.
 	svc := chat.NewService(captP,
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, SystemPrompt: "sp", ContextBudgetTokens: 660},
 		chat.Deps{Convs: convs, Msgs: msgs})
@@ -2045,8 +2309,8 @@ func TestStreamBoundsHistoryToContextBudget(t *testing.T) {
 		contents = append(contents, m.Content)
 	}
 	full := strings.Join(contents, "\n")
-	if !strings.Contains(full, firstUserContent) {
-		t.Fatalf("expected first user message retained, got messages: %+v", captP.gotMessages)
+	if strings.Contains(full, firstUserContent) {
+		t.Fatalf("expected oldest user message dropped, got messages: %+v", captP.gotMessages)
 	}
 	if !strings.Contains(full, newestTurnUserContent) {
 		t.Fatalf("expected newest turn retained, got messages: %+v", captP.gotMessages)
@@ -2120,9 +2384,9 @@ func TestStreamBudgetAccountsForRAGAndSkillInserts(t *testing.T) {
 
 	captP := &capturingProvider{reply: "ok"}
 	// Budget fits system (including the always-on weather nudge line) + live
-	// user + RAG/skill reserve + first turn + newest turn (~935 tokens) but
-	// not also the middle turn (~1185 tokens), so the middle turn must be
-	// dropped once the RAG/skill reserve is accounted for. Under the old
+	// user + RAG/skill reserve + recent history, but not all three turns.
+	// The oldest and middle turns must be dropped once the RAG/skill reserve
+	// is accounted for. Under the old
 	// (buggy) accounting — no reserve — all 3 turns would fit and the final
 	// request (with RAG+skill inserts added after) would overshoot the budget.
 	const budget = 960
@@ -2146,8 +2410,8 @@ func TestStreamBudgetAccountsForRAGAndSkillInserts(t *testing.T) {
 	}
 
 	got := full.String()
-	if !strings.Contains(got, firstUserContent) {
-		t.Fatalf("expected first user message retained, got messages: %+v", captP.gotMessages)
+	if strings.Contains(got, firstUserContent) {
+		t.Fatalf("expected oldest user message dropped, got messages: %+v", captP.gotMessages)
 	}
 	if !strings.Contains(got, newestTurnUserContent) {
 		t.Fatalf("expected newest turn retained, got messages: %+v", captP.gotMessages)

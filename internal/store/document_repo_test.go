@@ -30,6 +30,12 @@ func TestDocumentCreateListDeleteScoped(t *testing.T) {
 	if _, err := docs.Create(ctx, model.Document{OwnerUserID: nil, Scope: model.ScopePublic, Filename: testFilenamePublic, Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "public text"}); err != nil {
 		t.Fatalf("create public: %v", err)
 	}
+	if _, err := docs.Create(ctx, model.Document{
+		OwnerUserID: &u.ID, Scope: model.ScopePublic, Filename: "owned-public.pdf",
+		Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "public text with owner",
+	}); err != nil {
+		t.Fatalf("create owned public: %v", err)
+	}
 
 	owned, _ := docs.ListByOwner(ctx, u.ID)
 	if len(owned) != 1 || owned[0].Filename != testFilenamePriv {
@@ -39,7 +45,14 @@ func TestDocumentCreateListDeleteScoped(t *testing.T) {
 		t.Fatalf("list must not return extracted_markdown")
 	}
 	pub, _ := docs.ListPublic(ctx)
-	if len(pub) != 1 || pub[0].Filename != testFilenamePublic {
+	if len(pub) != 2 {
+		t.Fatalf("ListPublic wrong: %+v", pub)
+	}
+	publicFilenames := map[string]bool{}
+	for _, document := range pub {
+		publicFilenames[document.Filename] = true
+	}
+	if !publicFilenames[testFilenamePublic] || !publicFilenames["owned-public.pdf"] {
 		t.Fatalf("ListPublic wrong: %+v", pub)
 	}
 

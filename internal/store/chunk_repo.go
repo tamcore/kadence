@@ -64,6 +64,67 @@ func (r *ChunkRepository) SearchTopK(ctx context.Context, userID int64, embeddin
 	return out, rows.Err()
 }
 
+// SearchTopKByVisibleDocuments returns up to kPerDocument nearest current-model
+// chunks for each requested document in one query. Visibility is enforced by
+// joining documents: public documents and userID's own private documents are
+// eligible; invisible or missing document IDs contribute no results.
+func (r *ChunkRepository) SearchTopKByVisibleDocuments(
+	ctx context.Context,
+	userID int64,
+	documentIDs []int64,
+	embedding []float32,
+	kPerDocument int,
+) (map[int64][]model.Chunk, error) {
+	out := make(map[int64][]model.Chunk)
+	if len(documentIDs) == 0 || kPerDocument <= 0 {
+		return out, nil
+	}
+	queryVector := pgvector.NewVector(embedding)
+	rows, err := r.pool.Query(ctx,
+		`SELECT nearest.id, nearest.user_id, nearest.conversation_id::text,
+		        nearest.document_id, nearest.scope, nearest.source_kind,
+		        nearest.source_id, nearest.content, nearest.created_at
+		   FROM unnest($1::bigint[]) WITH ORDINALITY AS requested(id, ordinal)
+		   JOIN documents d
+		     ON d.id = requested.id
+		    AND (d.scope = $2 OR (d.scope = $3 AND d.owner_user_id = $4))
+		   JOIN LATERAL (
+		        SELECT c.*, c.embedding <=> $5 AS distance
+		          FROM chunks c
+		         WHERE c.document_id = d.id
+		           AND c.source_kind = $6
+		           AND c.embedding_model = $7
+		         ORDER BY distance, c.id
+		         LIMIT $8
+		   ) AS nearest ON true
+		  ORDER BY requested.ordinal, nearest.distance, nearest.id`,
+		documentIDs, model.ScopePublic, model.ScopePrivate, userID,
+		queryVector, model.ChunkSourceDocument, r.embeddingModel, kPerDocument,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search visible document chunks: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var chunk model.Chunk
+		if err := rows.Scan(
+			&chunk.ID, &chunk.UserID, &chunk.ConversationID, &chunk.DocumentID,
+			&chunk.Scope, &chunk.SourceKind, &chunk.SourceID, &chunk.Content,
+			&chunk.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan visible document chunk: %w", err)
+		}
+		if chunk.DocumentID != nil {
+			out[*chunk.DocumentID] = append(out[*chunk.DocumentID], chunk)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("search visible document chunks: %w", err)
+	}
+	return out, nil
+}
+
 // ChunkRef is a lightweight projection of a chunk used by the context
 // explorer, omitting the embedding and other fields not needed there.
 type ChunkRef struct {

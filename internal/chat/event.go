@@ -1,6 +1,30 @@
 // Package chat orchestrates streaming LLM conversations.
 package chat
 
+// EventAttachment is safe attachment metadata for optimistic client
+// reconciliation. It never contains raw bytes or extracted document text.
+type EventAttachment struct {
+	ID          int64  `json:"id"`
+	Filename    string `json:"filename"`
+	MIME        string `json:"mime"`
+	Kind        string `json:"kind"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	ImageWidth  *int   `json:"imageWidth,omitempty"`
+	ImageHeight *int   `json:"imageHeight,omitempty"`
+	Ordinal     int    `json:"ordinal"`
+}
+
+// EventDocumentReference is the persisted selected-document snapshot exposed
+// in meta events for optimistic client reconciliation.
+type EventDocumentReference struct {
+	ID         int64  `json:"id"`
+	DocumentID *int64 `json:"documentId,omitempty"`
+	Filename   string `json:"filename"`
+	Scope      string `json:"scope"`
+	Ordinal    int    `json:"ordinal"`
+	Available  bool   `json:"available"`
+}
+
 // Event types emitted over SSE.
 const (
 	EventMeta        = "meta"
@@ -26,6 +50,10 @@ type ChatEvent struct {
 	RequestID          string            `json:"requestId,omitempty"`
 	Reason             string            `json:"reason,omitempty"`
 	Fields             []CredentialField `json:"fields,omitempty"`
+	// Pointer-to-slice keeps these fields absent on non-meta events while meta
+	// events encode an empty collection as [] rather than null/omitted.
+	Attachments        *[]EventAttachment        `json:"attachments,omitempty"`
+	DocumentReferences *[]EventDocumentReference `json:"documentReferences,omitempty"`
 }
 
 // CredentialField describes one credential field being requested from the

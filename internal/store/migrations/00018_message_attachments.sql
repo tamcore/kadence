@@ -9,6 +9,7 @@ CREATE TABLE message_attachments (
     raw_bytes          BYTEA NOT NULL,
     CHECK (size_bytes = octet_length(raw_bytes)),
     extracted_markdown TEXT NOT NULL DEFAULT '',
+    extraction_complete BOOLEAN NOT NULL DEFAULT FALSE,
     image_width        INTEGER CHECK (image_width > 0),
     image_height       INTEGER CHECK (image_height > 0),
     ordinal            INTEGER NOT NULL CHECK (ordinal >= 0),

@@ -38,6 +38,7 @@ type Metadata struct {
 }
 
 type metadataKey struct{}
+type persistenceContextKey struct{}
 
 func WithMetadata(ctx context.Context, metadata Metadata) context.Context {
 	return context.WithValue(ctx, metadataKey{}, metadata)
@@ -46,6 +47,20 @@ func WithMetadata(ctx context.Context, metadata Metadata) context.Context {
 func MetadataFromContext(ctx context.Context) (Metadata, bool) {
 	metadata, ok := ctx.Value(metadataKey{}).(Metadata)
 	return metadata, ok
+}
+
+// WithPersistenceContext keeps durable audit writes on a caller-owned context
+// while the remote invocation itself uses ctx and its tighter deadline.
+func WithPersistenceContext(ctx, persistenceCtx context.Context) context.Context {
+	return context.WithValue(ctx, persistenceContextKey{}, persistenceCtx)
+}
+
+func persistenceContextFrom(ctx context.Context) context.Context {
+	persistenceCtx, ok := ctx.Value(persistenceContextKey{}).(context.Context)
+	if !ok || persistenceCtx == nil {
+		return ctx
+	}
+	return persistenceCtx
 }
 
 type Recorder struct {
@@ -74,6 +89,7 @@ func (r *Recorder) Call(
 	if r == nil || r.store == nil || !enabled {
 		return invoke(ctx)
 	}
+	persistenceCtx := persistenceContextFrom(ctx)
 
 	auditArguments := arguments
 	if metadata.RequestedTool == toolName {
@@ -87,7 +103,7 @@ func (r *Recorder) Call(
 		ToolName: toolName, Arguments: auditArguments,
 		Status: model.MCPAuditStatusRunning, StartedAt: r.now(),
 	}
-	startCtx, cancelStart := context.WithTimeout(ctx, startTimeout)
+	startCtx, cancelStart := context.WithTimeout(persistenceCtx, startTimeout)
 	id, startErr := r.store.Start(startCtx, call)
 	cancelStart()
 	if startErr != nil {
@@ -104,7 +120,9 @@ func (r *Recorder) Call(
 		result = ""
 		errorText = sanitize(metadata, callErr.Error())
 	}
-	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	finishCtx, cancelFinish := context.WithTimeout(
+		context.WithoutCancel(persistenceCtx), finishTimeout,
+	)
 	defer cancelFinish()
 	if finishErr := r.store.Finish(finishCtx, id, status, result, errorText, r.now()); finishErr != nil {
 		// TODO(metrics): emit a counter for MCP audit persistence failures.

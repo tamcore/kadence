@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -182,6 +183,109 @@ func TestOpenAICompatStreamChat_UserImageWithoutTextOmitsTextPart(t *testing.T) 
 	}
 	if parts[0].Type != "image_url" {
 		t.Fatalf("first content part type = %q, want image_url", parts[0].Type)
+	}
+}
+
+func TestOpenAICompatMapsConservativeVisionCapabilityErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		errorBody  string
+	}{
+		{
+			name: "unsupported image code", statusCode: http.StatusBadRequest,
+			errorBody: `{"error":{"message":"image input is not supported","type":"invalid_request_error","param":"messages[0].content[1].image_url","code":"unsupported_image"}}`,
+		},
+		{
+			name: "unsupported multimodal media type", statusCode: http.StatusUnsupportedMediaType,
+			errorBody: `{"error":{"message":"This model only supports text input, not vision","type":"invalid_request_error","param":"messages","code":"unsupported_media_type"}}`,
+		},
+		{
+			name: "unprocessable image parameter", statusCode: http.StatusUnprocessableEntity,
+			errorBody: `{"error":{"message":"multimodal content is not supported by this model","type":"invalid_request_error","param":"image_url","code":"invalid_value"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.errorBody))
+			}))
+			defer server.Close()
+
+			_, err := NewOpenAICompat(server.URL, "test-key").StreamChatWithTools(
+				context.Background(),
+				ChatRequest{
+					Model: testModel,
+					Messages: []Message{{
+						Role: testRole,
+						Images: []ImageContent{{
+							MIMEType: "image/png",
+							Data:     []byte{1, 2, 3},
+						}},
+					}},
+				},
+				func(string) error { return nil },
+			)
+			if !errors.Is(err, ErrVisionUnsupported) {
+				t.Fatalf("error = %v, want ErrVisionUnsupported", err)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatDoesNotMislabelOtherErrorsAsVisionUnsupported(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		errorBody  string
+	}{
+		{
+			name: "authentication", statusCode: http.StatusUnauthorized,
+			errorBody: `{"error":{"message":"image model API key is invalid","type":"authentication_error","code":"invalid_api_key"}}`,
+		},
+		{
+			name: "rate limit", statusCode: http.StatusTooManyRequests,
+			errorBody: `{"error":{"message":"vision rate limit reached","type":"rate_limit_error","code":"rate_limit_exceeded"}}`,
+		},
+		{
+			name: "general bad request", statusCode: http.StatusBadRequest,
+			errorBody: `{"error":{"message":"invalid request body","type":"invalid_request_error","param":"messages","code":"invalid_request"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.errorBody))
+			}))
+			defer server.Close()
+
+			_, err := NewOpenAICompat(server.URL, "test-key").StreamChatWithTools(
+				context.Background(),
+				ChatRequest{
+					Model: testModel,
+					Messages: []Message{{
+						Role: testRole,
+						Images: []ImageContent{{
+							MIMEType: "image/png",
+							Data:     []byte{1, 2, 3},
+						}},
+					}},
+				},
+				func(string) error { return nil },
+			)
+			if err == nil {
+				t.Fatal("error = nil, want provider failure")
+			}
+			if errors.Is(err, ErrVisionUnsupported) {
+				t.Fatalf("error = %v, must not be ErrVisionUnsupported", err)
+			}
+		})
 	}
 }
 

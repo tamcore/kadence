@@ -12,6 +12,13 @@ import (
 type ChunkStore interface {
 	Insert(ctx context.Context, c model.Chunk, embedding []float32) error
 	SearchTopK(ctx context.Context, userID int64, embedding []float32, k int) ([]model.Chunk, error)
+	SearchTopKByVisibleDocuments(
+		ctx context.Context,
+		userID int64,
+		documentIDs []int64,
+		embedding []float32,
+		kPerDocument int,
+	) (map[int64][]model.Chunk, error)
 }
 
 // RAG embeds and retrieves conversation memory.
@@ -44,19 +51,66 @@ func (r *RAG) Embed(ctx context.Context, text string) ([]float32, error) {
 // Retrieve embeds the query and returns the top-k chunk contents plus the query
 // embedding (so the caller can reuse it to store the query as a chunk).
 func (r *RAG) Retrieve(ctx context.Context, userID int64, query string) ([]string, []float32, error) {
-	emb, err := r.Embed(ctx, query)
+	retrieval, err := r.RetrieveTurn(ctx, userID, query, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, retrieval.Embedding, err
 	}
-	found, err := r.chunks.SearchTopK(ctx, userID, emb, r.topK)
+	return retrieval.Broad, retrieval.Embedding, nil
+}
+
+// TurnRetrieval is one query embedding reused for broad memory and selected
+// document sections.
+type TurnRetrieval struct {
+	Broad      []string
+	ByDocument map[int64][]string
+	Embedding  []float32
+}
+
+// RetrieveTurn embeds query once, retrieves broad context plus per-document
+// sections, and removes selected-document chunks from the broad results.
+func (r *RAG) RetrieveTurn(
+	ctx context.Context, userID int64, query string, documentIDs []int64,
+) (TurnRetrieval, error) {
+	embedding, err := r.Embed(ctx, query)
 	if err != nil {
-		return nil, emb, err
+		return TurnRetrieval{}, err
 	}
-	contents := make([]string, 0, len(found))
-	for _, c := range found {
-		contents = append(contents, c.Content)
+	result := TurnRetrieval{
+		Embedding: embedding, ByDocument: make(map[int64][]string),
 	}
-	return contents, emb, nil
+	found, err := r.chunks.SearchTopK(ctx, userID, embedding, r.topK)
+	if err != nil {
+		return result, err
+	}
+	selected := make(map[int64]struct{}, len(documentIDs))
+	for _, id := range documentIDs {
+		selected[id] = struct{}{}
+	}
+	for _, chunk := range found {
+		if chunk.DocumentID != nil {
+			if _, excluded := selected[*chunk.DocumentID]; excluded {
+				continue
+			}
+		}
+		result.Broad = append(result.Broad, chunk.Content)
+	}
+	if len(documentIDs) == 0 {
+		return result, nil
+	}
+	byDocument, err := r.chunks.SearchTopKByVisibleDocuments(
+		ctx, userID, documentIDs, embedding, r.topK,
+	)
+	if err != nil {
+		return result, err
+	}
+	for documentID, chunks := range byDocument {
+		for _, chunk := range chunks {
+			result.ByDocument[documentID] = append(
+				result.ByDocument[documentID], chunk.Content,
+			)
+		}
+	}
+	return result, nil
 }
 
 // Store inserts a private message chunk with a precomputed embedding.

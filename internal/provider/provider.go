@@ -5,7 +5,12 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
+
+// ErrVisionUnsupported reports that the configured model or compatible
+// endpoint explicitly rejected native image input as unsupported.
+var ErrVisionUnsupported = errors.New("vision input unsupported")
 
 // ToolDefinition describes a tool the model may call (JSON-schema parameters).
 type ToolDefinition struct {

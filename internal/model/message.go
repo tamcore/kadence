@@ -26,17 +26,27 @@ type MessageToolCall struct {
 // operations hydrate metadata only; RawBytes and ExtractedMarkdown remain empty
 // until a payload-specific repository operation requests them.
 type MessageAttachment struct {
-	ID                int64  `json:"id"`
-	MessageID         int64  `json:"message_id"`
-	Filename          string `json:"filename"`
-	MIME              string `json:"mime"`
-	Kind              string `json:"kind"`
-	SizeBytes         int64  `json:"size_bytes"`
-	RawBytes          []byte `json:"-"`
-	ExtractedMarkdown string `json:"-"`
-	ImageWidth        *int   `json:"image_width,omitempty"`
-	ImageHeight       *int   `json:"image_height,omitempty"`
-	Ordinal           int    `json:"ordinal"`
+	ID                 int64  `json:"id"`
+	MessageID          int64  `json:"message_id"`
+	Filename           string `json:"filename"`
+	MIME               string `json:"mime"`
+	Kind               string `json:"kind"`
+	SizeBytes          int64  `json:"size_bytes"`
+	RawBytes           []byte `json:"-"`
+	ExtractedMarkdown  string `json:"-"`
+	ExtractionComplete bool   `json:"-"`
+	ImageWidth         *int   `json:"image_width,omitempty"`
+	ImageHeight        *int   `json:"image_height,omitempty"`
+	Ordinal            int    `json:"ordinal"`
+}
+
+// ChatUserInput is one ordinary user turn plus its ordered attachments and
+// selected knowledge documents. Document metadata is loaded from visible
+// documents rather than trusted from callers.
+type ChatUserInput struct {
+	Content     string
+	Attachments []MessageAttachment
+	DocumentIDs []int64
 }
 
 // MessageDocumentReference is a snapshot of a document selected for one user

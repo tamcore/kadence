@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -75,7 +78,11 @@ func (p *OpenAICompat) StreamChatWithTools(ctx context.Context, req ChatRequest,
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return StreamResult{}, fmt.Errorf("stream chat: %w", err)
+		result := accumulatedStreamResult(acc)
+		if isVisionUnsupportedError(err) {
+			return result, fmt.Errorf("stream chat: %w: %w", ErrVisionUnsupported, err)
+		}
+		return result, fmt.Errorf("stream chat: %w", err)
 	}
 	if len(acc.Choices) == 0 {
 		return StreamResult{}, nil
@@ -96,6 +103,47 @@ func (p *OpenAICompat) StreamChatWithTools(ctx context.Context, req ChatRequest,
 		ToolCalls:    toolCalls,
 		FinishReason: acc.Choices[0].FinishReason,
 	}, nil
+}
+
+func accumulatedStreamResult(acc openai.ChatCompletionAccumulator) StreamResult {
+	if len(acc.Choices) == 0 {
+		return StreamResult{}
+	}
+	message := acc.Choices[0].Message
+	return StreamResult{
+		Content:      message.Content,
+		FinishReason: acc.Choices[0].FinishReason,
+	}
+}
+
+func isVisionUnsupportedError(err error) bool {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusBadRequest, http.StatusUnsupportedMediaType, http.StatusUnprocessableEntity:
+	default:
+		return false
+	}
+	code := strings.ToLower(apiErr.Code)
+	message := strings.ToLower(apiErr.Message)
+	param := strings.ToLower(apiErr.Param)
+	mentionsVision := strings.Contains(code, "image") ||
+		strings.Contains(code, "vision") ||
+		strings.Contains(code, "multimodal") ||
+		strings.Contains(message, "image") ||
+		strings.Contains(message, "vision") ||
+		strings.Contains(message, "multimodal") ||
+		strings.Contains(param, "image")
+	if !mentionsVision {
+		return false
+	}
+	unsupported := strings.Contains(code, "unsupported") ||
+		strings.Contains(message, "not supported") ||
+		strings.Contains(message, "unsupported") ||
+		strings.Contains(message, "only supports text")
+	return unsupported
 }
 
 // buildMessages converts provider messages into openai-go message params,

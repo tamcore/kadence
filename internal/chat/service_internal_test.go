@@ -370,52 +370,153 @@ func TestBoundHistorySmallConversationUntouched(t *testing.T) {
 	}
 }
 
-// TestBoundHistoryKeepsFirstUserMessage verifies the very first user message
-// is always retained even when the budget is tiny.
-func TestBoundHistoryKeepsFirstUserMessage(t *testing.T) {
-	s := &Service{contextBudget: 1} // tiny budget: only the mandatory first turn should survive
+// TestBoundHistoryCanDropEveryHistoricalTurn verifies current-turn context
+// takes priority even when retaining the first historical turn would exceed
+// the budget.
+func TestBoundHistoryCanDropEveryHistoricalTurn(t *testing.T) {
+	s := &Service{contextBudget: 1}
 	history := make([]model.Message, 0, 20*2)
 	for i := range 20 {
 		history = append(history, turnMsgs(i, 200, 200)...)
 	}
 
 	got, dropped := s.boundHistory(history, "system prompt", "new user text", 0)
-	if len(got) < 2 {
-		t.Fatalf("len(got) = %d, want at least the first turn (2 messages)", len(got))
+	if len(got) != 0 {
+		t.Fatalf("history = %+v, want all historical turns dropped", got)
 	}
-	if got[0].Role != model.MsgRoleUser || got[0].Content != history[0].Content {
-		t.Fatalf("got[0] = %+v, want the first user message %+v", got[0], history[0])
-	}
-	if dropped == 0 {
-		t.Fatal("dropped = 0, want some turns dropped under a tiny budget")
+	if dropped != len(history) {
+		t.Fatalf("dropped = %d, want %d", dropped, len(history))
 	}
 }
 
-// TestBoundHistoryRespectsBudgetAndDropsOldestMiddle verifies that with a
-// budget that fits the first turn plus only the newest turn, the returned
-// history is exactly [first turn, newest turn] and the old middle turn is
-// dropped whole (never split).
-func TestBoundHistoryRespectsBudgetAndDropsOldestMiddle(t *testing.T) {
+func TestFitCurrentTurnContextKeepsUnevenOrderedItemsWhenAggregateFits(t *testing.T) {
+	const availableTokens = 200
+	attachmentContent := "tiny attachment"
+	documentContent := strings.Repeat("selected document ", 18)
+	message := model.Message{Attachments: []model.MessageAttachment{{
+		Filename:          "tiny.md",
+		Kind:              model.AttachmentKindDocument,
+		ExtractedMarkdown: attachmentContent,
+	}}}
+	documents := []model.Document{{
+		ID:                42,
+		Filename:          "selected.md",
+		ExtractedMarkdown: documentContent,
+	}}
+	const envelopeOverhead = 128 + 2*96
+	if len(attachmentContent)+len(documentContent) >
+		availableTokens*estBytesPerToken-envelopeOverhead {
+		t.Fatal("test setup: aggregate content must fit after envelope overhead")
+	}
+
+	fittedMessage, fittedDocuments := fitCurrentTurnContext(
+		message, documents, nil, availableTokens,
+	)
+
+	if len(fittedMessage.Attachments) != 1 ||
+		fittedMessage.Attachments[0].Filename != "tiny.md" ||
+		fittedMessage.Attachments[0].ExtractedMarkdown != attachmentContent {
+		t.Fatalf("ordered attachment = %+v", fittedMessage.Attachments)
+	}
+	if len(fittedDocuments) != 1 ||
+		fittedDocuments[0].ID != 42 ||
+		fittedDocuments[0].ExtractedMarkdown != documentContent {
+		t.Fatalf("ordered document = %+v", fittedDocuments)
+	}
+}
+
+func TestFitCurrentTurnContextBoundsActualEscapedEnvelope(t *testing.T) {
+	const availableTokens = 96
+	hostileFilename := strings.Repeat("\"<&", 60)
+	hostileContent := strings.Repeat("<&", 120)
+	message := model.Message{Attachments: []model.MessageAttachment{{
+		Filename:          hostileFilename + ".md",
+		Kind:              model.AttachmentKindDocument,
+		ExtractedMarkdown: hostileContent,
+	}}}
+	documents := []model.Document{{
+		ID: 7, Filename: hostileFilename + ".txt",
+		ExtractedMarkdown: hostileContent,
+	}}
+
+	fittedMessage, fittedDocuments := fitCurrentTurnContext(
+		message, documents, nil, availableTokens,
+	)
+	current, err := currentTurnProviderMessage(fittedMessage, fittedDocuments)
+	if err != nil {
+		t.Fatalf("currentTurnProviderMessage: %v", err)
+	}
+	if len(current.Content) > availableTokens*estBytesPerToken {
+		t.Fatalf(
+			"actual encoded current context uses %d bytes, want <= %d: %q",
+			len(current.Content), availableTokens*estBytesPerToken, current.Content,
+		)
+	}
+}
+
+func TestFitCurrentTurnContextRedistributesUnusedShortSourceBudget(t *testing.T) {
+	const availableTokens = 200
+	shortContent := "short"
+	firstRanked := strings.Repeat("first-ranked ", 15)
+	secondRanked := strings.Repeat("second-ranked ", 15)
+	message := model.Message{Attachments: []model.MessageAttachment{{
+		Filename:          "short.md",
+		Kind:              model.AttachmentKindDocument,
+		ExtractedMarkdown: shortContent,
+	}}}
+	documents := []model.Document{{
+		ID: 77, Filename: "long.md",
+		ExtractedMarkdown: strings.Repeat("full document ", 100),
+	}}
+	sections := map[int64][]string{77: {firstRanked, secondRanked}}
+	const equalSplitChars = (availableTokens*estBytesPerToken - 128 - 2*96) / 2
+
+	fittedMessage, fittedDocuments := fitCurrentTurnContext(
+		message, documents, sections, availableTokens,
+	)
+
+	if len(fittedMessage.Attachments) != 1 ||
+		fittedMessage.Attachments[0].ExtractedMarkdown != shortContent {
+		t.Fatalf("ordered short attachment = %+v", fittedMessage.Attachments)
+	}
+	if len(fittedDocuments) != 1 || fittedDocuments[0].ID != 77 {
+		t.Fatalf("ordered selected document = %+v", fittedDocuments)
+	}
+	longContent := fittedDocuments[0].ExtractedMarkdown
+	if len(longContent) <= equalSplitChars {
+		t.Fatalf(
+			"unused short-source budget was not redistributed: got %d bytes, equal split %d",
+			len(longContent), equalSplitChars,
+		)
+	}
+	if !strings.HasPrefix(longContent, firstRanked) ||
+		!strings.Contains(longContent, secondRanked) ||
+		!strings.Contains(longContent, contextTruncatedMarker) {
+		t.Fatalf("ranked/truncated selected context = %q", longContent)
+	}
+}
+
+// TestBoundHistoryRespectsBudgetAndKeepsNewestTurns verifies a constrained
+// budget keeps the two newest complete turns and drops the oldest.
+func TestBoundHistoryRespectsBudgetAndKeepsNewestTurns(t *testing.T) {
 	// Each turn (user+assistant, 100 chars each) costs ~50 estimated tokens
 	// (estBytesPerToken=4: 200 bytes/4 = 50).
 	history := append(turnMsgs(0, 100, 100), turnMsgs(1, 100, 100)...)
 	history = append(history, turnMsgs(2, 100, 100)...)
 
-	// Budget: first turn (~50) + room for exactly one more turn (~50), not two.
+	// Budget has room for exactly two turns, not all three.
 	s := &Service{contextBudget: 110}
 
 	got, dropped := s.boundHistory(history, "", "", 0)
 	if dropped != 2 {
-		t.Fatalf("dropped = %d, want 2 (the whole middle turn)", dropped)
+		t.Fatalf("dropped = %d, want 2 (the whole oldest turn)", dropped)
 	}
 	if len(got) != 4 {
-		t.Fatalf("len(got) = %d, want 4 (first turn + newest turn)", len(got))
+		t.Fatalf("len(got) = %d, want 4 (two newest turns)", len(got))
 	}
-	// First turn (turn 0) kept.
-	if got[0].Content != history[0].Content || got[1].Content != history[1].Content {
-		t.Fatalf("first turn not preserved: got %+v", got[:2])
+	if got[0].Content != history[2].Content || got[1].Content != history[3].Content {
+		t.Fatalf("middle turn not preserved: got %+v", got[:2])
 	}
-	// Newest turn (turn 2) kept, not the dropped middle turn (turn 1).
 	if got[2].Content != history[4].Content || got[3].Content != history[5].Content {
 		t.Fatalf("newest turn not preserved: got %+v, want turn 2 %+v", got[2:], history[4:6])
 	}

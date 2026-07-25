@@ -16,14 +16,9 @@ import (
 // MessageRepository accesses the messages table.
 type MessageRepository struct{ pool *pgxpool.Pool }
 
-// ChatUserInput is one ordinary user turn plus its ordered files and selected
-// knowledge documents. Attachment ordinals follow slice order; document
-// metadata is loaded from visible documents rather than trusted from callers.
-type ChatUserInput struct {
-	Content     string
-	Attachments []model.MessageAttachment
-	DocumentIDs []int64
-}
+// ChatUserInput remains an alias for callers that used the store package
+// before the shared input contract moved to model.
+type ChatUserInput = model.ChatUserInput
 
 // ErrWrongMessageRole reports that a rewind target exists but has the wrong
 // role for the requested operation.
@@ -80,7 +75,7 @@ func (r *MessageRepository) AddChatUser(ctx context.Context, conversationID, con
 // AddChatUserInput atomically appends one ordinary chat user message and its
 // attachments/document references while holding the owned conversation lock.
 func (r *MessageRepository) AddChatUserInput(
-	ctx context.Context, conversationID string, userID int64, input ChatUserInput,
+	ctx context.Context, conversationID string, userID int64, input model.ChatUserInput,
 ) (model.Message, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -113,6 +108,70 @@ func (r *MessageRepository) AddChatUserInput(
 	return message, nil
 }
 
+// UpdateChatAttachmentExtractions atomically persists deferred document
+// extraction results for one owned ordinary-chat user message.
+func (r *MessageRepository) UpdateChatAttachmentExtractions(
+	ctx context.Context, conversationID string, messageID, userID int64,
+	attachments []model.MessageAttachment,
+) (model.Message, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return model.Message{}, fmt.Errorf("begin update chat attachment extractions: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+		return model.Message{}, err
+	}
+	message, err := getMessageForRewind(ctx, tx, conversationID, messageID)
+	if err != nil {
+		return model.Message{}, err
+	}
+	if message.Role != model.MsgRoleUser {
+		return model.Message{}, ErrWrongMessageRole
+	}
+	messages := []model.Message{message}
+	if err := hydrateMessageRelations(ctx, tx, messages, true); err != nil {
+		return model.Message{}, err
+	}
+	message = messages[0]
+	if len(message.Attachments) != len(attachments) {
+		return model.Message{}, ErrNotFound
+	}
+	for i := range attachments {
+		stored := &message.Attachments[i]
+		extracted := attachments[i]
+		if stored.ID != extracted.ID ||
+			stored.MessageID != extracted.MessageID ||
+			stored.Ordinal != extracted.Ordinal ||
+			stored.Kind != extracted.Kind {
+			return model.Message{}, ErrNotFound
+		}
+		if stored.Kind != model.AttachmentKindDocument || stored.ExtractionComplete {
+			continue
+		}
+		tag, err := tx.Exec(ctx,
+			`UPDATE message_attachments
+			    SET extracted_markdown = $1, extraction_complete = TRUE
+			  WHERE id = $2 AND message_id = $3 AND kind = $4`,
+			extracted.ExtractedMarkdown, stored.ID, message.ID,
+			model.AttachmentKindDocument,
+		)
+		if err != nil {
+			return model.Message{}, fmt.Errorf("update message attachment extraction: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return model.Message{}, ErrNotFound
+		}
+		stored.ExtractedMarkdown = extracted.ExtractedMarkdown
+		stored.ExtractionComplete = true
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Message{}, fmt.Errorf("commit update chat attachment extractions: %w", err)
+	}
+	return message, nil
+}
+
 func insertMessageAttachments(
 	ctx context.Context, tx pgx.Tx, messageID int64, attachments []model.MessageAttachment,
 ) ([]model.MessageAttachment, error) {
@@ -125,17 +184,17 @@ func insertMessageAttachments(
 		err := tx.QueryRow(ctx,
 			`INSERT INTO message_attachments (
 			     message_id, filename, mime_type, kind, size_bytes, raw_bytes,
-			     extracted_markdown, image_width, image_height, ordinal
-			 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			     extracted_markdown, extraction_complete, image_width, image_height, ordinal
+			 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			 RETURNING id, message_id, filename, mime_type, kind, size_bytes,
-			           image_width, image_height, ordinal`,
+			           extraction_complete, image_width, image_height, ordinal`,
 			messageID, attachment.Filename, attachment.MIME, attachment.Kind,
 			int64(len(attachment.RawBytes)), attachment.RawBytes, attachment.ExtractedMarkdown,
-			attachment.ImageWidth, attachment.ImageHeight, ordinal,
+			attachment.ExtractionComplete, attachment.ImageWidth, attachment.ImageHeight, ordinal,
 		).Scan(
 			&stored.ID, &stored.MessageID, &stored.Filename, &stored.MIME,
-			&stored.Kind, &stored.SizeBytes, &stored.ImageWidth, &stored.ImageHeight,
-			&stored.Ordinal,
+			&stored.Kind, &stored.SizeBytes, &stored.ExtractionComplete,
+			&stored.ImageWidth, &stored.ImageHeight, &stored.Ordinal,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert message attachment: %w", err)
@@ -629,7 +688,7 @@ func hydrateMessageRelations(
 	}
 
 	attachmentQuery := `SELECT id, message_id, filename, mime_type, kind, size_bytes,
-	                           image_width, image_height, ordinal`
+	                           extraction_complete, image_width, image_height, ordinal`
 	if includeAttachmentPayload {
 		attachmentQuery += `, raw_bytes, extracted_markdown`
 	}
@@ -646,7 +705,8 @@ func hydrateMessageRelations(
 		destinations := []any{
 			&attachment.ID, &attachment.MessageID, &attachment.Filename,
 			&attachment.MIME, &attachment.Kind, &attachment.SizeBytes,
-			&attachment.ImageWidth, &attachment.ImageHeight, &attachment.Ordinal,
+			&attachment.ExtractionComplete, &attachment.ImageWidth,
+			&attachment.ImageHeight, &attachment.Ordinal,
 		}
 		if includeAttachmentPayload {
 			destinations = append(
