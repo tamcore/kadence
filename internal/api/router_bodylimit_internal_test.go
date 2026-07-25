@@ -32,22 +32,31 @@ import (
 
 func TestIsUploadRoute(t *testing.T) {
 	cases := []struct {
-		method string
-		path   string
-		want   bool
+		method      string
+		path        string
+		contentType string
+		want        bool
 	}{
-		{http.MethodPost, documentsPath, true},
-		{http.MethodPost, adminDocumentsPath, true},
-		{http.MethodGet, documentsPath, false},
-		{http.MethodDelete, documentsPath + "/1", false},
-		{http.MethodGet, adminDocumentsPath, false},
-		{http.MethodPost, "/api/profile", false},
-		{http.MethodPost, "/api/chat", false},
+		{http.MethodPost, documentsPath, "multipart/form-data; boundary=x", true},
+		{http.MethodPost, adminDocumentsPath, "multipart/form-data; boundary=x", true},
+		{http.MethodGet, documentsPath, "", false},
+		{http.MethodDelete, documentsPath + "/1", "", false},
+		{http.MethodGet, adminDocumentsPath, "", false},
+		{http.MethodPost, "/api/profile", "application/json", false},
+		{http.MethodPost, "/api/chat", "multipart/form-data; boundary=x", true},
+		{http.MethodPost, "/api/chat", "application/json", false},
+		{http.MethodPost, "/api/chat", "", false},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.contentType != "" {
+			req.Header.Set("Content-Type", tc.contentType)
+		}
 		if got := isUploadRoute(req); got != tc.want {
-			t.Errorf("isUploadRoute(%s %s) = %v, want %v", tc.method, tc.path, got, tc.want)
+			t.Errorf(
+				"isUploadRoute(%s %s, %q) = %v, want %v",
+				tc.method, tc.path, tc.contentType, got, tc.want,
+			)
 		}
 	}
 }
@@ -87,11 +96,30 @@ func TestMaxBodyBytesExempt_UploadRoutesBypassGlobalCap(t *testing.T) {
 		}
 	}
 
-	// Control: the same construction still enforces the cap on a non-upload route.
+	// Multipart chat bypasses the global JSON cap; the chat handler enforces
+	// its own aggregate file cap.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/profile", strings.NewReader(large))
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(large))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("/api/chat multipart: status = %d, want 200", rec.Code)
+	}
+
+	// Control: the same construction still enforces the cap on a non-upload route.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/profile", strings.NewReader(large))
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("/api/profile: status = %d, want 413 (non-upload route must stay capped at %d bytes)", rec.Code, globalCap)
+	}
+
+	// JSON chat stays behind the global cap.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(large))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("/api/chat JSON: status = %d, want 413", rec.Code)
 	}
 }

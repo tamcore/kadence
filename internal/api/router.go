@@ -3,6 +3,7 @@ package api
 
 import (
 	"io/fs"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -18,13 +19,13 @@ import (
 )
 
 const (
-	// documentsPath and adminDocumentsPath are the two document-upload
-	// routes: they carry a larger, handler-level body cap (cfg.UploadMaxBytes)
-	// and so are exempted from the global middleware.MaxBodyBytes cap (see
-	// isUploadRoute). Shared as constants between route registration and the
-	// exemption predicate so the two can't drift apart.
+	// Upload endpoints apply handler-level limits and are exempted from the
+	// smaller global middleware.MaxBodyBytes cap (see isUploadRoute).
+	// Multipart chat is exempt only for its upload media type; JSON chat
+	// remains globally capped.
 	documentsPath      = "/api/documents"
 	adminDocumentsPath = "/api/admin/documents"
+	chatPath           = "/api/chat"
 )
 
 // Deps carries the dependencies the router needs.
@@ -60,12 +61,11 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.Users != nil && deps.Sessions != nil {
 		// Global per-IP cap and body-size cap on all other /api routes;
 		// healthz and the static frontend are registered outside this group
-		// and stay unlimited. The document-upload routes are exempted from
-		// the body-size cap here (see isUploadRoute): they apply their own
-		// larger cfg.UploadMaxBytes cap at the handler level (documents.go),
-		// and nesting a second, smaller http.MaxBytesReader in front of that
-		// would silently override it, since the smaller of two nested caps
-		// always wins regardless of registration order.
+		// and stay unlimited. Document uploads and multipart chat are exempted
+		// from the body-size cap here (see isUploadRoute): they apply their own
+		// larger cfg.UploadMaxBytes-derived caps at handler level. JSON chat
+		// remains behind the global cap. Nesting a second, smaller
+		// http.MaxBytesReader would silently override a larger inner cap.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(deps.Config.RateLimitGlobal))
 			r.Use(middleware.MaxBodyBytesExempt(deps.Config.ResolvedMaxBodyBytes(), isUploadRoute))
@@ -77,16 +77,21 @@ func NewRouter(deps Deps) http.Handler {
 	return r
 }
 
-// isUploadRoute reports whether r targets a document-upload endpoint, which
-// governs its own body size via cfg.UploadMaxBytes (see documents.go) rather
-// than the global body cap. Route registration (and therefore the
-// RequireAuth/CSRF chain each of these sits behind) is unaffected — this only
-// exempts the request from the outer middleware.MaxBodyBytes wrapping.
+// isUploadRoute reports whether r targets an endpoint/media-type combination
+// with its own upload bound. Route registration and the RequireAuth/CSRF chain
+// are unaffected; this only exempts the request from the outer body wrapper.
 func isUploadRoute(r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		return false
 	}
-	return r.URL.Path == documentsPath || r.URL.Path == adminDocumentsPath
+	if r.URL.Path == documentsPath || r.URL.Path == adminDocumentsPath {
+		return true
+	}
+	if r.URL.Path != chatPath {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "multipart/form-data"
 }
 
 func mountAuth(r chi.Router, deps Deps) {
@@ -140,9 +145,13 @@ func mountAuth(r chi.Router, deps Deps) {
 		r.Get("/api/session", authH.CurrentUser)
 
 		if deps.Chat != nil {
-			r.Post("/api/chat", deps.Chat.Send)
+			r.Post(chatPath, deps.Chat.Send)
 			r.Get("/api/conversations", deps.Chat.ListConversations)
 			r.Get("/api/conversations/{id}/messages", deps.Chat.Messages)
+			r.Get(
+				"/api/conversations/{id}/messages/{messageId}/attachments/{attachmentId}",
+				deps.Chat.DownloadAttachment,
+			)
 			r.Post("/api/conversations/{id}/messages/{messageId}/edit", deps.Chat.EditMessage)
 			r.Post("/api/conversations/{id}/messages/{messageId}/regenerate", deps.Chat.RegenerateMessage)
 			r.Patch("/api/conversations/{id}", deps.Chat.PatchConversation)
@@ -176,6 +185,7 @@ func mountAuth(r chi.Router, deps Deps) {
 
 		if deps.Documents != nil {
 			r.Get("/api/documents/capabilities", deps.Documents.Capabilities)
+			r.Get("/api/documents/references", deps.Documents.ReferenceOptions)
 			r.Post(documentsPath, deps.Documents.Upload)
 			r.Get(documentsPath, deps.Documents.List)
 			r.Delete("/api/documents/{id}", deps.Documents.Delete)

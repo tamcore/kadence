@@ -1,11 +1,21 @@
 package serve
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/tamcore/kadence/internal/api/handlers"
+	"github.com/tamcore/kadence/internal/auth"
+	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/ingest"
+	"github.com/tamcore/kadence/internal/model"
 )
 
 // buildIngestExtractors is pure enough to unit test without refactoring
@@ -105,3 +115,110 @@ func TestBuildIngestExtractorsFallsBackWhenRichExtractorConfigInvalid(t *testing
 		})
 	}
 }
+
+func TestBuildChatContentSharesEffectiveRichExtractorsWithAttachmentProcessor(t *testing.T) {
+	content := buildChatContent(config.Config{
+		MarkitdownURL:       "https://markitdown.example.test/mcp",
+		MarkitdownTransport: "streamable-http",
+	})
+	if len(content.extractors) != 2 {
+		t.Fatalf("extractors = %d, want rich + PDF fallback", len(content.extractors))
+	}
+
+	prepared, err := content.attachments.Prepare([]chat.FileInput{{
+		Filename: "training.docx",
+		MIME:     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		Data:     []byte("raw office bytes"),
+	}})
+	if err != nil {
+		t.Fatalf("Prepare rich chat document: %v", err)
+	}
+	if len(prepared) != 1 || prepared[0].Kind != model.AttachmentKindDocument {
+		t.Fatalf("prepared rich chat document = %+v", prepared)
+	}
+}
+
+func TestBuildChatContentUsesEffectivePDFOnlyFallback(t *testing.T) {
+	content := buildChatContent(config.Config{})
+	if len(content.extractors) != 1 {
+		t.Fatalf("extractors = %d, want PDF-only", len(content.extractors))
+	}
+
+	_, err := content.attachments.Prepare([]chat.FileInput{{
+		Filename: "training.docx",
+		MIME:     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		Data:     []byte("raw office bytes"),
+	}})
+	if !errors.Is(err, chat.ErrUnsupportedAttachment) {
+		t.Fatalf("Prepare rich chat document error = %v, want ErrUnsupportedAttachment", err)
+	}
+}
+
+type uploadLimitChatStreamer struct {
+	calls int
+}
+
+func (s *uploadLimitChatStreamer) Stream(
+	context.Context,
+	int64,
+	chat.UserContext,
+	string,
+	string,
+	chat.EventSink,
+) error {
+	s.calls++
+	return nil
+}
+
+func (s *uploadLimitChatStreamer) StreamTurn(
+	context.Context,
+	int64,
+	chat.UserContext,
+	string,
+	chat.TurnInput,
+	chat.EventSink,
+) error {
+	s.calls++
+	return nil
+}
+
+func TestNewChatHandlerUsesConfiguredAggregateUploadLimit(t *testing.T) {
+	streamer := &uploadLimitChatStreamer{}
+	handler := newChatHandler(
+		config.Config{UploadMaxBytes: 8},
+		streamer,
+		nil,
+		nil,
+	)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	file, err := writer.CreateFormFile("files", "too-large.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/chat", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request = request.WithContext(auth.ContextWithUser(
+		request.Context(),
+		&model.User{ID: 7, Username: "u", Role: model.RoleUser},
+	))
+	response := httptest.NewRecorder()
+
+	handler.Send(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want=413 body=%s", response.Code, response.Body.String())
+	}
+	if streamer.calls != 0 {
+		t.Fatalf("chat service called %d times before size validation", streamer.calls)
+	}
+}
+
+var _ handlers.ChatStreamer = (*uploadLimitChatStreamer)(nil)
+var _ handlers.ChatTurnStreamer = (*uploadLimitChatStreamer)(nil)

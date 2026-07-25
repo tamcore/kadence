@@ -187,6 +187,31 @@ func (d *Documents) ListPublic(w http.ResponseWriter, r *http.Request) {
 	RespondJSON(w, http.StatusOK, toDocumentDTOs(list))
 }
 
+type documentReferenceOptionsDTO struct {
+	Own    []documentDTO `json:"own"`
+	Public []documentDTO `json:"public"`
+}
+
+// ReferenceOptions handles GET /api/documents/references. It returns only
+// caller-owned private documents plus public documents, grouped for the chat
+// reference picker and without extracted content.
+func (d *Documents) ReferenceOptions(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
+	own, err := d.repo.ListByOwner(r.Context(), user.ID)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not list document references")
+		return
+	}
+	public, err := d.repo.ListPublic(r.Context())
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not list document references")
+		return
+	}
+	RespondJSON(w, http.StatusOK, documentReferenceOptionsDTO{
+		Own: toDocumentDTOs(own), Public: toDocumentDTOs(public),
+	})
+}
+
 // Delete handles DELETE /api/documents/{id} (must be owned by the caller).
 func (d *Documents) Delete(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())

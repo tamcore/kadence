@@ -111,6 +111,8 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 	}
 	for _, key := range []string{
 		"GET /api/documents/capabilities",
+		"GET /api/documents/references",
+		"GET /api/conversations/{id}/messages/{messageId}/attachments/{attachmentId}",
 		"GET /api/scheduled/tasks", "POST /api/scheduled/tasks", "GET /api/scheduled/tasks/{id}",
 		"PATCH /api/scheduled/tasks/{id}", "DELETE /api/scheduled/tasks/{id}",
 		"POST /api/scheduled/tasks/{id}/messages", "POST /api/scheduled/tasks/{id}/confirm",

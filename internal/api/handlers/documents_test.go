@@ -56,7 +56,9 @@ func (f *fakeDocStore) Create(_ context.Context, d model.Document) (model.Docume
 func (f *fakeDocStore) ListByOwner(_ context.Context, ownerUserID int64) ([]model.Document, error) {
 	var out []model.Document
 	for _, d := range f.docs {
-		if d.OwnerUserID != nil && *d.OwnerUserID == ownerUserID {
+		if d.Scope == model.ScopePrivate &&
+			d.OwnerUserID != nil &&
+			*d.OwnerUserID == ownerUserID {
 			out = append(out, d)
 		}
 	}
@@ -163,6 +165,86 @@ func TestUploadSuccess(t *testing.T) {
 	}
 	if strings.Contains(body, `"id":0`) {
 		t.Fatalf("expected non-zero id: %s", body)
+	}
+}
+
+func TestReferenceOptionsGroupsOwnAndPublicDocumentsWithoutContent(t *testing.T) {
+	handler, documents := newDocumentsHandler(t, 10<<20)
+	ownerID := sampleUserID
+	otherOwnerID := int64(99)
+	documents.docs = map[int64]model.Document{
+		1: {
+			ID: 1, OwnerUserID: &ownerID, Scope: model.ScopePrivate,
+			Filename: "my-plan.md", Mime: "text/markdown", SourceType: model.DocSourceText,
+			ExtractedMarkdown: "private content must not leak",
+		},
+		2: {
+			ID: 2, Scope: model.ScopePublic,
+			Filename: "public-guide.pdf", Mime: "application/pdf", SourceType: model.DocSourcePDF,
+			ExtractedMarkdown: "public content must not leak",
+		},
+		3: {
+			ID: 3, OwnerUserID: &otherOwnerID, Scope: model.ScopePrivate,
+			Filename: "other-user.md", Mime: "text/markdown", SourceType: model.DocSourceText,
+		},
+		4: {
+			ID: 4, OwnerUserID: &ownerID, Scope: model.ScopePublic,
+			Filename: "owned-public.md", Mime: "text/markdown", SourceType: model.DocSourceText,
+		},
+	}
+	request := withDocUser(httptest.NewRequest(
+		http.MethodGet, "/api/documents/references", nil,
+	))
+	response := httptest.NewRecorder()
+
+	handler.ReferenceOptions(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "content must not leak") ||
+		strings.Contains(response.Body.String(), "other-user.md") {
+		t.Fatalf("reference options leaked content or invisible document: %s", response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Own []struct {
+				ID         int64  `json:"id"`
+				Filename   string `json:"filename"`
+				MIME       string `json:"mime"`
+				SourceType string `json:"source_type"`
+				Scope      string `json:"scope"`
+			} `json:"own"`
+			Public []struct {
+				ID       int64  `json:"id"`
+				Filename string `json:"filename"`
+				Scope    string `json:"scope"`
+			} `json:"public"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(envelope.Data.Own) != 1 ||
+		envelope.Data.Own[0].ID != 1 ||
+		envelope.Data.Own[0].Filename != "my-plan.md" ||
+		envelope.Data.Own[0].MIME != "text/markdown" ||
+		envelope.Data.Own[0].SourceType != model.DocSourceText ||
+		envelope.Data.Own[0].Scope != model.ScopePrivate {
+		t.Fatalf("own options=%+v", envelope.Data.Own)
+	}
+	if len(envelope.Data.Public) != 2 {
+		t.Fatalf("public options=%+v", envelope.Data.Public)
+	}
+	publicByID := make(map[int64]string, len(envelope.Data.Public))
+	for _, document := range envelope.Data.Public {
+		if document.Scope != model.ScopePublic {
+			t.Fatalf("non-public document in public group: %+v", document)
+		}
+		publicByID[document.ID] = document.Filename
+	}
+	if publicByID[2] != "public-guide.pdf" || publicByID[4] != "owned-public.md" {
+		t.Fatalf("public options=%+v", envelope.Data.Public)
 	}
 }
 

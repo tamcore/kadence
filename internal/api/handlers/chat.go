@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +28,19 @@ var sseKeepaliveInterval = 15 * time.Second
 // ChatStreamer runs a streaming chat turn.
 type ChatStreamer interface {
 	Stream(ctx context.Context, userID int64, uc chat.UserContext, conversationID string, text string, sink chat.EventSink) error
+}
+
+// ChatTurnStreamer runs a streaming chat turn with files and explicit
+// knowledge-document references.
+type ChatTurnStreamer interface {
+	StreamTurn(
+		ctx context.Context,
+		userID int64,
+		uc chat.UserContext,
+		conversationID string,
+		input chat.TurnInput,
+		sink chat.EventSink,
+	) error
 }
 
 // ChatRewriter runs destructive edit/regenerate chat turns.
@@ -57,16 +71,35 @@ type ScheduledConversationPauser interface {
 
 // Chat handles the chat + conversation HTTP endpoints.
 type Chat struct {
-	svc       ChatStreamer
-	rewriter  ChatRewriter
-	convs     ConvLister
-	msgs      MsgLister
-	scheduled ScheduledConversationPauser
+	svc            ChatStreamer
+	rewriter       ChatRewriter
+	convs          ConvLister
+	msgs           MsgLister
+	scheduled      ScheduledConversationPauser
+	uploadMaxBytes int64
 }
 
 // NewChat constructs the Chat handler.
 func NewChat(svc ChatStreamer, convs ConvLister, msgs MsgLister, scheduled ...ScheduledConversationPauser) *Chat {
-	h := &Chat{svc: svc, convs: convs, msgs: msgs}
+	return NewChatWithUploadLimit(svc, convs, msgs, defaultChatUploadMaxBytes, scheduled...)
+}
+
+// NewChatWithUploadLimit constructs the Chat handler with the aggregate byte
+// limit applied to files in one multipart turn.
+func NewChatWithUploadLimit(
+	svc ChatStreamer,
+	convs ConvLister,
+	msgs MsgLister,
+	uploadMaxBytes int,
+	scheduled ...ScheduledConversationPauser,
+) *Chat {
+	if uploadMaxBytes <= 0 {
+		uploadMaxBytes = defaultChatUploadMaxBytes
+	}
+	h := &Chat{
+		svc: svc, convs: convs, msgs: msgs,
+		uploadMaxBytes: int64(uploadMaxBytes),
+	}
 	h.rewriter, _ = svc.(ChatRewriter)
 	if len(scheduled) > 0 {
 		h.scheduled = scheduled[0]
@@ -113,6 +146,34 @@ func (s *sseSink) keepalive() error {
 // Send handles POST /api/chat (SSE stream).
 func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaTypeErr == nil && mediaType == "multipart/form-data" {
+		conversationID, input, err := parseMultipartChat(w, r, h.uploadMaxBytes)
+		if err != nil {
+			respondMultipartChatError(w, err)
+			return
+		}
+		streamer, ok := h.svc.(ChatTurnStreamer)
+		if !ok {
+			RespondError(w, http.StatusInternalServerError, "chat file uploads are unavailable")
+			return
+		}
+		uc := chat.UserContext{
+			Username: u.Username, UnitSystem: u.UnitSystem,
+			Location: u.Location, AboutMe: u.AboutMe,
+		}
+		h.streamSSE(w, func(sink chat.EventSink) {
+			_ = streamer.StreamTurn(r.Context(), u.ID, uc, conversationID, input, sink)
+		})
+		return
+	}
+	if mediaTypeErr != nil && strings.HasPrefix(
+		strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data",
+	) {
+		RespondError(w, http.StatusBadRequest, "invalid multipart chat request")
+		return
+	}
+
 	var body struct {
 		ConversationID string `json:"conversationId"`
 		Message        string `json:"message"`
@@ -150,9 +211,35 @@ func (h *Chat) ListConversations(w http.ResponseWriter, r *http.Request) {
 }
 
 type messageDTO struct {
-	ID      int64  `json:"id"`
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	ID                 int64                         `json:"id"`
+	Role               string                        `json:"role"`
+	Content            string                        `json:"content"`
+	Attachments        []chat.EventAttachment        `json:"attachments"`
+	DocumentReferences []chat.EventDocumentReference `json:"documentReferences"`
+}
+
+func toMessageDTO(message model.Message) messageDTO {
+	attachments := make([]chat.EventAttachment, 0, len(message.Attachments))
+	for _, attachment := range message.Attachments {
+		attachments = append(attachments, chat.EventAttachment{
+			ID: attachment.ID, Filename: attachment.Filename,
+			MIME: attachment.MIME, Kind: attachment.Kind, SizeBytes: attachment.SizeBytes,
+			ImageWidth: attachment.ImageWidth, ImageHeight: attachment.ImageHeight,
+			Ordinal: attachment.Ordinal,
+		})
+	}
+	references := make([]chat.EventDocumentReference, 0, len(message.DocumentReferences))
+	for _, reference := range message.DocumentReferences {
+		references = append(references, chat.EventDocumentReference{
+			ID: reference.ID, DocumentID: reference.DocumentID,
+			Filename: reference.Filename, Scope: reference.Scope,
+			Ordinal: reference.Ordinal, Available: reference.Available,
+		})
+	}
+	return messageDTO{
+		ID: message.ID, Role: message.Role, Content: message.Content,
+		Attachments: attachments, DocumentReferences: references,
+	}
 }
 
 // Messages handles GET /api/conversations/{id}/messages (ownership enforced).
@@ -177,7 +264,7 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		if m.Role == model.MsgRoleSystem {
 			continue
 		}
-		out = append(out, messageDTO{ID: m.ID, Role: m.Role, Content: m.Content})
+		out = append(out, toMessageDTO(m))
 	}
 	RespondJSON(w, http.StatusOK, out)
 }

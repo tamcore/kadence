@@ -174,6 +174,8 @@ func Run() error {
 			})
 			slog.Info("guardrail enabled", "model", cfg.ResolvedGuardrailModel(), "base_url", cfg.ResolvedGuardrailBaseURL())
 		}
+		documentsRepo := store.NewDocumentRepository(pool)
+		chatContent := buildChatContent(cfg)
 		var rag *chat.RAG
 		if cfg.RAGEnabled() {
 			embedder := embed.NewOpenAICompat(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.EmbedDimensions)
@@ -184,15 +186,13 @@ func Run() error {
 				reindex.Run(rootCtx, chunkRepo, embedder.Embed, slog.Default())
 			})
 
-			docsRepo := store.NewDocumentRepository(pool)
-			extractors := buildIngestExtractors(cfg)
 			ingestSvc := ingest.NewService(
-				extractors,
-				embedder, docsRepo, chunkRepo, cfg.IngestChunkChars,
+				chatContent.extractors,
+				embedder, documentsRepo, chunkRepo, cfg.IngestChunkChars,
 			)
-			capabilities := ingest.BuildUploadCapabilities(extractors, cfg.UploadMaxBytes)
-			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, capabilities)
-			deps.Context = handlers.NewContext(chunkRepo, docsRepo)
+			capabilities := ingest.BuildUploadCapabilities(chatContent.extractors, cfg.UploadMaxBytes)
+			deps.Documents = handlers.NewDocuments(ingestSvc, documentsRepo, capabilities)
+			deps.Context = handlers.NewContext(chunkRepo, documentsRepo)
 		}
 		mcpHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)
 		if err != nil {
@@ -269,9 +269,11 @@ func Run() error {
 			ContextBudgetTokens: cfg.LLMContextBudgetTokens,
 		}, chat.Deps{
 			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
-			FITRoutes: fitRoutes,
-			Secrets:   broker,
-			Audit:     auditRecorder,
+			FITRoutes:   fitRoutes,
+			Secrets:     broker,
+			Audit:       auditRecorder,
+			Attachments: chatContent.attachments,
+			Documents:   documentsRepo,
 		})
 		if cfg.ScheduledEnabled {
 			tasks := store.NewScheduledTaskRepository(pool, cfg.ScheduledMaxActivePerUser)
@@ -290,7 +292,7 @@ func Run() error {
 				ToolsForUser: toolsForUser,
 			})
 			deps.Scheduled = handlers.NewScheduled(scheduledSvc)
-			deps.Chat = handlers.NewChat(chatSvc, convs, msgs, tasks)
+			deps.Chat = newChatHandler(cfg, chatSvc, convs, msgs, tasks)
 			workerProvider := provider.NewOpenAICompat(
 				cfg.ResolvedScheduledWorkerBaseURL(),
 				cfg.ResolvedScheduledWorkerAPIKey(),
@@ -325,7 +327,7 @@ func Run() error {
 				"max_active_per_user", cfg.ScheduledMaxActivePerUser,
 				"worker_concurrency", cfg.ScheduledWorkerConcurrency)
 		} else {
-			deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
+			deps.Chat = newChatHandler(cfg, chatSvc, convs, msgs)
 		}
 		deps.Credentials = handlers.NewCredentials(broker)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
@@ -394,11 +396,37 @@ func Run() error {
 	return shutdownErr
 }
 
-// buildIngestExtractors returns the document extractors used for RAG
-// ingestion. When markitdown-mcp is configured it is preferred (covers PDFs,
-// images, and office documents); the built-in PDF extractor is always kept
-// as a fallback. A markitdown connection failure is logged and does not
-// prevent startup.
+func newChatHandler(
+	cfg config.Config,
+	svc handlers.ChatStreamer,
+	conversations handlers.ConvLister,
+	messages handlers.MsgLister,
+	scheduled ...handlers.ScheduledConversationPauser,
+) *handlers.Chat {
+	return handlers.NewChatWithUploadLimit(
+		svc, conversations, messages, cfg.UploadMaxBytes, scheduled...,
+	)
+}
+
+type chatContentDependencies struct {
+	extractors  []ingest.Extractor
+	attachments *chat.AttachmentProcessor
+}
+
+// buildChatContent constructs the effective extractor set once and shares it
+// with current-turn attachment processing and, when enabled, RAG ingestion.
+func buildChatContent(cfg config.Config) chatContentDependencies {
+	extractors := buildIngestExtractors(cfg)
+	return chatContentDependencies{
+		extractors: extractors, attachments: chat.NewAttachmentProcessor(extractors),
+	}
+}
+
+// buildIngestExtractors returns the effective document extractors used by
+// chat attachments and RAG ingestion. When markitdown-mcp is configured it is
+// preferred (covers PDFs, images, and office documents); the built-in PDF
+// extractor is always kept as a fallback. A configuration/client failure is
+// logged and does not prevent startup.
 func buildIngestExtractors(cfg config.Config) []ingest.Extractor {
 	pdf := ingest.NewPDFExtractor()
 	if !cfg.MarkitdownEnabled() {
