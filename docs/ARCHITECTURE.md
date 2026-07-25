@@ -19,6 +19,7 @@ internal/
   embed/             embedding backend abstraction (OpenAI-compatible)
   mcp/               remote MCP server registry: env contract, scoping, tool filtering
   fit/               bounded FIT activity decoding (summary + splits, no GPS records)
+  pace/              strict metric/imperial/mps running-pace conversion
   secret/            credential broker — one-time placeholder tokens, never logs secrets
   chat/              per-turn orchestration: guardrail → RAG → provider stream → tool loop
   scheduled/         conversational task compiler, recurrence engine, worker + executor
@@ -140,6 +141,18 @@ App-side tool filtering (globs against the unprefixed tool name) keeps tool list
 short and independent of each server's own filtering. TLS to MCP servers is optional
 (`KADENCE_MCP_CA_FILE` for a custom CA); the deployed sidecars add basic auth and
 network isolation on top.
+
+## Native pace conversion (`pace/`)
+
+Kadence always exposes `kadence__convert_pace` in interactive and unattended
+tool catalogs. The local, read-only tool converts strict `M:SS` running paces
+between min/km, min/mi, and meters per second without model arithmetic. It uses
+the exact 1609.344-meter international mile and rounds human pace output to the
+nearest second; meters-per-second output is not deliberately rounded.
+
+Remote MCP definitions cannot shadow this built-in. The dedicated
+`pace-conversion` skill gates its first call in a turn, and
+`workout-programming` requires one conversion call per custom pace-range bound.
 
 ## Native FIT analysis (`fit/`)
 
