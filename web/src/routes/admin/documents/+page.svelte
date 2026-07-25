@@ -3,7 +3,12 @@
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { isAdmin } from '$lib/stores/auth';
-	import { listDocuments, deleteDocument } from '$lib/api/documents';
+	import {
+		listDocuments,
+		deleteDocument,
+		getDocumentUploadCapabilities,
+		type DocumentUploadCapabilities
+	} from '$lib/api/documents';
 	import type { Document } from '$lib/types';
 	import DocumentUpload from '$lib/components/DocumentUpload.svelte';
 	import DocumentList from '$lib/components/DocumentList.svelte';
@@ -11,8 +16,9 @@
 	let documents = $state<Document[]>([]);
 	let error = $state('');
 	let loading = $state(true);
+	let capabilities = $state<DocumentUploadCapabilities | null>(null);
 
-	async function load() {
+	async function loadDocuments() {
 		loading = true;
 		error = '';
 		try {
@@ -24,10 +30,27 @@
 		}
 	}
 
+	async function initialize() {
+		loading = true;
+		error = '';
+		try {
+			const [loadedDocuments, loadedCapabilities] = await Promise.all([
+				listDocuments({ admin: true }),
+				getDocumentUploadCapabilities()
+			]);
+			documents = loadedDocuments;
+			capabilities = loadedCapabilities;
+		} catch {
+			error = 'Could not load documents';
+		} finally {
+			loading = false;
+		}
+	}
+
 	async function handleDelete(id: number) {
 		try {
 			await deleteDocument(id, { admin: true });
-			await load();
+			await loadDocuments();
 		} catch {
 			error = 'Could not delete document';
 		}
@@ -38,7 +61,7 @@
 			goto('/');
 			return;
 		}
-		load();
+		initialize();
 	});
 </script>
 
@@ -47,7 +70,9 @@
 	<p class="muted">Documents you publish here are available to every user's chats.</p>
 	{#if error}<div class="error" role="alert">{error}</div>{/if}
 
-	<DocumentUpload admin onUploaded={load} />
+	{#if capabilities}
+		<DocumentUpload admin {capabilities} onUploaded={loadDocuments} />
+	{/if}
 
 	{#if loading}
 		<p class="muted">Loading…</p>

@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/config"
@@ -25,6 +26,10 @@ func TestBuildIngestExtractorsMarkitdownDisabled(t *testing.T) {
 	if _, ok := extractors[0].(*ingest.PDFExtractor); !ok {
 		t.Fatalf("extractors[0] = %T, want *ingest.PDFExtractor", extractors[0])
 	}
+	capabilities := ingest.BuildUploadCapabilities(extractors, 10<<20)
+	if capabilities.RichExtraction || capabilities.Accept != "application/pdf,.pdf" {
+		t.Fatalf("capabilities = %+v, want effective PDF-only profile", capabilities)
+	}
 }
 
 func TestBuildIngestExtractorsMarkitdownEnabled(t *testing.T) {
@@ -44,6 +49,13 @@ func TestBuildIngestExtractorsMarkitdownEnabled(t *testing.T) {
 	if _, ok := extractors[1].(*ingest.PDFExtractor); !ok {
 		t.Fatalf("extractors[1] = %T, want *ingest.PDFExtractor", extractors[1])
 	}
+	capabilities := ingest.BuildUploadCapabilities(extractors, 10<<20)
+	if !capabilities.RichExtraction {
+		t.Fatalf("capabilities = %+v, want rich extraction from effective extractor set", capabilities)
+	}
+	if !strings.Contains(capabilities.Accept, ".docx") || !strings.Contains(capabilities.Accept, ".png") {
+		t.Fatalf("capabilities.Accept = %q, want rich document and image formats", capabilities.Accept)
+	}
 }
 
 func TestBuildIngestExtractorsFallsBackWhenCAFileUnreadable(t *testing.T) {
@@ -59,5 +71,37 @@ func TestBuildIngestExtractorsFallsBackWhenCAFileUnreadable(t *testing.T) {
 	}
 	if _, ok := extractors[0].(*ingest.PDFExtractor); !ok {
 		t.Fatalf("extractors[0] = %T, want *ingest.PDFExtractor", extractors[0])
+	}
+}
+
+func TestBuildIngestExtractorsFallsBackWhenRichExtractorConfigInvalid(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		transport string
+	}{
+		{name: "transport", url: "https://extractor.example.test/mcp", transport: "stdio"},
+		{name: "URL", url: "ftp://extractor.example.test/mcp", transport: "streamable-http"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extractors := buildIngestExtractors(config.Config{
+				MarkitdownURL:       tt.url,
+				MarkitdownTransport: tt.transport,
+			})
+
+			capabilities := ingest.BuildUploadCapabilities(extractors, 10<<20)
+			if len(extractors) != 1 || capabilities.RichExtraction {
+				t.Fatalf(
+					"extractors=%d capabilities=%+v, want effective PDF-only fallback",
+					len(extractors),
+					capabilities,
+				)
+			}
+			if capabilities.Accept != "application/pdf,.pdf" {
+				t.Fatalf("Accept=%q, want PDF-only profile", capabilities.Accept)
+			}
+		})
 	}
 }

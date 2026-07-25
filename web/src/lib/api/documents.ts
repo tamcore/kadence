@@ -6,6 +6,12 @@ interface Envelope<T> {
 	error?: string;
 }
 
+export interface DocumentUploadCapabilities {
+	max_bytes: number;
+	rich_extraction: boolean;
+	accept: string;
+}
+
 function documentsPath(admin: boolean | undefined): string {
 	return admin ? '/admin/documents' : '/documents';
 }
@@ -47,6 +53,10 @@ export async function uploadDocument(file: File, opts: { admin?: boolean } = {})
 
 export function listDocuments(opts: { admin?: boolean } = {}): Promise<Document[]> {
 	return api.get<Document[]>(documentsPath(opts.admin));
+}
+
+export function getDocumentUploadCapabilities(): Promise<DocumentUploadCapabilities> {
+	return api.get<DocumentUploadCapabilities>('/documents/capabilities');
 }
 
 export function deleteDocument(id: number, opts: { admin?: boolean } = {}): Promise<void> {

@@ -13,6 +13,7 @@ import (
 	"github.com/tamcore/kadence/internal/api"
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/store"
 )
 
@@ -43,7 +44,7 @@ func fullDeps() api.Deps {
 		Sessions:    sessions,
 		Config:      cfg,
 		Chat:        handlers.NewChat(nil, nil, nil),
-		Documents:   handlers.NewDocuments(nil, nil, 0),
+		Documents:   handlers.NewDocuments(nil, nil, ingest.UploadCapabilities{}),
 		Context:     handlers.NewContext(nil, nil),
 		Credentials: handlers.NewCredentials(nil),
 		MCP:         handlers.NewMCP(nil, nil, nil, false, 10),
@@ -109,6 +110,7 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
+		"GET /api/documents/capabilities",
 		"GET /api/scheduled/tasks", "POST /api/scheduled/tasks", "GET /api/scheduled/tasks/{id}",
 		"PATCH /api/scheduled/tasks/{id}", "DELETE /api/scheduled/tasks/{id}",
 		"POST /api/scheduled/tasks/{id}/messages", "POST /api/scheduled/tasks/{id}/confirm",

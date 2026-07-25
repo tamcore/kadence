@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -90,11 +91,27 @@ type fakeChunkStore struct{}
 
 func (fakeChunkStore) Insert(_ context.Context, _ model.Chunk, _ []float32) error { return nil }
 
+type recordingDocIngester struct {
+	mime string
+}
+
+func (f *recordingDocIngester) Ingest(
+	_ context.Context,
+	_ *int64,
+	scope, filename, mime string,
+	_ []byte,
+) (model.Document, error) {
+	f.mime = mime
+	return model.Document{ID: 1, Scope: scope, Filename: filename, Mime: mime}, nil
+}
+
 func newDocumentsHandler(t *testing.T, maxBytes int) (*handlers.Documents, *fakeDocStore) {
 	t.Helper()
 	docs := newFakeDocStore()
-	svc := ingest.NewService([]ingest.Extractor{fakeDocExtractor{}}, fakeDocEmbedder{}, docs, fakeChunkStore{}, 20)
-	return handlers.NewDocuments(svc, docs, maxBytes), docs
+	extractors := []ingest.Extractor{fakeDocExtractor{}}
+	svc := ingest.NewService(extractors, fakeDocEmbedder{}, docs, fakeChunkStore{}, 20)
+	capabilities := ingest.BuildUploadCapabilities(extractors, maxBytes)
+	return handlers.NewDocuments(svc, docs, capabilities), docs
 }
 
 func withDocUser(r *http.Request) *http.Request {
@@ -167,6 +184,173 @@ func TestUploadBodyTooLarge(t *testing.T) {
 	h.Upload(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d, want 413, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadAcceptsFileAtExactSizeLimit(t *testing.T) {
+	const maxBytes = 1024
+	h, _ := newDocumentsHandler(t, maxBytes)
+	req := withDocUser(multipartUploadRequest(
+		t,
+		"exact.pdf",
+		"application/pdf",
+		bytes.Repeat([]byte("a"), maxBytes),
+	))
+	rec := httptest.NewRecorder()
+
+	h.Upload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 for exact-size file, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadRejectsPreparsedFileOneByteAboveSizeLimit(t *testing.T) {
+	const maxBytes = 1024
+	h, _ := newDocumentsHandler(t, maxBytes)
+	req := multipartUploadRequest(
+		t,
+		"too-big.pdf",
+		"application/pdf",
+		bytes.Repeat([]byte("a"), maxBytes+1),
+	)
+	if err := req.ParseMultipartForm(1); err != nil {
+		t.Fatalf("preparse multipart form: %v", err)
+	}
+	req = withDocUser(req)
+	rec := httptest.NewRecorder()
+
+	h.Upload(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want 413 for max+1 file, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadRemovesMultipartTemporaryFiles(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	h, _ := newDocumentsHandler(t, 8<<10)
+	req := multipartUploadRequest(
+		t,
+		"temporary.pdf",
+		"application/pdf",
+		bytes.Repeat([]byte("a"), 4<<10),
+	)
+	if err := req.ParseMultipartForm(1); err != nil {
+		t.Fatalf("preparse multipart form: %v", err)
+	}
+	before, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("read temp directory before upload: %v", err)
+	}
+	if len(before) == 0 {
+		t.Fatal("preparsed multipart upload did not create a temporary file")
+	}
+	req = withDocUser(req)
+	rec := httptest.NewRecorder()
+
+	h.Upload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	after, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("read temp directory after upload: %v", err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("multipart temporary files remain after upload: %v", after)
+	}
+}
+
+func TestUploadNormalizesGenericMIMEFromKnownFilenameExtension(t *testing.T) {
+	tests := []struct {
+		name         string
+		filename     string
+		declaredMIME string
+		wantMIME     string
+	}{
+		{
+			name:         "docx with absent content type",
+			filename:     "plan.docx",
+			declaredMIME: "",
+			wantMIME:     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		},
+		{
+			name:         "xlsx with octet stream",
+			filename:     "training.xlsx",
+			declaredMIME: "application/octet-stream",
+			wantMIME:     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		},
+		{
+			name:         "pptx sniffed as zip",
+			filename:     "briefing.pptx",
+			declaredMIME: "application/zip",
+			wantMIME:     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		},
+		{
+			name:         "epub sniffed as zip",
+			filename:     "guide.epub",
+			declaredMIME: "application/zip",
+			wantMIME:     "application/epub+zip",
+		},
+		{
+			name:         "meaningful declared type is preserved",
+			filename:     "renamed.docx",
+			declaredMIME: "application/pdf",
+			wantMIME:     "application/pdf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ingester := &recordingDocIngester{}
+			h := handlers.NewDocuments(ingester, nil, ingest.UploadCapabilities{MaxBytes: 1 << 20})
+			req := withDocUser(multipartUploadRequest(
+				t,
+				tt.filename,
+				tt.declaredMIME,
+				[]byte("PK\x03\x04 archive bytes"),
+			))
+			rec := httptest.NewRecorder()
+
+			h.Upload(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if ingester.mime != tt.wantMIME {
+				t.Fatalf("Ingest mime=%q, want %q", ingester.mime, tt.wantMIME)
+			}
+		})
+	}
+}
+
+func TestCapabilitiesReturnsEffectiveUploadProfile(t *testing.T) {
+	h, _ := newDocumentsHandler(t, 12<<20)
+	req := withDocUser(httptest.NewRequest(http.MethodGet, "/api/documents/capabilities", nil))
+	rec := httptest.NewRecorder()
+
+	h.Capabilities(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data ingest.UploadCapabilities `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Data.MaxBytes != 12<<20 {
+		t.Fatalf("max_bytes=%d, want %d", envelope.Data.MaxBytes, 12<<20)
+	}
+	if envelope.Data.RichExtraction {
+		t.Fatal("rich_extraction=true, want false for the effective PDF-only extractor")
+	}
+	if envelope.Data.Accept != "application/pdf,.pdf" {
+		t.Fatalf("accept=%q, want PDF-only accept string", envelope.Data.Accept)
 	}
 }
 

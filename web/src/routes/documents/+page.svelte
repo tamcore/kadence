@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listDocuments, deleteDocument } from '$lib/api/documents';
+	import {
+		listDocuments,
+		deleteDocument,
+		getDocumentUploadCapabilities,
+		type DocumentUploadCapabilities
+	} from '$lib/api/documents';
 	import type { Document } from '$lib/types';
 	import DocumentUpload from '$lib/components/DocumentUpload.svelte';
 	import DocumentList from '$lib/components/DocumentList.svelte';
@@ -10,8 +15,9 @@
 	let error = $state('');
 	let loading = $state(true);
 	let deleteTarget = $state<Document | null>(null);
+	let capabilities = $state<DocumentUploadCapabilities | null>(null);
 
-	async function load() {
+	async function loadDocuments() {
 		loading = true;
 		error = '';
 		try {
@@ -23,10 +29,27 @@
 		}
 	}
 
+	async function initialize() {
+		loading = true;
+		error = '';
+		try {
+			const [loadedDocuments, loadedCapabilities] = await Promise.all([
+				listDocuments(),
+				getDocumentUploadCapabilities()
+			]);
+			documents = loadedDocuments;
+			capabilities = loadedCapabilities;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not load documents';
+		} finally {
+			loading = false;
+		}
+	}
+
 	async function handleDelete(id: number) {
 		try {
 			await deleteDocument(id);
-			await load();
+			await loadDocuments();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Could not delete document';
 		}
@@ -42,15 +65,17 @@
 		if (target) await handleDelete(target.id);
 	}
 
-	onMount(load);
+	onMount(initialize);
 </script>
 
 <div class="page">
 	<h1>My documents</h1>
-	<p class="muted">Upload PDFs to add them to your personal knowledge base. They enrich your chats.</p>
+	<p class="muted">Add files to your personal knowledge base. Their content enriches your chats.</p>
 	{#if error}<div class="error" role="alert">{error}</div>{/if}
 
-	<DocumentUpload onUploaded={load} />
+	{#if capabilities}
+		<DocumentUpload {capabilities} onUploaded={loadDocuments} />
+	{/if}
 
 	{#if loading}
 		<p class="muted">Loading…</p>

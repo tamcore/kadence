@@ -16,6 +16,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/store"
@@ -221,7 +222,10 @@ func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
 		MaxBodyBytes:   globalCap,
 		UploadMaxBytes: 1 << 20, // 1 MiB: comfortably larger than globalCap.
 	}
-	documentsH := handlers.NewDocuments(bodyLimitFakeIngester{}, docs, cfg.UploadMaxBytes)
+	documentsH := handlers.NewDocuments(bodyLimitFakeIngester{}, docs, ingest.UploadCapabilities{
+		MaxBytes: cfg.UploadMaxBytes,
+		Accept:   "application/pdf,.pdf",
+	})
 	profileH := handlers.NewProfile(users, sessions, cfg)
 
 	srv := httptest.NewServer(api.NewRouter(api.Deps{

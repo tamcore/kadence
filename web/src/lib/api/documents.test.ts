@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { uploadDocument, listDocuments, deleteDocument } from './documents';
+import {
+	uploadDocument,
+	listDocuments,
+	deleteDocument,
+	getDocumentUploadCapabilities
+} from './documents';
 import { setCsrfToken, APIError } from './client';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -72,5 +77,18 @@ describe('documents api', () => {
 
 		await listDocuments({ admin: true });
 		expect(fetchMock.mock.calls[2][0]).toBe('/api/admin/documents');
+	});
+
+	it('loads the effective upload capabilities from the authenticated shared endpoint', async () => {
+		const capabilities = {
+			max_bytes: 20 * 1024 * 1024,
+			rich_extraction: true,
+			accept: 'application/pdf,.pdf,image/png,.png'
+		};
+		const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: capabilities }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await expect(getDocumentUploadCapabilities()).resolves.toEqual(capabilities);
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/documents/capabilities');
 	});
 });

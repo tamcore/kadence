@@ -19,6 +19,49 @@ func TestSelectPicksByMime(t *testing.T) {
 	}
 }
 
+func TestBuildUploadCapabilitiesPDFOnly(t *testing.T) {
+	got := BuildUploadCapabilities([]Extractor{NewPDFExtractor()}, 8<<20)
+
+	if got.MaxBytes != 8<<20 {
+		t.Fatalf("MaxBytes = %d, want %d", got.MaxBytes, 8<<20)
+	}
+	if got.RichExtraction {
+		t.Fatal("RichExtraction = true, want false for the effective PDF-only extractor set")
+	}
+	if got.Accept != "application/pdf,.pdf" {
+		t.Fatalf("Accept = %q, want PDF-only browser accept string", got.Accept)
+	}
+}
+
+func TestBuildUploadCapabilitiesIncludesRichFormatsFromEffectiveExtractors(t *testing.T) {
+	rich, err := NewMarkitdownExtractor("https://extractor.example.test/mcp", "", "", "streamable-http", nil)
+	if err != nil {
+		t.Fatalf("NewMarkitdownExtractor: %v", err)
+	}
+
+	got := BuildUploadCapabilities([]Extractor{rich, NewPDFExtractor()}, 16<<20)
+
+	if !got.RichExtraction {
+		t.Fatal("RichExtraction = false, want true when the effective extractor set handles rich formats")
+	}
+	for _, want := range []string{
+		"application/pdf", ".pdf",
+		"image/png", ".png", "image/jpeg", ".jpg", ".jpeg", "image/webp", ".webp", "image/gif", ".gif",
+		"text/plain", ".txt", "text/markdown", ".md", "text/html", ".html", "text/csv", ".csv",
+		"application/msword", ".doc",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
+		"application/vnd.ms-excel", ".xls",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx",
+		"application/vnd.ms-powerpoint", ".ppt",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx",
+		"application/rtf", ".rtf", "application/epub+zip", ".epub",
+	} {
+		if !strings.Contains(","+got.Accept+",", ","+want+",") {
+			t.Errorf("Accept %q does not contain exact entry %q", got.Accept, want)
+		}
+	}
+}
+
 func TestPDFExtractorExtractsText(t *testing.T) {
 	data, err := os.ReadFile("testdata/sample.pdf")
 	if err != nil {

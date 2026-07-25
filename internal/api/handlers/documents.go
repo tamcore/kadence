@@ -19,6 +19,10 @@ import (
 // http.DetectContentType when a client omits (or misreports) Content-Type.
 const mimeSniffLen = 512
 
+// multipartRequestOverhead allows framing and headers in addition to the
+// advertised per-file limit. The file itself is independently bounded below.
+const multipartRequestOverhead = 64 << 10
+
 // documentIngester runs the extract/chunk/embed/persist pipeline for an
 // uploaded document. Satisfied by *ingest.Service.
 type documentIngester interface {
@@ -37,14 +41,14 @@ type documentRepo interface {
 // Documents handles the document upload/list/delete HTTP endpoints, for both
 // user-private and admin-public scopes.
 type Documents struct {
-	svc      documentIngester
-	repo     documentRepo
-	maxBytes int
+	svc          documentIngester
+	repo         documentRepo
+	capabilities ingest.UploadCapabilities
 }
 
 // NewDocuments constructs the Documents handler.
-func NewDocuments(svc documentIngester, repo documentRepo, maxBytes int) *Documents {
-	return &Documents{svc: svc, repo: repo, maxBytes: maxBytes}
+func NewDocuments(svc documentIngester, repo documentRepo, capabilities ingest.UploadCapabilities) *Documents {
+	return &Documents{svc: svc, repo: repo, capabilities: capabilities}
 }
 
 type documentDTO struct {
@@ -79,14 +83,19 @@ func toDocumentDTOs(list []model.Document) []documentDTO {
 // caller maps it to HTTP 413.
 var errBodyTooLarge = errors.New("uploaded file exceeds maximum size")
 
-// readUploadedFile reads the "file" multipart field from r, bounded by
-// d.maxBytes, and determines its MIME type. Any read/parse failure caused by
-// exceeding maxBytes is reported as errBodyTooLarge; other failures (e.g. no
-// "file" field present) are returned as-is.
+// readUploadedFile reads the "file" multipart field from r, bounded by the
+// advertised per-file maximum, and determines its MIME type. The outer request
+// allows a small fixed multipart framing overhead while the file read itself
+// enforces the exact boundary.
 func (d *Documents) readUploadedFile(w http.ResponseWriter, r *http.Request) (data []byte, filename, mimeType string, err error) {
-	r.Body = http.MaxBytesReader(w, r.Body, int64(d.maxBytes))
-	// #nosec G120 -- the request body is bounded by http.MaxBytesReader above, so ParseMultipartForm cannot exceed maxBytes.
-	if err := r.ParseMultipartForm(int64(d.maxBytes)); err != nil {
+	maxBytes := int64(d.capabilities.MaxBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+multipartRequestOverhead)
+	// #nosec G120 -- the request body is bounded by http.MaxBytesReader above.
+	parseErr := r.ParseMultipartForm(maxBytes)
+	if r.MultipartForm != nil {
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
+	}
+	if parseErr != nil {
 		return nil, "", "", errBodyTooLarge
 	}
 
@@ -96,20 +105,30 @@ func (d *Documents) readUploadedFile(w http.ResponseWriter, r *http.Request) (da
 	}
 	defer func() { _ = file.Close() }()
 
-	data, err = io.ReadAll(file)
+	data, err = io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
+		return nil, "", "", errBodyTooLarge
+	}
+	if int64(len(data)) > maxBytes {
 		return nil, "", "", errBodyTooLarge
 	}
 
 	mimeType = header.Header.Get("Content-Type")
+	mimeType = ingest.NormalizeUploadMIME(header.Filename, mimeType)
 	if mimeType == "" {
 		probe := data
 		if len(probe) > mimeSniffLen {
 			probe = probe[:mimeSniffLen]
 		}
 		mimeType = http.DetectContentType(probe)
+		mimeType = ingest.NormalizeUploadMIME(header.Filename, mimeType)
 	}
 	return data, header.Filename, mimeType, nil
+}
+
+// Capabilities handles GET /api/documents/capabilities.
+func (d *Documents) Capabilities(w http.ResponseWriter, _ *http.Request) {
+	RespondJSON(w, http.StatusOK, d.capabilities)
 }
 
 // Upload handles POST /api/documents (private, owned by the caller).

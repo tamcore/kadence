@@ -190,7 +190,8 @@ func Run() error {
 				extractors,
 				embedder, docsRepo, chunkRepo, cfg.IngestChunkChars,
 			)
-			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, cfg.UploadMaxBytes)
+			capabilities := ingest.BuildUploadCapabilities(extractors, cfg.UploadMaxBytes)
+			deps.Documents = handlers.NewDocuments(ingestSvc, docsRepo, capabilities)
 			deps.Context = handlers.NewContext(chunkRepo, docsRepo)
 		}
 		mcpHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)

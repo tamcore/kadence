@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/tamcore/kadence/internal/mcp"
@@ -53,12 +54,19 @@ type MarkitdownExtractor struct {
 // mcp.HTTPClientWithCA), is used for the MCP transport instead of mcp-go's
 // default client — used to verify the markitdown server's TLS cert against
 // a custom CA. Pass nil to preserve today's behavior.
-func NewMarkitdownExtractor(url, authUser, authPass, transport string, httpClient *http.Client) (*MarkitdownExtractor, error) {
-	if url == "" {
+func NewMarkitdownExtractor(rawURL, authUser, authPass, transport string, httpClient *http.Client) (*MarkitdownExtractor, error) {
+	if rawURL == "" {
 		return nil, fmt.Errorf("markitdown: url is required")
 	}
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		return nil, fmt.Errorf("markitdown: url must be absolute HTTP(S)")
+	}
+	if transport != "streamable-http" && transport != "sse" {
+		return nil, fmt.Errorf("markitdown: unsupported transport %q", transport)
+	}
 	return &MarkitdownExtractor{
-		url: url, transport: transport, authUser: authUser, authPass: authPass, httpClient: httpClient,
+		url: rawURL, transport: transport, authUser: authUser, authPass: authPass, httpClient: httpClient,
 	}, nil
 }
 

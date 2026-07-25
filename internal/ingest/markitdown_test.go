@@ -78,6 +78,34 @@ func TestMarkitdownExtractor_ConstructorDoesNotConnect(t *testing.T) {
 	}
 }
 
+func TestMarkitdownExtractor_RejectsInvalidTransport(t *testing.T) {
+	for _, transport := range []string{"", "stdio", "STREAMABLE-HTTP"} {
+		t.Run(transport, func(t *testing.T) {
+			ex, err := ingest.NewMarkitdownExtractor(
+				"https://extractor.example.test/mcp",
+				"",
+				"",
+				transport,
+				nil,
+			)
+			if err == nil || ex != nil {
+				t.Fatalf("NewMarkitdownExtractor transport %q = (%T, %v), want nil error result", transport, ex, err)
+			}
+		})
+	}
+}
+
+func TestMarkitdownExtractor_RejectsInvalidURL(t *testing.T) {
+	for _, rawURL := range []string{"://missing-scheme", "ftp://extractor.example.test/mcp", "https:///missing-host"} {
+		t.Run(rawURL, func(t *testing.T) {
+			ex, err := ingest.NewMarkitdownExtractor(rawURL, "", "", "streamable-http", nil)
+			if err == nil || ex != nil {
+				t.Fatalf("NewMarkitdownExtractor URL %q = (%T, %v), want nil error result", rawURL, ex, err)
+			}
+		})
+	}
+}
+
 func TestMarkitdownExtractor_ExtractPDF(t *testing.T) {
 	ts, receivedURI := newFakeMarkitdownServer(t)
 

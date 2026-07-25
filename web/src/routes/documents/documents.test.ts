@@ -4,7 +4,14 @@ import Page from './+page.svelte';
 import * as documentsApi from '$lib/api/documents';
 
 describe('/documents', () => {
-	beforeEach(() => vi.restoreAllMocks());
+	beforeEach(() => {
+		vi.restoreAllMocks();
+		vi.spyOn(documentsApi, 'getDocumentUploadCapabilities').mockResolvedValue({
+			max_bytes: 10 * 1024 * 1024,
+			rich_extraction: false,
+			accept: 'application/pdf,.pdf'
+		});
+	});
 
 	it('loads and renders the user documents', async () => {
 		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([
@@ -52,5 +59,21 @@ describe('/documents', () => {
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
 		await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith(1));
+	});
+
+	it('uses the effective rich capability copy instead of claiming uploads are PDF-only', async () => {
+		vi.mocked(documentsApi.getDocumentUploadCapabilities).mockResolvedValue({
+			max_bytes: 20 * 1024 * 1024,
+			rich_extraction: true,
+			accept: 'application/pdf,.pdf,image/png,.png'
+		});
+		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([]);
+
+		render(Page);
+
+		await waitFor(() =>
+			expect(screen.getByText(/PDF, images, text, web pages, office files, and e-books/i)).toBeInTheDocument()
+		);
+		expect(screen.queryByText(/Upload PDFs/i)).not.toBeInTheDocument();
 	});
 });

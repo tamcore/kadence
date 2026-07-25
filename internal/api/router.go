@@ -175,6 +175,7 @@ func mountAuth(r chi.Router, deps Deps) {
 		}
 
 		if deps.Documents != nil {
+			r.Get("/api/documents/capabilities", deps.Documents.Capabilities)
 			r.Post(documentsPath, deps.Documents.Upload)
 			r.Get(documentsPath, deps.Documents.List)
 			r.Delete("/api/documents/{id}", deps.Documents.Delete)

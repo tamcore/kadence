@@ -40,6 +40,11 @@ describe('/admin/documents', () => {
 		vi.restoreAllMocks();
 		gotoMock.mockClear();
 		isAdminStore.set(false);
+		vi.spyOn(documentsApi, 'getDocumentUploadCapabilities').mockResolvedValue({
+			max_bytes: 10 * 1024 * 1024,
+			rich_extraction: false,
+			accept: 'application/pdf,.pdf'
+		});
 	});
 
 	it('redirects a non-admin to /', async () => {
@@ -68,5 +73,22 @@ describe('/admin/documents', () => {
 
 		await waitFor(() => expect(screen.getByText('shared.pdf')).toBeInTheDocument());
 		expect(spy).toHaveBeenCalledWith({ admin: true });
+	});
+
+	it('uses the same rich upload capability profile as the private page', async () => {
+		isAdminStore.set(true);
+		vi.mocked(documentsApi.getDocumentUploadCapabilities).mockResolvedValue({
+			max_bytes: 20 * 1024 * 1024,
+			rich_extraction: true,
+			accept: 'application/pdf,.pdf,image/png,.png'
+		});
+		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([]);
+
+		render(Page);
+
+		await waitFor(() =>
+			expect(screen.getByText(/PDF, images, text, web pages, office files, and e-books/i)).toBeInTheDocument()
+		);
+		expect(documentsApi.getDocumentUploadCapabilities).toHaveBeenCalledTimes(1);
 	});
 });
