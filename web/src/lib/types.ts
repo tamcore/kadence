@@ -1,3 +1,5 @@
+import type { ScheduledProposal, ScheduledQuestion, ScheduledTaskState } from '$lib/api/scheduled';
+
 export interface User {
 	id: number;
 	username: string;
@@ -19,13 +21,31 @@ export interface Conversation {
 
 export type MessagePart =
 	| { kind: 'text'; content: string }
-	| { kind: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string };
+	| { kind: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
+	| { kind: 'scheduled'; artifact: ScheduledArtifact };
+
+export interface ScheduledArtifact {
+	handoffId: string;
+	taskId?: string;
+	taskConversationId?: string;
+	ordinal: number;
+	artifactState: 'creating' | 'ready' | 'failed' | 'dismissed';
+	taskState?: ScheduledTaskState;
+	version?: number;
+	question?: ScheduledQuestion;
+	proposal?: ScheduledProposal;
+	nextRunAt?: string;
+	errorCode?: string;
+	retryable?: boolean;
+	reused?: boolean;
+}
 
 export interface ChatMessage {
 	id?: number;
 	role: 'user' | 'assistant';
 	content: string;
 	parts?: MessagePart[];
+	scheduledArtifacts?: ScheduledArtifact[];
 	stopped?: boolean;
 }
 
@@ -45,6 +65,7 @@ export type ChatEvent =
 	| { type: 'meta'; conversationId: string; userMessageId?: number }
 	| { type: 'token'; delta: string }
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
+	| { type: 'scheduled_artifact'; scheduledArtifact: ScheduledArtifact }
 	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }
 	| { type: 'done'; assistantMessageId?: number; assistantContent?: string }
 	| { type: 'error'; message: string; code?: number; assistantMessageId?: number; assistantContent?: string };

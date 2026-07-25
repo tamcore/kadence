@@ -1,5 +1,12 @@
 import { get, writable } from 'svelte/store';
-import type { ChatEvent, ChatMessage, Conversation, CredentialRequest, MessagePart } from '$lib/types';
+import type {
+	ChatEvent,
+	ChatMessage,
+	Conversation,
+	CredentialRequest,
+	MessagePart,
+	ScheduledArtifact
+} from '$lib/types';
 import * as chatApi from '$lib/api/chat';
 
 export const messages = writable<ChatMessage[]>([]);
@@ -50,10 +57,52 @@ export async function loadConversation(id: string): Promise<void> {
 	activeId.set(id);
 	chatError.set(null);
 	try {
-		messages.set(await chatApi.getMessages(id));
+		messages.set((await chatApi.getMessages(id)).map(hydrateMessage));
 	} catch {
 		chatError.set('Could not load conversation');
 	}
+}
+
+function sortArtifacts(artifacts: ScheduledArtifact[]): ScheduledArtifact[] {
+	return [...artifacts].sort((a, b) => a.ordinal - b.ordinal);
+}
+
+function textFirstParts(message: ChatMessage, artifacts: ScheduledArtifact[]): MessagePart[] {
+	const transientTools = (message.parts ?? []).filter(
+		(part): part is Extract<MessagePart, { kind: 'tool' }> => part.kind === 'tool'
+	);
+	return [
+		{ kind: 'text', content: message.content },
+		...transientTools,
+		...sortArtifacts(artifacts).map((artifact) => ({ kind: 'scheduled' as const, artifact }))
+	];
+}
+
+function hydrateMessage(message: ChatMessage): ChatMessage {
+	if (message.role !== 'assistant') return message;
+	const scheduledArtifacts = sortArtifacts(message.scheduledArtifacts ?? []);
+	return {
+		...message,
+		...(scheduledArtifacts.length ? { scheduledArtifacts } : {}),
+		parts: textFirstParts(message, scheduledArtifacts)
+	};
+}
+
+// upsertScheduledPart keeps durable handoffs independent by ID. Their order is
+// canonical (text first, then ordinal), even when a live stream included tools.
+export function upsertScheduledPart(message: ChatMessage, artifact: ScheduledArtifact): ChatMessage {
+	const existing = message.scheduledArtifacts ?? [];
+	const index = existing.findIndex((item) => item.handoffId === artifact.handoffId);
+	const scheduledArtifacts = sortArtifacts(
+		index < 0
+			? [...existing, artifact]
+			: existing.map((item, itemIndex) => (itemIndex === index ? artifact : item))
+	);
+	return {
+		...message,
+		scheduledArtifacts,
+		parts: textFirstParts(message, scheduledArtifacts)
+	};
 }
 
 export async function removeConversation(id: string): Promise<void> {
@@ -226,6 +275,16 @@ async function consumeStream(
 	function restoreRejectedRewrite(): void {
 		if (!receivedMeta && restoreBeforeMeta) messages.set(restoreBeforeMeta);
 	}
+	async function refetchAcceptedRewrite(): Promise<void> {
+		if (!receivedMeta || !restoreBeforeMeta || initialConversationId === null) return;
+		if (get(activeId) !== initialConversationId) return;
+		try {
+			const canonical = await chatApi.getMessages(initialConversationId);
+			if (get(activeId) === initialConversationId) messages.set(canonical.map(hydrateMessage));
+		} catch {
+			// Keep the locally streamed rewrite when its canonical reload is unavailable.
+		}
+	}
 	function applyPersistedAssistant(
 		event: Extract<ChatEvent, { type: 'done' | 'error' }>
 	): void {
@@ -260,6 +319,7 @@ async function consumeStream(
 			} else if (ev.type === 'tool') {
 				const tool = ev.tool;
 				const status = ev.status;
+				if (tool === 'kadence__draft_scheduled_task') continue;
 				if (status === 'running') {
 					updateAssistantParts((parts) => [
 						...parts,
@@ -268,6 +328,14 @@ async function consumeStream(
 				} else {
 					updateAssistantParts((parts) => updateToolPart(parts, tool, status));
 				}
+			} else if (ev.type === 'scheduled_artifact') {
+				messages.update((current) => {
+					const copy = [...current];
+					const assistant = copy[assistantIdx];
+					if (!assistant) return current;
+					copy[assistantIdx] = upsertScheduledPart(assistant, ev.scheduledArtifact);
+					return copy;
+				});
 			} else if (ev.type === 'credentials_request') {
 				credentialRequest.set({
 					requestId: ev.requestId,
@@ -277,6 +345,7 @@ async function consumeStream(
 			} else if (ev.type === 'error') {
 				applyPersistedAssistant(ev);
 				restoreRejectedRewrite();
+				await refetchAcceptedRewrite();
 				chatError.set(ev.message);
 				credentialRequest.set(null);
 				break;
@@ -291,6 +360,7 @@ async function consumeStream(
 		// partial assistant reply as stopped instead so the UI can end cleanly.
 		if (!localAbort.signal.aborted) {
 			restoreRejectedRewrite();
+			await refetchAcceptedRewrite();
 			chatError.set('The chat stream was interrupted');
 		} else if (!receivedMeta && restoreBeforeMeta) {
 			// Navigation/new-chat already replaced this conversation state.

@@ -158,6 +158,30 @@ describe('ChatView', () => {
 		expect(screen.getByText(/✓/)).toBeInTheDocument();
 	});
 
+	it('renders durable scheduled cards and never exposes the scheduling built-in as a generic tool chip', () => {
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{
+				id: 12,
+				role: 'assistant',
+				content: 'I delegated this.',
+				parts: [
+					{ kind: 'text', content: 'I delegated this.' },
+					{
+						kind: 'scheduled',
+						artifact: {
+							handoffId: 'handoff-1', taskId: 'task-1', ordinal: 1,
+							artifactState: 'failed', retryable: true
+						}
+					}
+				]
+			}
+		]);
+		render(ChatView, { props: {} });
+		expect(screen.getByText('Delegated work order')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+		expect(screen.queryByText(/kadence · draft_scheduled_task/)).not.toBeInTheDocument();
+	});
+
 	it('expands the payload panel when a tool bubble with arguments is clicked', async () => {
 		(messages as unknown as { set: (v: unknown[]) => void }).set([
 			{

@@ -18,6 +18,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import MessageActions from '$lib/components/MessageActions.svelte';
 	import MessageEditor from '$lib/components/MessageEditor.svelte';
+	import ScheduledArtifactCard from '$lib/components/scheduled/ScheduledArtifactCard.svelte';
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
@@ -38,6 +39,7 @@
 		const lastMessage = $messages[$messages.length - 1];
 		void $messages.length;
 		void lastMessage?.content.length;
+		void lastMessage?.scheduledArtifacts?.map((artifact) => `${artifact.handoffId}:${artifact.artifactState}:${artifact.version}`).join('|');
 		void scrollToBottom();
 	});
 
@@ -119,6 +121,8 @@
 										{#if part.content}
 											<MarkdownMessage content={part.content} />
 										{/if}
+									{:else if part.kind === 'scheduled'}
+										<ScheduledArtifactCard artifact={part.artifact} disabled={$sending || !m.id} />
 									{:else}
 										{@const toolPart = part as Extract<MessagePart, { kind: 'tool' }>}
 										{#if toolPart.arguments}
