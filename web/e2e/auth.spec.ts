@@ -68,7 +68,7 @@ test('serves install identity and shows branding on login, desktop, and mobile',
 	}
 
 	await login(page, USERNAME, PASSWORD);
-	const desktopBrand = page.getByRole('link', { name: 'Kadence' });
+	const desktopBrand = page.getByRole('link', { name: 'Kadence', exact: true });
 	await expect(desktopBrand).toBeVisible();
 	await expect(desktopBrand.locator('img')).toHaveAttribute('alt', '');
 	await expect(desktopBrand.locator('img')).toHaveAttribute('width', '24');
