@@ -412,19 +412,22 @@ func cleanupDraftHandoffsForConversation(ctx context.Context, tx pgx.Tx, userID 
 }
 
 func discardDraftTask(ctx context.Context, tx pgx.Tx, userID int64, taskID string, retainTombstone bool) error {
-	var handoffID, conversationID string
+	var handoffID, conversationID, taskState string
 	err := tx.QueryRow(ctx,
-		`SELECT h.id::text, task.conversation_id::text
+		`SELECT h.id::text, task.conversation_id::text, task.state
 		   FROM chat_scheduled_handoffs AS h
 		   JOIN scheduled_tasks AS task ON task.id = h.scheduled_task_id
-		  WHERE h.user_id = $1 AND h.scheduled_task_id = $2::uuid AND task.user_id = $1 AND task.state = $3
+		  WHERE h.user_id = $1 AND h.scheduled_task_id = $2::uuid AND task.user_id = $1
 		  FOR UPDATE OF h, task`,
-		userID, taskID, model.ScheduledTaskStateDraft).Scan(&handoffID, &conversationID)
+		userID, taskID).Scan(&handoffID, &conversationID, &taskState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("load chat handoff draft: %w", err)
+	}
+	if taskState != model.ScheduledTaskStateDraft {
+		return ErrInvalidScheduledTaskState
 	}
 	if retainTombstone {
 		if _, err := tx.Exec(ctx,

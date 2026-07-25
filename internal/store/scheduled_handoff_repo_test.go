@@ -241,6 +241,9 @@ func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {
 	if err := repo.DiscardDraft(ctx, owner.ID, dismissed.Task.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.DiscardDraft(ctx, other.ID, dismissed.Task.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-owner discard err=%v, want ErrNotFound", err)
+	}
 	var state string
 	var taskID *string
 	if err := pool.QueryRow(ctx, `SELECT artifact_state, scheduled_task_id::text FROM chat_scheduled_handoffs WHERE id = $1::uuid`, dismissed.Handoff.ID).Scan(&state, &taskID); err != nil || state != model.ScheduledHandoffStateDismissed || taskID != nil {
@@ -271,6 +274,9 @@ func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = 'active' WHERE id = $1::uuid`, confirmed.Task.ID); err != nil {
 		t.Fatal(err)
+	}
+	if err := repo.DiscardDraft(ctx, owner.ID, confirmed.Task.ID); !errors.Is(err, store.ErrInvalidScheduledTaskState) {
+		t.Fatalf("confirmed discard err=%v, want ErrInvalidScheduledTaskState", err)
 	}
 	if err := repo.CleanupDrafts(ctx, owner.ID, []string{draft.Handoff.ID, confirmed.Handoff.ID, dismissed.Handoff.ID}); err != nil {
 		t.Fatal(err)

@@ -143,7 +143,11 @@ func (s *Service) DiscardChatDraft(ctx context.Context, userID int64, taskID str
 	if strings.TrimSpace(taskID) == "" {
 		return errors.New("scheduled: chat handoff task ID is required")
 	}
-	return s.deps.ChatHandoffs.DiscardDraft(ctx, userID, taskID)
+	err := s.deps.ChatHandoffs.DiscardDraft(ctx, userID, taskID)
+	if errors.Is(err, store.ErrInvalidScheduledTaskState) {
+		return ErrInvalidTransition
+	}
+	return err
 }
 
 // CleanupChatDrafts removes owner-scoped transient handoffs after a source-chat rewind.

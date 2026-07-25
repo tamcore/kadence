@@ -42,7 +42,7 @@ func fullDeps() api.Deps {
 		Users:       users,
 		Sessions:    sessions,
 		Config:      cfg,
-		Chat:        handlers.NewChat(nil, nil, nil),
+		Chat:        handlers.NewChat(nil, nil, nil, nil, nil),
 		Documents:   handlers.NewDocuments(nil, nil, 0),
 		Context:     handlers.NewContext(nil, nil),
 		Credentials: handlers.NewCredentials(nil),
@@ -113,10 +113,33 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 		"PATCH /api/scheduled/tasks/{id}", "DELETE /api/scheduled/tasks/{id}",
 		"POST /api/scheduled/tasks/{id}/messages", "POST /api/scheduled/tasks/{id}/confirm",
 		"POST /api/scheduled/tasks/{id}/run", "POST /api/scheduled/tasks/{id}/read",
+		"POST /api/scheduled/tasks/{id}/discard",
 		"GET /api/admin/mcp-audit", "GET /api/admin/mcp-audit/{id}",
 	} {
 		if !seen[key] {
 			t.Errorf("scheduled route %q was never registered", key)
 		}
+	}
+}
+
+func TestRouterDoesNotExposeDiscardWhenScheduledIsDisabled(t *testing.T) {
+	users := store.NewUserRepository(nil)
+	sessions := store.NewSessionRepository(nil)
+	router := api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: config.Config{}})
+	chiRouter, ok := router.(chi.Router)
+	if !ok {
+		t.Fatalf("NewRouter() = %T, want chi.Router", router)
+	}
+	seen := false
+	if err := chi.Walk(chiRouter, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method == http.MethodPost && route == "/api/scheduled/tasks/{id}/discard" {
+			seen = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	if seen {
+		t.Fatal("discard route registered without Scheduled handler")
 	}
 }

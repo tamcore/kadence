@@ -353,4 +353,8 @@ func TestDiscardChatDraftDelegatesOnlyToHandoffStore(t *testing.T) {
 	if err := svc.CleanupChatDrafts(context.Background(), 7, []string{"handoff-1"}); err != nil {
 		t.Fatal(err)
 	}
+	handoffs.discardErr = store.ErrInvalidScheduledTaskState
+	if err := svc.DiscardChatDraft(context.Background(), 7, handoffTestTaskID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("confirmed discard err=%v, want ErrInvalidTransition", err)
+	}
 }
