@@ -71,7 +71,7 @@ func (r *MessageRepository) AddChatUser(ctx context.Context, conversationID, con
 // only when expectedUser is still the latest ordinary chat user message. The
 // conversation row lock serializes this CAS against new turns and rewinds.
 func (r *MessageRepository) AddChatAssistantIfLatestUser(
-	ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall,
+	ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string,
 ) (model.Message, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -102,6 +102,24 @@ func (r *MessageRepository) AddChatAssistantIfLatestUser(
 	message, err := addMessageWithPurpose(ctx, tx, conversationID, model.MsgRoleAssistant, content, toolCalls, messagePurposeChat)
 	if err != nil {
 		return model.Message{}, err
+	}
+	if len(handoffIDs) > 0 {
+		distinct := make(map[string]struct{}, len(handoffIDs))
+		for _, handoffID := range handoffIDs {
+			distinct[handoffID] = struct{}{}
+		}
+		command, err := tx.Exec(ctx,
+			`UPDATE chat_scheduled_handoffs
+			   SET assistant_message_id = $1, updated_at = NOW()
+			 WHERE id = ANY($2::uuid[])
+			   AND source_conversation_id = $3::uuid`,
+			message.ID, handoffIDs, conversationID)
+		if err != nil {
+			return model.Message{}, fmt.Errorf("bind chat scheduling handoffs: %w", err)
+		}
+		if command.RowsAffected() != int64(len(distinct)) {
+			return model.Message{}, ErrNotFound
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Message{}, fmt.Errorf("commit add chat assistant: %w", err)
@@ -242,6 +260,9 @@ func (r *MessageRepository) EditAndRewind(
 	if target.Role != model.MsgRoleUser {
 		return model.Message{}, ErrWrongMessageRole
 	}
+	if err := cleanupDraftHandoffsForSourceMessages(ctx, tx, userID, conversationID, messageID); err != nil {
+		return model.Message{}, err
+	}
 	if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
 		return model.Message{}, err
 	}
@@ -283,6 +304,9 @@ func (r *MessageRepository) RegenerateAndRewind(
 	}
 	if target.Role != model.MsgRoleAssistant {
 		return model.Message{}, ErrWrongMessageRole
+	}
+	if err := cleanupDraftHandoffsForAssistantMessages(ctx, tx, userID, conversationID, messageID); err != nil {
+		return model.Message{}, err
 	}
 	prompt, err := scanMessageRow(tx.QueryRow(ctx,
 		`SELECT id, conversation_id::text, role, content, tool_calls, created_at

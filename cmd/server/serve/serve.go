@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/tamcore/kadence/internal/api"
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
@@ -80,6 +82,50 @@ func (a mcpSnapshotAdapter) ToolHints() []string {
 
 func (a mcpSnapshotAdapter) ServerPrefix(name, scope string) (string, bool) {
 	return a.snap.ServerPrefix(name, scope)
+}
+
+// scheduledChatWiring keeps the narrow Scheduled surfaces distinct while
+// ensuring the enabled chat service and chat handler share one Service.
+type scheduledChatWiring struct {
+	handoff  chat.ScheduledHandoff
+	hydrator handlers.ChatArtifactHydrator
+	pauser   handlers.ScheduledConversationPauser
+}
+
+func newScheduledChatWiring(
+	enabled bool, service *scheduled.Service, tasks *store.ScheduledTaskRepository,
+) scheduledChatWiring {
+	if !enabled || service == nil || tasks == nil {
+		return scheduledChatWiring{}
+	}
+	return scheduledChatWiring{handoff: service, hydrator: service, pauser: tasks}
+}
+
+func newScheduledService(
+	enabled bool, pool *pgxpool.Pool, cfg config.Config,
+	convs *store.ConversationRepository, msgs *store.MessageRepository,
+	prov provider.Provider, unattendedTools *chat.UnattendedCatalog,
+) (*scheduled.Service, *store.ScheduledTaskRepository) {
+	if !enabled {
+		return nil, nil
+	}
+	tasks := store.NewScheduledTaskRepository(pool, cfg.ScheduledMaxActivePerUser)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	toolsForUser := func(ctx context.Context, username string) ([]provider.ToolDefinition, error) {
+		snapshot, err := unattendedTools.SnapshotFor(ctx, username)
+		if err != nil {
+			return nil, err
+		}
+		return snapshot.ToolsFor(ctx)
+	}
+	service := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: convs, Messages: msgs, Tasks: tasks, ChatHandoffs: handoffs,
+		Compiler: scheduled.NewCompiler(prov, scheduled.CompilerConfig{
+			Model: cfg.LLMModel, MaxTokens: cfg.LLMMaxTokens,
+		}),
+		ToolsForUser: toolsForUser,
+	})
+	return service, tasks
 }
 
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
@@ -257,6 +303,10 @@ func Run() error {
 		// (request_credentials tool + substitution/redaction) and, in a later
 		// phase, the credentials submit endpoint. Do not construct a second one.
 		broker := secret.NewBroker()
+		scheduledSvc, scheduledTasks := newScheduledService(
+			cfg.ScheduledEnabled, pool, cfg, convs, msgs, prov, unattendedTools,
+		)
+		scheduledWiring := newScheduledChatWiring(cfg.ScheduledEnabled, scheduledSvc, scheduledTasks)
 		chatSvc := chat.NewService(prov, chat.ServiceConfig{
 			Model:               cfg.LLMModel,
 			MaxTokens:           cfg.LLMMaxTokens,
@@ -271,25 +321,11 @@ func Run() error {
 			FITRoutes: fitRoutes,
 			Secrets:   broker,
 			Audit:     auditRecorder,
+			Scheduled: scheduledWiring.handoff,
 		})
 		if cfg.ScheduledEnabled {
-			tasks := store.NewScheduledTaskRepository(pool, cfg.ScheduledMaxActivePerUser)
-			toolsForUser := func(ctx context.Context, username string) ([]provider.ToolDefinition, error) {
-				snapshot, err := unattendedTools.SnapshotFor(ctx, username)
-				if err != nil {
-					return nil, err
-				}
-				return snapshot.ToolsFor(ctx)
-			}
-			scheduledSvc := scheduled.NewService(scheduled.ServiceDeps{
-				Conversations: convs, Messages: msgs, Tasks: tasks,
-				Compiler: scheduled.NewCompiler(prov, scheduled.CompilerConfig{
-					Model: cfg.LLMModel, MaxTokens: cfg.LLMMaxTokens,
-				}),
-				ToolsForUser: toolsForUser,
-			})
 			deps.Scheduled = handlers.NewScheduled(scheduledSvc)
-			deps.Chat = handlers.NewChat(chatSvc, convs, msgs, tasks)
+			deps.Chat = handlers.NewChat(chatSvc, convs, msgs, scheduledWiring.pauser, scheduledWiring.hydrator)
 			workerProvider := provider.NewOpenAICompat(
 				cfg.ResolvedScheduledWorkerBaseURL(),
 				cfg.ResolvedScheduledWorkerAPIKey(),
@@ -297,7 +333,7 @@ func Run() error {
 			executor := scheduled.NewExecutor(scheduled.ExecutorDeps{
 				Worker: workerProvider, Synthesis: prov,
 				Tools: scheduledToolsAdapter{catalog: unattendedTools},
-				Store: tasks,
+				Store: scheduledTasks,
 				Config: scheduled.ExecutorConfig{
 					WorkerModel:         cfg.ResolvedScheduledWorkerModel(),
 					WorkerMaxTokens:     cfg.ScheduledWorkerMaxTokens,
@@ -309,7 +345,7 @@ func Run() error {
 				},
 			})
 			worker := scheduled.NewWorker(scheduled.WorkerDeps{
-				Store: tasks, Executor: executor,
+				Store: scheduledTasks, Executor: executor,
 				Config: scheduled.WorkerConfig{
 					Concurrency: cfg.ScheduledWorkerConcurrency,
 					StaleAfter: scheduledStaleAfter(
@@ -324,7 +360,7 @@ func Run() error {
 				"max_active_per_user", cfg.ScheduledMaxActivePerUser,
 				"worker_concurrency", cfg.ScheduledWorkerConcurrency)
 		} else {
-			deps.Chat = handlers.NewChat(chatSvc, convs, msgs)
+			deps.Chat = handlers.NewChat(chatSvc, convs, msgs, nil, nil)
 		}
 		deps.Credentials = handlers.NewCredentials(broker)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)

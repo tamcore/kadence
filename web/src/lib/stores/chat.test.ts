@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const streamChatMock = vi.fn();
 const editMessageMock = vi.fn();
 const regenerateMessageMock = vi.fn();
+const getMessagesMock = vi.fn().mockResolvedValue([]);
 const listConversationsMock = vi.fn().mockResolvedValue([]);
 const renameConversationMock = vi.fn().mockResolvedValue({ id: '1', title: 'renamed' });
 vi.mock('$lib/api/chat', () => ({
@@ -11,7 +12,7 @@ vi.mock('$lib/api/chat', () => ({
 	editMessage: (...a: unknown[]) => editMessageMock(...a),
 	regenerateMessage: (...a: unknown[]) => regenerateMessageMock(...a),
 	listConversations: (...a: unknown[]) => listConversationsMock(...a),
-	getMessages: vi.fn().mockResolvedValue([]),
+	getMessages: (...a: unknown[]) => getMessagesMock(...a),
 	renameConversation: (...a: unknown[]) => renameConversationMock(...a),
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
@@ -24,6 +25,7 @@ import {
 	messages,
 	newChat,
 	editMessage,
+	loadConversation,
 	regenerateMessage,
 	refreshConversations,
 	renameConversation,
@@ -41,6 +43,7 @@ beforeEach(() => {
 	streamChatMock.mockReset();
 	editMessageMock.mockReset();
 	regenerateMessageMock.mockReset();
+	getMessagesMock.mockReset().mockResolvedValue([]);
 	listConversationsMock.mockReset().mockResolvedValue([]);
 	renameConversationMock.mockReset().mockResolvedValue({ id: '1', title: 'renamed' });
 });
@@ -67,6 +70,28 @@ describe('chat store', () => {
 			content: 'Hello',
 			parts: [{ kind: 'text', content: 'Hello' }]
 		});
+	});
+
+	it('hydrates loaded scheduled artifacts after canonical text in ordinal order', async () => {
+		getMessagesMock.mockResolvedValueOnce([
+			{
+				id: 12,
+				role: 'assistant',
+				content: 'I delegated two follow-ups.',
+				scheduledArtifacts: [
+					{ handoffId: 'handoff-2', ordinal: 2, artifactState: 'ready' },
+					{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }
+				]
+			}
+		]);
+
+		await loadConversation('conv-load');
+
+		expect(get(messages)[0].parts).toEqual([
+			{ kind: 'text', content: 'I delegated two follow-ups.' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
+		]);
 	});
 
 	it('editMessage rewinds later turns and streams a replacement', async () => {
@@ -157,7 +182,7 @@ describe('chat store', () => {
 		expect(get(chatError)).toBe('edit rejected');
 	});
 
-	it('keeps the rewound edit transcript when the server errors after meta', async () => {
+	it('refetches canonical scheduled artifacts when an accepted edit stream fails', async () => {
 		activeId.set('conv-1');
 		messages.set([
 			{ id: 1, role: 'user', content: 'first' },
@@ -169,16 +194,192 @@ describe('chat store', () => {
 			{ type: 'meta', conversationId: 'conv-1', userMessageId: 3 },
 			{ type: 'error', message: 'provider failed' }
 		]));
-
-		await editMessage(3, 'edited prompt');
-
-		expect(get(messages)).toEqual([
+		getMessagesMock.mockResolvedValueOnce([
 			{ id: 1, role: 'user', content: 'first' },
 			{ id: 2, role: 'assistant', content: 'answer' },
 			{ id: 3, role: 'user', content: 'edited prompt' },
-			{ role: 'assistant', content: '', parts: [] }
+			{
+				id: 6,
+				role: 'assistant',
+				content: 'canonical replacement',
+				scheduledArtifacts: [
+					{ handoffId: 'handoff-2', ordinal: 2, artifactState: 'ready' },
+					{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }
+				]
+			}
+		]);
+
+		await editMessage(3, 'edited prompt');
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(messages)[3]).toMatchObject({ id: 6, content: 'canonical replacement' });
+		expect(get(messages)[3].parts).toEqual([
+			{ kind: 'text', content: 'canonical replacement' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
 		]);
 		expect(get(chatError)).toBe('provider failed');
+	});
+
+	it('refetches canonical scheduled artifacts when an accepted regeneration stream fails', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' }
+		]);
+		regenerateMessageMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'error', message: 'provider failed' }
+		]));
+		getMessagesMock.mockResolvedValueOnce([
+			{ id: 1, role: 'user', content: 'first' },
+			{
+				id: 3,
+				role: 'assistant',
+				content: 'canonical retry',
+				scheduledArtifacts: [{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }]
+			}
+		]);
+
+		await regenerateMessage(2);
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'canonical retry' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
+	it('upserts scheduled artifacts independently and ignores the scheduling built-in tool chip', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'token', delta: 'I delegated this.' },
+			{ type: 'tool', tool: 'kadence__draft_scheduled_task', status: 'running' },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-2', ordinal: 2, artifactState: 'ready' } },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'failed', retryable: true, reused: true } },
+			{ type: 'done', assistantMessageId: 2 }
+		]));
+
+		await sendMessage('delegate this');
+
+		const assistant = get(messages)[1];
+		expect(assistant.id).toBe(2);
+		expect(assistant.scheduledArtifacts).toHaveLength(2);
+		expect(assistant.scheduledArtifacts?.map((item) => item.handoffId)).toEqual(['handoff-1', 'handoff-2']);
+		expect(assistant.parts).toEqual([
+			{ kind: 'text', content: 'I delegated this.' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1', artifactState: 'failed' }) },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
+		]);
+	});
+
+	it('keeps later tokens before sorted scheduled cards when an artifact arrives mid-stream', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'token', delta: 'I delegated ' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running' },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'token', delta: 'both follow-ups.' },
+			{ type: 'done', assistantMessageId: 2 }
+		]));
+
+		await sendMessage('delegate this');
+
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'I delegated both follow-ups.' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: undefined },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
+	it('keeps generic tool updates before scheduled cards after an artifact', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-2', ordinal: 2, artifactState: 'ready' } },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{ type: 'done', assistantMessageId: 2, assistantContent: 'I delegated scheduled follow-ups.' }
+		]));
+
+		await sendMessage('delegate this');
+
+		expect(get(messages)[1].content).toBe('I delegated scheduled follow-ups.');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'I delegated scheduled follow-ups.' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
+		]);
+	});
+
+	it('rebuilds scheduled parts from persisted error content', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{
+				type: 'error',
+				message: 'the assistant could not complete the response',
+				assistantMessageId: 2,
+				assistantContent: 'Partial canonical answer.'
+			}
+		]));
+
+		await sendMessage('delegate this');
+
+		expect(get(messages)[1].content).toBe('Partial canonical answer.');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'Partial canonical answer.' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
+	it('refetches canonical artifacts and reports interruption after an accepted edit ends without a terminal event', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' }
+		]);
+		editMessageMock.mockReturnValueOnce(events([{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 }]));
+		getMessagesMock.mockResolvedValueOnce([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 3, role: 'assistant', content: 'canonical', scheduledArtifacts: [{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }] }
+		]);
+
+		await editMessage(1, 'edited');
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(chatError)).toBe('The chat stream was interrupted');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'canonical' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
+	it('refetches canonical artifacts and reports interruption after an accepted regeneration ends without a terminal event', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' }
+		]);
+		regenerateMessageMock.mockReturnValueOnce(events([{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 }]));
+		getMessagesMock.mockResolvedValueOnce([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 3, role: 'assistant', content: 'canonical retry', scheduledArtifacts: [{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }] }
+		]);
+
+		await regenerateMessage(2);
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(chatError)).toBe('The chat stream was interrupted');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'canonical retry' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
 	});
 
 	it('does not restore an old conversation when newChat aborts an edit before meta', async () => {

@@ -5,6 +5,7 @@ vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 import { goto } from '$app/navigation';
 import {
 	confirmScheduledTask,
+	discardScheduledDraft,
 	deleteScheduledTask,
 	getScheduledTask,
 	listScheduledTasks,
@@ -14,7 +15,7 @@ import {
 	runScheduledTaskNow,
 	streamScheduledDefinition
 } from './scheduled';
-import { setCsrfToken } from './client';
+import { APIError, setCsrfToken } from './client';
 
 function streamResponse(chunks: string[], status = 200, headers: Record<string, string> = {}): Response {
 	const body = new ReadableStream({
@@ -246,5 +247,42 @@ describe('Scheduled API', () => {
 		]);
 		expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ state: 'paused' });
 		expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ state: 'active' });
+	});
+
+	it('discards drafts with CSRF protection and surfaces conflicts and unauthorized responses', async () => {
+		setCsrfToken('csrf-token');
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ data: { ok: true } }), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' }
+				})
+			)
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ error: 'draft changed' }), {
+					status: 409,
+					headers: { 'Content-Type': 'application/json' }
+				})
+			)
+			.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await expect(discardScheduledDraft('draft/one')).resolves.toEqual({ ok: true });
+		expect(fetchMock).toHaveBeenNthCalledWith(
+			1,
+			'/api/scheduled/tasks/draft%2Fone/discard',
+			expect.objectContaining({
+				method: 'POST',
+				headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' })
+			})
+		);
+		await expect(discardScheduledDraft('draft/one')).rejects.toEqual(
+			expect.objectContaining<Partial<APIError>>({ name: 'APIError', status: 409 })
+		);
+		await expect(discardScheduledDraft('draft/one')).rejects.toEqual(
+			expect.objectContaining<Partial<APIError>>({ name: 'APIError', status: 401 })
+		);
+		expect(goto).toHaveBeenCalledWith('/login?returnTo=' + encodeURIComponent('/'));
 	});
 });

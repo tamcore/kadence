@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,13 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/scheduled"
 	"github.com/tamcore/kadence/internal/store"
 )
 
 const (
 	chatTestConversationID = "chat-conv-1"
+	chatTestTimezone       = "UTC"
 	messageIDParam         = "messageId"
 	editedMessageJSON      = `{"message":"edited"}`
 )
@@ -27,9 +30,11 @@ type fakeStreamer struct {
 	gotConversationID string
 	gotMessageID      int64
 	gotAction         string
+	gotUserContext    chat.UserContext
 }
 
-func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ chat.UserContext, _ string, text string, sink chat.EventSink) error {
+func (f *fakeStreamer) Stream(_ context.Context, _ int64, uc chat.UserContext, _ string, text string, sink chat.EventSink) error {
+	f.gotUserContext = uc
 	f.gotText = text
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: "conv-uuid-1"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventToken, Delta: "hi"})
@@ -37,19 +42,19 @@ func (f *fakeStreamer) Stream(_ context.Context, _ int64, _ chat.UserContext, _ 
 	return sink.Flush()
 }
 func (f *fakeStreamer) Edit(
-	_ context.Context, _ int64, _ chat.UserContext, conversationID string,
+	_ context.Context, _ int64, uc chat.UserContext, conversationID string,
 	messageID int64, text string, sink chat.EventSink,
 ) error {
-	f.gotAction, f.gotConversationID, f.gotMessageID, f.gotText = "edit", conversationID, messageID, text
+	f.gotAction, f.gotConversationID, f.gotMessageID, f.gotText, f.gotUserContext = "edit", conversationID, messageID, text, uc
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: conversationID, UserMessageID: messageID})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone, AssistantMessageID: messageID + 1})
 	return sink.Flush()
 }
 func (f *fakeStreamer) Regenerate(
-	_ context.Context, _ int64, _ chat.UserContext, conversationID string,
+	_ context.Context, _ int64, uc chat.UserContext, conversationID string,
 	messageID int64, sink chat.EventSink,
 ) error {
-	f.gotAction, f.gotConversationID, f.gotMessageID = "regenerate", conversationID, messageID
+	f.gotAction, f.gotConversationID, f.gotMessageID, f.gotUserContext = "regenerate", conversationID, messageID, uc
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: conversationID, UserMessageID: messageID - 1})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone, AssistantMessageID: messageID + 1})
 	return sink.Flush()
@@ -121,8 +126,26 @@ func (f *fakeScheduledConversationPauser) PauseByConversation(_ context.Context,
 	return f.linked, f.err
 }
 
+type fakeChatArtifactHydrator struct {
+	calls          int
+	owner          int64
+	conversationID string
+	messageIDs     []int64
+	artifacts      map[int64][]scheduled.ChatArtifact
+	err            error
+}
+
+func (f *fakeChatArtifactHydrator) HydrateChatArtifacts(
+	_ context.Context, owner int64, conversationID string, messageIDs []int64,
+) (map[int64][]scheduled.ChatArtifact, error) {
+	f.calls++
+	f.owner, f.conversationID = owner, conversationID
+	f.messageIDs = append([]int64(nil), messageIDs...)
+	return f.artifacts, f.err
+}
+
 func withUser(r *http.Request, id int64) *http.Request { //nolint:unparam
-	return r.WithContext(auth.ContextWithUser(r.Context(), &model.User{ID: id, Username: "u", Role: model.RoleUser}))
+	return r.WithContext(auth.ContextWithUser(r.Context(), &model.User{ID: id, Username: "u", Role: model.RoleUser, Timezone: chatTestTimezone}))
 }
 
 func withChiParam(r *http.Request, param, val string) *http.Request { //nolint:unparam
@@ -141,7 +164,7 @@ func withChiParams(r *http.Request, params map[string]string) *http.Request {
 
 func TestChatSendStreamsSSE(t *testing.T) {
 	fs := &fakeStreamer{}
-	h := handlers.NewChat(fs, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(fs, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 
 	req := withUser(httptest.NewRequest(http.MethodPost, "/api/chat",
 		strings.NewReader(`{"message":"hello there"}`)), 7)
@@ -158,10 +181,13 @@ func TestChatSendStreamsSSE(t *testing.T) {
 	if fs.gotText != "hello there" {
 		t.Fatalf("streamer got %q", fs.gotText)
 	}
+	if fs.gotUserContext.Timezone != chatTestTimezone {
+		t.Fatalf("streamer timezone=%q", fs.gotUserContext.Timezone)
+	}
 }
 
 func TestListConversations(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{ID: "conv-uuid-1", Title: "a"}}}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{ID: "conv-uuid-1", Title: "a"}}}, fakeMsgLister{}, nil, nil)
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
 	rec := httptest.NewRecorder()
 	h.ListConversations(rec, req)
@@ -172,12 +198,75 @@ func TestListConversations(t *testing.T) {
 
 func TestMessagesSuccess(t *testing.T) {
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{},
-		fakeMsgLister{msgs: []model.Message{{ID: 1, Role: model.MsgRoleUser, Content: "hi"}}})
+		fakeMsgLister{msgs: []model.Message{{ID: 1, Role: model.MsgRoleUser, Content: "hi"}}}, nil, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.Messages(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":1`) ||
 		!strings.Contains(rec.Body.String(), `"hi"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChatMessagesHydratesScheduledArtifactsOnce(t *testing.T) {
+	hydrator := &fakeChatArtifactHydrator{artifacts: map[int64][]scheduled.ChatArtifact{
+		9: {
+			{HandoffID: "handoff-2", TaskID: "task-2", Ordinal: 2, ArtifactState: "ready", TaskState: "draft", Version: 1},
+			{HandoffID: "handoff-1", TaskID: "task-1", Ordinal: 1, ArtifactState: "ready", TaskState: "draft", Version: 1,
+				Proposal: &scheduled.Proposal{Version: 1, Name: "Morning check"}},
+		},
+	}}
+	messages := fakeMsgLister{msgs: []model.Message{
+		{ID: 1, Role: model.MsgRoleSystem, Content: "hidden"},
+		{ID: 2, Role: model.MsgRoleUser, Content: "first"},
+		{ID: 9, Role: model.MsgRoleAssistant, Content: "I prepared both checks."},
+		{ID: 11, Role: model.MsgRoleUser, Content: "thanks"},
+		{ID: 12, Role: model.MsgRoleAssistant, Content: "You're welcome."},
+	}}
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, messages, nil, hydrator)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/chat-conv-1/messages", nil), 7), "id", chatTestConversationID)
+	rec := httptest.NewRecorder()
+
+	h.Messages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if hydrator.calls != 1 || hydrator.owner != 7 || hydrator.conversationID != chatTestConversationID ||
+		len(hydrator.messageIDs) != 2 || hydrator.messageIDs[0] != 9 || hydrator.messageIDs[1] != 12 {
+		t.Fatalf("hydration call=%d owner=%d conversation=%q messageIDs=%v", hydrator.calls, hydrator.owner, hydrator.conversationID, hydrator.messageIDs)
+	}
+	var response struct {
+		Data []struct {
+			ID                 int64                    `json:"id"`
+			ScheduledArtifacts []scheduled.ChatArtifact `json:"scheduledArtifacts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	got := response.Data
+	if len(got) != 4 || got[0].ID != 2 || got[1].ID != 9 || got[2].ID != 11 || got[3].ID != 12 {
+		t.Fatalf("messages are not chronological or system message leaked: %+v", got)
+	}
+	if len(got[1].ScheduledArtifacts) != 2 || got[1].ScheduledArtifacts[0].Ordinal != 1 ||
+		got[1].ScheduledArtifacts[1].Ordinal != 2 || got[1].ScheduledArtifacts[0].Proposal == nil {
+		t.Fatalf("artifacts = %+v", got[1].ScheduledArtifacts)
+	}
+	if strings.Contains(rec.Body.String(), `{"id":12,"role":"assistant","content":"You're welcome.","scheduledArtifacts"`) {
+		t.Fatalf("text-only assistant message should omit artifacts: %s", rec.Body.String())
+	}
+}
+
+func TestChatMessagesReturnsSafeErrorWhenArtifactHydrationFails(t *testing.T) {
+	hydrator := &fakeChatArtifactHydrator{err: errors.New("database unavailable")}
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{msgs: []model.Message{{ID: 9, Role: model.MsgRoleAssistant, Content: "reply"}}}, nil, hydrator)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/chat-conv-1/messages", nil), 7), "id", chatTestConversationID)
+	rec := httptest.NewRecorder()
+
+	h.Messages(rec, req)
+
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "database unavailable") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -190,7 +279,7 @@ func TestEditMessageStreamsReplacement(t *testing.T) {
 	messages := fakeMsgLister{byID: model.Message{
 		ID: 12, ConversationID: chatTestConversationID, Role: model.MsgRoleUser, Content: "old",
 	}}
-	handler := handlers.NewChat(streamer, conversations, messages)
+	handler := handlers.NewChat(streamer, conversations, messages, nil, nil)
 	request := withChiParams(
 		withUser(httptest.NewRequest(http.MethodPost, "/api/conversations/conv-1/messages/12/edit",
 			strings.NewReader(`{"message":"  edited prompt  "}`)), 7),
@@ -203,6 +292,9 @@ func TestEditMessageStreamsReplacement(t *testing.T) {
 		streamer.gotConversationID != chatTestConversationID || streamer.gotMessageID != 12 ||
 		streamer.gotText != "edited prompt" {
 		t.Fatalf("status=%d streamer=%+v body=%s", response.Code, streamer, response.Body.String())
+	}
+	if streamer.gotUserContext.Timezone != chatTestTimezone {
+		t.Fatalf("edit timezone=%q", streamer.gotUserContext.Timezone)
 	}
 	if !strings.Contains(response.Body.String(), `"assistantMessageId":13`) {
 		t.Fatalf("missing persisted assistant id: %s", response.Body.String())
@@ -217,7 +309,7 @@ func TestRegenerateMessageStreamsReplacement(t *testing.T) {
 	messages := fakeMsgLister{byID: model.Message{
 		ID: 12, ConversationID: chatTestConversationID, Role: model.MsgRoleAssistant, Content: "old",
 	}}
-	handler := handlers.NewChat(streamer, conversations, messages)
+	handler := handlers.NewChat(streamer, conversations, messages, nil, nil)
 	request := withChiParams(
 		withUser(httptest.NewRequest(http.MethodPost, "/api/conversations/conv-1/messages/12/regenerate", nil), 7),
 		map[string]string{"id": chatTestConversationID, messageIDParam: "12"})
@@ -228,6 +320,9 @@ func TestRegenerateMessageStreamsReplacement(t *testing.T) {
 	if response.Code != http.StatusOK || streamer.gotAction != "regenerate" ||
 		streamer.gotConversationID != chatTestConversationID || streamer.gotMessageID != 12 {
 		t.Fatalf("status=%d streamer=%+v body=%s", response.Code, streamer, response.Body.String())
+	}
+	if streamer.gotUserContext.Timezone != chatTestTimezone {
+		t.Fatalf("regenerate timezone=%q", streamer.gotUserContext.Timezone)
 	}
 }
 
@@ -286,7 +381,7 @@ func TestMessageRewriteValidation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler := handlers.NewChat(&fakeStreamer{}, test.convs, test.messages)
+			handler := handlers.NewChat(&fakeStreamer{}, test.convs, test.messages, nil, nil)
 			request := withChiParams(
 				withUser(httptest.NewRequest(http.MethodPost, "/rewrite", strings.NewReader(test.body)), 7),
 				map[string]string{"id": chatTestConversationID, messageIDParam: test.pathID})
@@ -304,7 +399,7 @@ func TestMessageRewriteValidation(t *testing.T) {
 }
 
 func TestMessagesEmptyID(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations//messages", nil), 7), "id", "")
 	rec := httptest.NewRecorder()
 	h.Messages(rec, req)
@@ -315,7 +410,7 @@ func TestMessagesEmptyID(t *testing.T) {
 
 func TestMessagesOwnershipMiss(t *testing.T) {
 	convErr := &convNotFoundErr{}
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{getByIDError: convErr}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{getByIDError: convErr}, fakeMsgLister{}, nil, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/1/messages", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.Messages(rec, req)
@@ -329,7 +424,7 @@ type convNotFoundErr struct{}
 func (*convNotFoundErr) Error() string { return "not found" }
 
 func TestDeleteConversationSuccess(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.DeleteConversation(rec, req)
@@ -339,7 +434,7 @@ func TestDeleteConversationSuccess(t *testing.T) {
 }
 
 func TestDeleteConversationEmptyID(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/", nil), 7), "id", "")
 	rec := httptest.NewRecorder()
 	h.DeleteConversation(rec, req)
@@ -351,7 +446,7 @@ func TestDeleteConversationEmptyID(t *testing.T) {
 func TestDeleteScheduledConversationPausesAndSoftPreservesIt(t *testing.T) {
 	pauser := &fakeScheduledConversationPauser{linked: true}
 	convs := &fakeConvLister{}
-	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser)
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.DeleteConversation(rec, req)
@@ -373,7 +468,7 @@ func TestDeleteOrdinaryConversationPreservesDeleteSemanticsWhenScheduledEnabled(
 		t.Run(tc.name, func(t *testing.T) {
 			convs := &fakeConvLister{deleteError: tc.deleteErr}
 			pauser := &fakeScheduledConversationPauser{}
-			h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser)
+			h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser, nil)
 			req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
 			rec := httptest.NewRecorder()
 			h.DeleteConversation(rec, req)
@@ -387,7 +482,7 @@ func TestDeleteOrdinaryConversationPreservesDeleteSemanticsWhenScheduledEnabled(
 func TestDeleteConversationScheduledLookupFailureIsInternal(t *testing.T) {
 	convs := &fakeConvLister{}
 	pauser := &fakeScheduledConversationPauser{err: errors.New("db unavailable")}
-	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser)
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.DeleteConversation(rec, req)
@@ -399,7 +494,7 @@ func TestDeleteConversationScheduledLookupFailureIsInternal(t *testing.T) {
 func TestDeleteConversationScheduledRunConflict(t *testing.T) {
 	convs := &fakeConvLister{}
 	pauser := &fakeScheduledConversationPauser{err: store.ErrScheduledRunInProgress}
-	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser)
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser, nil)
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
 	rec := httptest.NewRecorder()
 	h.DeleteConversation(rec, req)
@@ -415,7 +510,7 @@ func patchReq(t *testing.T, body string) *http.Request { //nolint:unparam
 }
 
 func TestPatchConversationSuccess(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `{"title":"  New title  "}`))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"New title"`) {
@@ -424,7 +519,7 @@ func TestPatchConversationSuccess(t *testing.T) {
 }
 
 func TestPatchConversationEmptyID(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, withChiParam(withUser(httptest.NewRequest(http.MethodPatch, "/api/conversations/", strings.NewReader(`{"title":"x"}`)), 7), "id", ""))
 	if rec.Code != http.StatusBadRequest {
@@ -433,7 +528,7 @@ func TestPatchConversationEmptyID(t *testing.T) {
 }
 
 func TestPatchConversationBlankTitle(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `{"title":"   "}`))
 	if rec.Code != http.StatusBadRequest {
@@ -442,7 +537,7 @@ func TestPatchConversationBlankTitle(t *testing.T) {
 }
 
 func TestPatchConversationTitleTooLong(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	longTitle := strings.Repeat("x", 61)
 	h.PatchConversation(rec, patchReq(t, `{"title":"`+longTitle+`"}`))
@@ -452,7 +547,7 @@ func TestPatchConversationTitleTooLong(t *testing.T) {
 }
 
 func TestPatchConversationInvalidBody(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `not json`))
 	if rec.Code != http.StatusBadRequest {
@@ -461,7 +556,7 @@ func TestPatchConversationInvalidBody(t *testing.T) {
 }
 
 func TestPatchConversationNotFound(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{updateTitleErr: store.ErrNotFound}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{updateTitleErr: store.ErrNotFound}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `{"title":"new"}`))
 	if rec.Code != http.StatusNotFound {
@@ -470,7 +565,7 @@ func TestPatchConversationNotFound(t *testing.T) {
 }
 
 func TestPatchConversationRepoError(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{updateTitleErr: &convNotFoundErr{}}, fakeMsgLister{})
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{updateTitleErr: &convNotFoundErr{}}, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `{"title":"new"}`))
 	if rec.Code != http.StatusInternalServerError {

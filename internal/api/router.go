@@ -159,6 +159,7 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Post("/api/scheduled/tasks/{id}/confirm", deps.Scheduled.Confirm)
 			r.Post("/api/scheduled/tasks/{id}/run", deps.Scheduled.RunNow)
 			r.Post("/api/scheduled/tasks/{id}/read", deps.Scheduled.MarkRead)
+			r.Post("/api/scheduled/tasks/{id}/discard", deps.Scheduled.Discard)
 		}
 
 		if deps.Context != nil {

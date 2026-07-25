@@ -5,14 +5,8 @@
 	import Composer from '$lib/components/Composer.svelte';
 	import ScheduledProposal from '$lib/components/scheduled/ScheduledProposal.svelte';
 	import ScheduledQuestionCard from '$lib/components/scheduled/ScheduledQuestionCard.svelte';
-	import {
-		confirmScheduledTask,
-		getScheduledTask,
-		streamScheduledDefinition,
-		type ScheduledProposal as Proposal,
-		type ScheduledQuestion
-	} from '$lib/api/scheduled';
-	import { APIError } from '$lib/api/client';
+	import type { ScheduledProposal as Proposal, ScheduledQuestion } from '$lib/api/scheduled';
+	import { ScheduledDefinitionController } from '$lib/scheduled/definition.svelte';
 	import { currentUser } from '$lib/stores/auth';
 	import {
 		loadMoreScheduled,
@@ -23,18 +17,27 @@
 		scheduledTasks
 	} from '$lib/stores/scheduled';
 
-	let taskId = $state<string | null>(null);
-	let turns = $state<{ role: 'user' | 'assistant'; content: string }[]>([]);
-	let questionHistory = $state<{ question: ScheduledQuestion; answer?: string }[]>([]);
-	let questionIndex = $state(-1);
-	let coachText = $state('');
-	let question = $state<ScheduledQuestion | null>(null);
-	let proposal = $state<Proposal | null>(null);
-	let sending = $state(false);
-	let error = $state('');
-	let controller: AbortController | null = null;
+	function createDefinition(taskID: string | null): ScheduledDefinitionController {
+		const next = new ScheduledDefinitionController(taskID);
+		next.onUpdate = () => {
+			if (!next.taskId) return;
+			persistDraftUI(next.taskId);
+			if ($page.url.searchParams.get('task') !== next.taskId) {
+				void goto(`/scheduled?task=${encodeURIComponent(next.taskId)}`, {
+					replaceState: true,
+					keepFocus: true
+				});
+			}
+		};
+		return next;
+	}
 
-	const defining = $derived(taskId !== null || sending || turns.length > 0);
+	let definition = $state(createDefinition(null));
+
+	const defining = $derived(
+		definition.taskId !== null || definition.sending || definition.turns.length > 0
+	);
+
 	const featureAvailable = $derived(!$currentUser || $currentUser.scheduledEnabled);
 
 	function draftStorageKey(id: string): string {
@@ -46,7 +49,12 @@
 		try {
 			sessionStorage.setItem(
 				draftStorageKey(id),
-				JSON.stringify({ question, proposal, questionHistory, questionIndex })
+				JSON.stringify({
+					question: definition.question,
+					proposal: definition.proposal,
+					questionHistory: definition.questionHistory,
+					questionIndex: definition.questionIndex
+				})
 			);
 		} catch {
 			// Draft persistence is a convenience; storage may be unavailable or full.
@@ -64,11 +72,13 @@
 				questionHistory?: { question: ScheduledQuestion; answer?: string }[];
 				questionIndex?: number;
 			};
-			question = stored.question ?? null;
-			proposal = stored.proposal ?? null;
-			questionHistory = stored.questionHistory ?? (question ? [{ question }] : []);
-			questionIndex =
-				stored.questionIndex ?? (questionHistory.length > 0 ? questionHistory.length - 1 : -1);
+			definition.question = stored.question ?? null;
+			definition.proposal = stored.proposal ?? null;
+			definition.questionHistory =
+				stored.questionHistory ?? (definition.question ? [{ question: definition.question }] : []);
+			definition.questionIndex =
+				stored.questionIndex ??
+				(definition.questionHistory.length > 0 ? definition.questionHistory.length - 1 : -1);
 		} catch {
 			sessionStorage.removeItem(draftStorageKey(id));
 		}
@@ -100,194 +110,44 @@
 		const resumeID = $page.url.searchParams.get('task');
 		if (resumeID) void resumeDraft(resumeID);
 	});
-	onDestroy(() => controller?.abort());
+	onDestroy(() => definition.dispose());
 
 	async function send(message: string): Promise<void> {
-		if (sending) return;
-		turns = [...turns, { role: 'user', content: message }];
-		sending = true;
-		error = '';
-		question = null;
-		proposal = null;
-		if (taskId) persistDraftUI(taskId);
-		coachText = '';
-		controller?.abort();
-		controller = new AbortController();
-		try {
-			for await (const event of streamScheduledDefinition(
-				{ taskId: taskId ?? undefined, message },
-				controller.signal
-			)) {
-				switch (event.type) {
-					case 'meta':
-						taskId = event.taskId;
-						persistDraftUI(event.taskId);
-						void goto(`/scheduled?task=${encodeURIComponent(event.taskId)}`, {
-							replaceState: true,
-							keepFocus: true
-						});
-						break;
-					case 'text':
-						coachText += event.delta;
-						break;
-					case 'task_question':
-						recordQuestion(event.question);
-						if (taskId) persistDraftUI(taskId);
-						break;
-					case 'task_proposal':
-						proposal = event.proposal;
-						if (taskId) persistDraftUI(taskId);
-						break;
-					case 'error':
-						error = event.error;
-						break;
-				}
-			}
-			if (coachText) {
-				turns = [...turns, { role: 'assistant', content: coachText }];
-				coachText = '';
-			}
-		} catch (cause) {
-			if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
-				error = cause instanceof Error ? cause.message : 'Could not refine this task';
-			}
-		} finally {
-			sending = false;
-		}
+		await definition.refine(message);
+	}
+
+	async function answerQuestion(value: string): Promise<void> {
+		await definition.answerQuestion(value);
+		if (definition.taskId) persistDraftUI(definition.taskId);
 	}
 
 	async function resumeDraft(resumeID: string): Promise<void> {
-		sending = true;
-		error = '';
-		try {
-			const loaded = await getScheduledTask(resumeID);
-			if (loaded.task.state !== 'draft') {
-				await goto(`/scheduled/${resumeID}`);
-				return;
-			}
-			taskId = resumeID;
-			turns = loaded.definitionMessages.map((message) => ({
-				role: message.role,
-				content: message.text
-			}));
-			questionHistory = definitionQuestionHistory(loaded.definitionMessages);
-			questionIndex = questionHistory.length - 1;
-			const latest = loaded.definitionMessages.at(-1);
-			question = latest?.role === 'assistant' ? (latest.question ?? null) : null;
-			if (loaded.task.compiledPrompt) {
-				proposal = {
-					version: loaded.task.version,
-					name: loaded.task.name,
-					taskKind: loaded.task.kind,
-					compiledPrompt: loaded.task.compiledPrompt,
-					executionMode: loaded.task.executionMode,
-					schedule: {
-						At: loaded.task.oneOffAt,
-						DTStart: loaded.task.dtStart,
-						RRULE: loaded.task.rrule,
-						Timezone: loaded.task.timezone
-					},
-					timezone: loaded.task.timezone,
-					authorizedTools: loaded.task.authorizedTools ?? [],
-					deliveryPolicy: loaded.task.deliveryPolicy,
-					initialRun: loaded.task.initialRun,
-					stopCondition: loaded.task.stopCondition,
-					staticMessage: loaded.task.staticMessage
-				};
-				persistDraftUI(resumeID);
-			} else if (!question) {
-				restoreDraftUI(resumeID);
-			}
-		} catch (cause) {
-			error = cause instanceof Error ? cause.message : 'Could not resume this task';
-			taskId = resumeID;
-		} finally {
-			sending = false;
+		definition.dispose();
+		definition = createDefinition(resumeID);
+		await definition.reload();
+		if (definition.task && definition.task.state !== 'draft') {
+			await goto(`/scheduled/${resumeID}`);
+			return;
+		}
+		if (definition.task?.compiledPrompt) {
+			persistDraftUI(resumeID);
+		} else if (!definition.question) {
+			restoreDraftUI(resumeID);
 		}
 	}
 
 	async function confirm(expectedVersion: number): Promise<void> {
-		if (!taskId || sending) return;
-		sending = true;
-		error = '';
-		try {
-			await confirmScheduledTask(taskId, expectedVersion);
-			clearDraftUI(taskId);
-			await refreshScheduled();
-			await goto(`/scheduled/${taskId}`);
-		} catch (cause) {
-			error =
-				cause instanceof APIError && cause.status === 409
-					? 'This plan changed while you were reviewing it. Refine it again to see the latest version.'
-					: cause instanceof Error
-						? cause.message
-						: 'Could not schedule this task';
-		} finally {
-			sending = false;
-		}
+		const taskID = definition.taskId;
+		const confirmed = await definition.confirm(expectedVersion);
+		if (!confirmed || !taskID) return;
+		clearDraftUI(taskID);
+		await refreshScheduled();
+		await goto(`/scheduled/${taskID}`);
 	}
 
 	function resetDefinition(): void {
-		controller?.abort();
-		taskId = null;
-		turns = [];
-		questionHistory = [];
-		questionIndex = -1;
-		coachText = '';
-		question = null;
-		proposal = null;
-		error = '';
+		definition.reset();
 		void goto('/scheduled', { replaceState: true });
-	}
-
-	function definitionQuestionHistory(
-		messages: {
-			role: 'user' | 'assistant';
-			text: string;
-			question?: ScheduledQuestion;
-		}[]
-	): { question: ScheduledQuestion; answer?: string }[] {
-		const history: { question: ScheduledQuestion; answer?: string }[] = [];
-		let unanswered = -1;
-		for (const message of messages) {
-			if (message.role === 'assistant' && message.question) {
-				history.push({ question: message.question });
-				unanswered = history.length - 1;
-			} else if (message.role === 'user' && unanswered >= 0) {
-				history[unanswered] = { ...history[unanswered], answer: message.text };
-				unanswered = -1;
-			}
-		}
-		return history;
-	}
-
-	function recordQuestion(nextQuestion: ScheduledQuestion): void {
-		const current = questionHistory[questionIndex];
-		if (current && current.question.id === nextQuestion.id && current.answer === undefined) {
-			questionHistory[questionIndex] = { ...current, question: nextQuestion };
-			questionHistory = [...questionHistory];
-		} else {
-			questionHistory = [...questionHistory, { question: nextQuestion }];
-			questionIndex = questionHistory.length - 1;
-		}
-		question = nextQuestion;
-	}
-
-	function answerQuestion(value: string): void {
-		if (questionIndex >= 0) {
-			questionHistory = questionHistory
-				.slice(0, questionIndex + 1)
-				.map((entry, index) => (index === questionIndex ? { ...entry, answer: value } : entry));
-		}
-		void send(value);
-	}
-
-	function showPreviousQuestion(): void {
-		if (questionIndex <= 0) return;
-		questionIndex -= 1;
-		question = questionHistory[questionIndex].question;
-		proposal = null;
-		if (taskId) persistDraftUI(taskId);
 	}
 
 	function statusLabel(value: string): string {
@@ -316,7 +176,7 @@
 				<p class="intro">Ask Kadence to check, remind, or analyze something later.</p>
 				<div class="composer-wrap">
 					<Composer
-						disabled={sending}
+						disabled={definition.sending}
 						onSubmit={(text) => void send(text)}
 						placeholder="Describe what should happen later…"
 					/>
@@ -340,36 +200,36 @@
 			<div class="definition-thread">
 				<div class="rail" aria-hidden="true">
 					<span class="node complete"></span>
-					<span class:complete={coachText !== ''} class="node"></span>
-					<span class:complete={question !== null || proposal !== null} class="node"></span>
+					<span class:complete={definition.coachText !== ''} class="node"></span>
+					<span class:complete={definition.question !== null || definition.proposal !== null} class="node"></span>
 				</div>
 				<div class="thread">
-					{#each turns as turn, index (`${index}-${turn.role}`)}
+					{#each definition.turns as turn, index (`${index}-${turn.role}`)}
 						{#if turn.role === 'user'}
 							<div class="bubble user">{turn.content}</div>
 						{:else}
 							<p class="coach">{turn.content}</p>
 						{/if}
 					{/each}
-					{#if coachText}<p class="coach" aria-live="polite">{coachText}</p>{/if}
-					{#if error}<div class="error" role="alert">{error}</div>{/if}
-					{#if question}
-						{#key question.id}
+					{#if definition.coachText}<p class="coach" aria-live="polite">{definition.coachText}</p>{/if}
+					{#if definition.error}<div class="error" role="alert">{definition.error}</div>{/if}
+					{#if definition.question}
+						{#key definition.question.id}
 							<ScheduledQuestionCard
-								{question}
-								initialAnswer={questionHistory[questionIndex]?.answer ?? ''}
-								disabled={sending}
-								onAnswer={answerQuestion}
-								onBack={showPreviousQuestion}
+								question={definition.question}
+								initialAnswer={definition.questionHistory[definition.questionIndex]?.answer ?? ''}
+								disabled={definition.sending}
+								onAnswer={(value) => void answerQuestion(value)}
+								onBack={definition.showPreviousQuestion}
 								onClose={resetDefinition}
 							/>
 						{/key}
-					{:else if proposal}
-						<ScheduledProposal {proposal} disabled={sending} onConfirm={(version) => void confirm(version)} />
-					{:else if sending}
+					{:else if definition.proposal}
+						<ScheduledProposal proposal={definition.proposal} disabled={definition.sending} onConfirm={(version) => void confirm(version)} />
+					{:else if definition.sending}
 						<p class="thinking" aria-live="polite">Thinking through the details…</p>
 					{/if}
-					{#if taskId && !question && !proposal && !sending}
+					{#if definition.taskId && !definition.question && !definition.proposal && !definition.sending}
 						<div class="composer-wrap">
 							<Composer
 								onSubmit={(text) => void send(text)}

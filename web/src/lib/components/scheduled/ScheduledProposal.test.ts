@@ -254,4 +254,32 @@ describe('ScheduledProposal', () => {
 		expect(screen.getByText((content) => content.includes(`DTSTART: ${dtStart}`))).toBeInTheDocument();
 		expect(screen.getByText((content) => content.includes(`RRULE: ${rrule}`))).toBeInTheDocument();
 	});
+
+	it('keeps proposal labels and confirmation controls isolated across simultaneous cards', () => {
+		const shared = {
+			version: 9,
+			name: 'Review',
+			taskKind: 'data' as const,
+			compiledPrompt: 'Review.',
+			executionMode: 'data' as const,
+			schedule: { RRULE: 'FREQ=DAILY', Timezone: 'UTC' },
+			timezone: 'UTC',
+			authorizedTools: [],
+			deliveryPolicy: 'always' as const,
+			initialRun: 'wait' as const
+		};
+		render(ScheduledProposal, { props: { proposal: shared, onConfirm: vi.fn(), disabled: true } });
+		render(ScheduledProposal, { props: { proposal: shared, onConfirm: vi.fn() } });
+
+		const headings = screen.getAllByRole('heading', { name: 'Review' });
+		const buttons = screen.getAllByRole('button', { name: 'Schedule task' });
+		expect(new Set(headings.map((heading) => heading.id)).size).toBe(2);
+		expect(buttons[0]).toBeDisabled();
+		expect(buttons[1]).not.toBeDisabled();
+		for (const heading of headings) {
+			expect(document.querySelector(`section[aria-labelledby="${heading.id}"]`)).toContainElement(
+			heading
+			);
+		}
+	});
 });

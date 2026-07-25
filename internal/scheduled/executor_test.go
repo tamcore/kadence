@@ -21,6 +21,7 @@ const (
 	executorTestTaskID      = "task"
 	executorToolCallID      = "call"
 	executorDailyRRULE      = "FREQ=DAILY"
+	executorOtherTool       = "other"
 )
 
 type executorProvider struct {
@@ -196,14 +197,14 @@ func TestExecutorUsesExactFreshOwnerToolsAndRejectsMissingOrUnauthorized(t *test
 	}{
 		{
 			name:       "missing",
-			tools:      []provider.ToolDefinition{{Name: "other"}},
+			tools:      []provider.ToolDefinition{{Name: executorOtherTool}},
 			wantCode:   failureMissingTool,
 			wantPaused: true,
 		},
 		{
 			name:     "unauthorized call",
 			tools:    []provider.ToolDefinition{{Name: executorDataTool}},
-			reply:    provider.StreamResult{ToolCalls: []provider.ToolCall{{ID: "1", Name: "other", Arguments: `{}`}}},
+			reply:    provider.StreamResult{ToolCalls: []provider.ToolCall{{ID: "1", Name: executorOtherTool, Arguments: `{}`}}},
 			wantCode: failureUnauthorizedTool,
 		},
 	} {

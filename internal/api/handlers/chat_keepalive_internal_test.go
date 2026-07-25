@@ -33,7 +33,7 @@ func TestSendEmitsKeepaliveDuringLongTurn(t *testing.T) {
 	sseKeepaliveInterval = 5 * time.Millisecond
 	defer func() { sseKeepaliveInterval = orig }()
 
-	h := NewChat(slowStreamer{delay: 40 * time.Millisecond}, nil, nil)
+	h := NewChat(slowStreamer{delay: 40 * time.Millisecond}, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hi"}`))
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &model.User{ID: 7, Username: "u", Role: model.RoleUser}))
