@@ -57,6 +57,59 @@ func TestChatScheduledHandoffCreateOrGetDraftIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestChatScheduledHandoffRejectsNonUserChatSourceMessages(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "handoff-source-role", "handoff-source-role@example.com")
+	source, err := conversations.Create(ctx, owner.ID, "Source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := messages.AddChatAssistantIfLatestUser(ctx, source.ID, user, "I can help", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonChatUser, err := messages.AddDefinition(ctx, source.ID, model.MsgRoleUser, "Not an ordinary chat turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		messageID   int64
+		fingerprint byte
+	}{
+		{name: "assistant", messageID: assistant.ID, fingerprint: 70},
+		{name: "non-chat-purpose", messageID: nonChatUser.ID, fingerprint: 71},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := repo.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+				UserID: owner.ID, SourceConversationID: source.ID, SourceUserMessageID: tc.messageID,
+				SourceContentFingerprint: handoffFingerprint(tc.fingerprint), InvocationOrdinal: 1,
+				Title: testHandoffTitle, Timezone: scheduledTimezoneUTC,
+			})
+			if !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("CreateOrGetDraft err=%v, want ErrNotFound", err)
+			}
+		})
+	}
+	var handoffs, tasks int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE user_id = $1`, owner.ID).Scan(&handoffs); err != nil || handoffs != 0 {
+		t.Fatalf("handoff count=%d err=%v", handoffs, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1`, owner.ID).Scan(&tasks); err != nil || tasks != 0 {
+		t.Fatalf("task count=%d err=%v", tasks, err)
+	}
+}
+
 func TestChatScheduledHandoffConcurrentSlotCreationCreatesOneDraft(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

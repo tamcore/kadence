@@ -111,6 +111,28 @@ func assertChatScheduledHandoffSchema(t *testing.T, ctx context.Context, db *sql
 		`INSERT INTO scheduled_tasks (user_id, conversation_id, kind, state, timezone) VALUES ($1, $2::uuid, 'reminder', 'draft', 'UTC') RETURNING id::text`, userID, scheduledConversationID).Scan(&taskID); err != nil {
 		t.Fatal(err)
 	}
+	var dismissedTaskID string
+	var dismissedConversationID string
+	if err := db.QueryRowContext(ctx,
+		`INSERT INTO conversations (user_id, title, kind) VALUES ($1, 'dismissed-scheduled', 'scheduled') RETURNING id::text`, userID).Scan(&dismissedConversationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`INSERT INTO scheduled_tasks (user_id, conversation_id, kind, state, timezone) VALUES ($1, $2::uuid, 'reminder', 'draft', 'UTC') RETURNING id::text`, userID, dismissedConversationID).Scan(&dismissedTaskID); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO chat_scheduled_handoffs (user_id, source_conversation_id, source_user_message_id, source_content_fingerprint, invocation_ordinal, artifact_state)
+		 VALUES ($1, $2::uuid, $3, decode(repeat('05', 32), 'hex'), 1, 'ready')`,
+		`INSERT INTO chat_scheduled_handoffs (user_id, source_conversation_id, source_user_message_id, source_content_fingerprint, invocation_ordinal, artifact_state)
+		 VALUES ($1, $2::uuid, $3, decode(repeat('06', 32), 'hex'), 1, 'failed')`,
+		`INSERT INTO chat_scheduled_handoffs (user_id, source_conversation_id, source_user_message_id, source_content_fingerprint, scheduled_task_id, invocation_ordinal, artifact_state)
+		 VALUES ($1, $2::uuid, $3, decode(repeat('07', 32), 'hex'), $4::uuid, 1, 'dismissed')`,
+	} {
+		if _, err := db.ExecContext(ctx, statement, userID, conversationID, messageID, dismissedTaskID); err == nil {
+			t.Fatalf("invalid handoff lifecycle insert succeeded: %s", statement)
+		}
+	}
 	var handoffID string
 	if err := db.QueryRowContext(ctx,
 		`INSERT INTO chat_scheduled_handoffs (user_id, source_conversation_id, source_user_message_id, source_content_fingerprint, assistant_message_id, scheduled_task_id, invocation_ordinal, artifact_state)

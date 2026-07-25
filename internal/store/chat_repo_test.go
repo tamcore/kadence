@@ -562,7 +562,7 @@ func TestChatRepositoryEditAndConversationDeleteCleanOnlyDraftHandoffs(t *testin
 	if err := conversations.Delete(ctx, deleteSource.ID, owner.ID); err != nil {
 		t.Fatal(err)
 	}
-	var draftCount, confirmedCount, confirmedTaskCount int
+	var draftCount, confirmedCount, confirmedTaskCount, confirmedConversationCount int
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&draftCount); err != nil || draftCount != 0 {
 		t.Fatalf("deleted source draft handoff count=%d err=%v", draftCount, err)
 	}
@@ -571,5 +571,8 @@ func TestChatRepositoryEditAndConversationDeleteCleanOnlyDraftHandoffs(t *testin
 	}
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, confirmed.Task.ID).Scan(&confirmedTaskCount); err != nil || confirmedTaskCount != 1 {
 		t.Fatalf("deleted source confirmed task count=%d err=%v", confirmedTaskCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, confirmed.Task.ConversationID).Scan(&confirmedConversationCount); err != nil || confirmedConversationCount != 1 {
+		t.Fatalf("deleted source confirmed scheduled conversation count=%d err=%v", confirmedConversationCount, err)
 	}
 }

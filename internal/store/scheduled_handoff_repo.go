@@ -60,9 +60,10 @@ func (r *ScheduledHandoffRepository) CreateOrGetDraft(
 			SELECT 1 FROM conversations AS conversation
 			JOIN messages AS message ON message.conversation_id = conversation.id
 			 WHERE conversation.id = $1::uuid AND conversation.user_id = $2 AND conversation.kind = $3
-			   AND message.id = $4
+			   AND message.id = $4 AND message.role = $5 AND message.purpose = $6
 		)`,
 		in.SourceConversationID, in.UserID, model.ConversationKindChat, in.SourceUserMessageID,
+		model.MsgRoleUser, messagePurposeChat,
 	).Scan(&sourceOwned); err != nil {
 		return HydratedChatHandoff{}, false, fmt.Errorf("check chat handoff source owner: %w", err)
 	}
