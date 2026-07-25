@@ -31,9 +31,13 @@ test('keeps the desktop chat thread and composer in a shared 960px column', asyn
 	await expect(composer).toHaveJSProperty('clientWidth', 960);
 });
 
-test('uses content-fit assistant and user bubbles on opposite sides', async ({ page }) => {
+test('uses content-fit assistant and user bubbles on opposite sides', async ({ page }, testInfo) => {
 	await page.setViewportSize({ width: 1600, height: 1000 });
-	await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
+	const baseURL = testInfo.project.use.baseURL;
+	if (!baseURL) throw new Error('Playwright baseURL is required for scoped API fixtures');
+	const appOrigin = new URL(baseURL).origin;
+	const isAppApi = (url: URL) => url.origin === appOrigin && url.pathname.startsWith('/api/');
+	await page.route(isAppApi, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
 		if (path === '/api/chat') {
