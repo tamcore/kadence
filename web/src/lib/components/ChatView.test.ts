@@ -1,10 +1,16 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendMessageMock = vi.fn();
 const stopGenerationMock = vi.fn();
 const editMessageMock = vi.fn();
 const regenerateMessageMock = vi.fn();
+const streamScheduledDefinitionMock = vi.fn();
+
+vi.mock('$lib/api/scheduled', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api/scheduled')>()),
+	streamScheduledDefinition: (...args: unknown[]) => streamScheduledDefinitionMock(...args)
+}));
 
 vi.mock('$lib/stores/chat', async () => {
 	const { writable } = await import('svelte/store');
@@ -180,6 +186,37 @@ describe('ChatView', () => {
 		expect(screen.getByText('Delegated work order')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
 		expect(screen.queryByText(/kadence · draft_scheduled_task/)).not.toBeInTheDocument();
+	});
+
+	it('keeps card controllers with their handoff when scheduled parts reorder', async () => {
+		streamScheduledDefinitionMock.mockImplementation(async function* () {
+			yield { type: 'meta', taskId: 'task-b', conversationId: 'conv-1' };
+			yield { type: 'done' };
+		});
+		const part = (handoffId: string, taskId: string, ordinal: number) => ({
+			kind: 'scheduled' as const,
+			artifact: { handoffId, taskId, ordinal, artifactState: 'ready' as const, taskState: 'draft' as const }
+		});
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 12, role: 'assistant', content: 'Delegated.', parts: [{ kind: 'text', content: 'Delegated.' }, part('handoff-a', 'task-a', 1), part('handoff-b', 'task-b', 2)] }
+		]);
+		render(ChatView, { props: {} });
+		await waitFor(() => expect(document.querySelector('[data-handoff-id="handoff-a"]')).toBeInTheDocument());
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 12, role: 'assistant', content: 'Delegated.', parts: [{ kind: 'text', content: 'Delegated.' }, part('handoff-b', 'task-b', 1), part('handoff-a', 'task-a', 2)] }
+		]);
+		const handoffB = document.querySelector('[data-handoff-id="handoff-b"]') as HTMLElement;
+		await fireEvent.click(within(handoffB).getByRole('button', { name: 'Adjust' }));
+		await fireEvent.input(within(handoffB).getByRole('textbox', { name: 'Adjust scheduled task' }), {
+			target: { value: 'Change B.' }
+		});
+		await fireEvent.click(within(handoffB).getByRole('button', { name: 'Save adjustment' }));
+		expect(streamScheduledDefinitionMock).toHaveBeenCalledWith(
+			expect.objectContaining({ taskId: 'task-b', message: 'Change B.' }),
+			expect.any(AbortSignal)
+		);
 	});
 
 	it('expands the payload panel when a tool bubble with arguments is clicked', async () => {

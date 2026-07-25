@@ -269,9 +269,27 @@ async function consumeStream(
 			return copy;
 		});
 	}
+	function appendAssistantToken(delta: string): void {
+		messages.update((current) => {
+			const copy = [...current];
+			const assistant = copy[assistantIdx];
+			if (!assistant) return current;
+			const content = assistant.content + delta;
+			const scheduledArtifacts = assistant.scheduledArtifacts ?? [];
+			copy[assistantIdx] = {
+				...assistant,
+				content,
+				parts: scheduledArtifacts.length
+					? textFirstParts({ ...assistant, content }, scheduledArtifacts)
+					: appendTextDelta(assistant.parts ?? [], delta)
+			};
+			return copy;
+		});
+	}
 
 	let convId = initialConversationId;
 	let receivedMeta = false;
+	let receivedTerminal = false;
 	function restoreRejectedRewrite(): void {
 		if (!receivedMeta && restoreBeforeMeta) messages.set(restoreBeforeMeta);
 	}
@@ -315,7 +333,7 @@ async function consumeStream(
 					});
 				}
 			} else if (ev.type === 'token') {
-				updateAssistantParts((parts) => appendTextDelta(parts, ev.delta));
+				appendAssistantToken(ev.delta);
 			} else if (ev.type === 'tool') {
 				const tool = ev.tool;
 				const status = ev.status;
@@ -343,6 +361,7 @@ async function consumeStream(
 					fields: ev.fields
 				});
 			} else if (ev.type === 'error') {
+				receivedTerminal = true;
 				applyPersistedAssistant(ev);
 				restoreRejectedRewrite();
 				await refetchAcceptedRewrite();
@@ -350,10 +369,17 @@ async function consumeStream(
 				credentialRequest.set(null);
 				break;
 			} else if (ev.type === 'done') {
+				receivedTerminal = true;
 				applyPersistedAssistant(ev);
 				credentialRequest.set(null);
 				break;
 			}
+		}
+		if (receivedMeta && !receivedTerminal && restoreBeforeMeta) {
+			await refetchAcceptedRewrite();
+			chatError.set('The chat stream was interrupted');
+			credentialRequest.set(null);
+			return null;
 		}
 	} catch {
 		// Intentional aborts should not surface as errors to the user; mark the

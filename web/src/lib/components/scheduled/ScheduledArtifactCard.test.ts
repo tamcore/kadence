@@ -109,10 +109,9 @@ describe('ScheduledArtifactCard', () => {
 		const second = render(ScheduledArtifactCard, {
 			props: { artifact: artifact({ handoffId: 'handoff-b', taskId: 'task-b', proposal: undefined }) }
 		});
-		const adjust = screen.getAllByRole('button', { name: 'Adjust' });
-		await fireEvent.click(adjust[0]);
-		expect(screen.getAllByRole('textbox', { name: 'Adjust scheduled task' })[0]).not.toBeDisabled();
-		expect(screen.getByRole('button', { name: 'Adjust' })).not.toBeDisabled();
+		await fireEvent.click(within(first.container).getByRole('button', { name: 'Adjust' }));
+		expect(within(first.container).getByRole('textbox', { name: 'Adjust scheduled task' })).not.toBeDisabled();
+		expect(within(second.container).getByRole('button', { name: 'Adjust' })).not.toBeDisabled();
 		first.unmount();
 		second.unmount();
 	});
@@ -140,6 +139,41 @@ describe('ScheduledArtifactCard', () => {
 			expect.objectContaining({ taskId: 'task-1' }),
 			expect.any(AbortSignal)
 		));
+	});
+
+	it('keeps Adjust and Dismiss beside Schedule for a compiled draft proposal', async () => {
+		streamMock.mockImplementation(async function* () {
+			yield { type: 'meta', taskId: 'task-1', conversationId: 'conversation-1' };
+			yield { type: 'done' };
+		});
+		discardMock.mockResolvedValueOnce({ ok: true });
+		const result = render(ScheduledArtifactCard, { props: { artifact: artifact() } });
+		expect(within(result.container).getByRole('button', { name: 'Schedule task' })).toBeInTheDocument();
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Adjust' }));
+		await fireEvent.input(within(result.container).getByRole('textbox', { name: 'Adjust scheduled task' }), {
+			target: { value: 'Use a shorter summary.' }
+		});
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Save adjustment' }));
+		expect(streamMock).toHaveBeenCalledWith(
+			expect.objectContaining({ taskId: 'task-1', message: 'Use a shorter summary.' }),
+			expect.any(AbortSignal)
+		);
+
+		await fireEvent.click(within(result.container).getByRole('button', { name: 'Dismiss draft' }));
+		expect(discardMock).toHaveBeenCalledWith('task-1');
+	});
+
+	it('keeps proposal draft actions isolated between sibling cards', async () => {
+		discardMock.mockResolvedValueOnce({ ok: true });
+		const first = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ handoffId: 'handoff-a', taskId: 'task-a' }) }
+		});
+		const second = render(ScheduledArtifactCard, {
+			props: { artifact: artifact({ handoffId: 'handoff-b', taskId: 'task-b' }) }
+		});
+		await fireEvent.click(within(second.container).getByRole('button', { name: 'Dismiss draft' }));
+		expect(discardMock).toHaveBeenCalledWith('task-b');
+		expect(within(first.container).getByRole('button', { name: 'Schedule task' })).not.toBeDisabled();
 	});
 
 	it('announces a stale 409 reload state without replacing its canonical card', async () => {

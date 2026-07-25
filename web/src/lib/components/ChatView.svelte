@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { tick } from 'svelte';
 	import {
 		activeId,
 		chatError,
@@ -22,7 +21,7 @@
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
-	let threadEl = $state<HTMLDivElement | null>(null);
+	let threadEl: HTMLDivElement | null = null;
 	let editingMessageId = $state<number | null>(null);
 	let pendingAction = $state<
 		| { kind: 'edit'; messageId: number; text: string }
@@ -30,17 +29,19 @@
 		| null
 	>(null);
 
-	async function scrollToBottom(): Promise<void> {
-		await tick();
-		if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+	function captureThread(node: HTMLDivElement): () => void {
+		threadEl = node;
+		return () => {
+			if (threadEl === node) threadEl = null;
+		};
 	}
 
 	$effect(() => {
 		const lastMessage = $messages[$messages.length - 1];
 		void $messages.length;
 		void lastMessage?.content.length;
-		void lastMessage?.scheduledArtifacts?.map((artifact) => `${artifact.handoffId}:${artifact.artifactState}:${artifact.version}`).join('|');
-		void scrollToBottom();
+		void lastMessage?.scheduledArtifacts;
+		if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
 	});
 
 	async function submit(text: string) {
@@ -48,7 +49,6 @@
 		const wasNew = $activeId === null;
 		const id = await sendMessage(text);
 		if (wasNew && id != null && onNewConversation) onNewConversation(id);
-		void scrollToBottom();
 	}
 
 	function toolLabel(name: string): string {
@@ -105,7 +105,7 @@
 </script>
 
 <div class="chat">
-	<div class="thread" bind:this={threadEl}>
+	<div class="thread" {@attach captureThread}>
 		<div class="thread-inner" data-testid="chat-thread">
 			{#each $messages as m, i (i)}
 				<div class="message-block {m.role}">
@@ -116,7 +116,11 @@
 					>
 						{#if m.role === 'assistant'}
 							{#if m.parts?.length}
-								{#each m.parts as part, j (j)}
+								{#each m.parts as part, j (part.kind === 'scheduled'
+									? `scheduled-${part.artifact.handoffId}`
+									: part.kind === 'tool'
+										? `tool-${part.tool}-${j}`
+										: `text-${j}`)}
 									{#if part.kind === 'text'}
 										{#if part.content}
 											<MarkdownMessage content={part.content} />

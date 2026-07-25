@@ -274,6 +274,69 @@ describe('chat store', () => {
 		]);
 	});
 
+	it('keeps later tokens before sorted scheduled cards when an artifact arrives mid-stream', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'token', delta: 'I delegated ' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running' },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'token', delta: 'both follow-ups.' },
+			{ type: 'done', assistantMessageId: 2 }
+		]));
+
+		await sendMessage('delegate this');
+
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'I delegated both follow-ups.' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: undefined },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
+	it('refetches canonical artifacts and reports interruption after an accepted edit ends without a terminal event', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' }
+		]);
+		editMessageMock.mockReturnValueOnce(events([{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 }]));
+		getMessagesMock.mockResolvedValueOnce([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 3, role: 'assistant', content: 'canonical', scheduledArtifacts: [{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }] }
+		]);
+
+		await editMessage(1, 'edited');
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(chatError)).toBe('The chat stream was interrupted');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'canonical' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
+	it('refetches canonical artifacts and reports interruption after an accepted regeneration ends without a terminal event', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 2, role: 'assistant', content: 'answer' }
+		]);
+		regenerateMessageMock.mockReturnValueOnce(events([{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 }]));
+		getMessagesMock.mockResolvedValueOnce([
+			{ id: 1, role: 'user', content: 'first' },
+			{ id: 3, role: 'assistant', content: 'canonical retry', scheduledArtifacts: [{ handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' }] }
+		]);
+
+		await regenerateMessage(2);
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(chatError)).toBe('The chat stream was interrupted');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'canonical retry' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
+		]);
+	});
+
 	it('does not restore an old conversation when newChat aborts an edit before meta', async () => {
 		activeId.set('conv-1');
 		messages.set([

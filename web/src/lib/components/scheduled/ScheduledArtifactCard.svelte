@@ -28,7 +28,7 @@
 	const isDismissed = $derived(dismissed || artifact.artifactState === 'dismissed');
 	const pending = $derived(disabled || mutating || controller.sending);
 	const canAdjust = $derived(
-		taskID !== undefined && taskState === 'draft' && !isDismissed && !question && !proposal
+		taskID !== undefined && taskState === 'draft' && !isDismissed && !question
 	);
 
 	function stateLabel(): string {
@@ -150,7 +150,7 @@
 			{#if !isDismissed && artifact.artifactState === 'failed' && artifact.retryable}
 				<button disabled={pending} onclick={() => void retry()}>Retry</button>
 			{/if}
-			{#if !isDismissed && taskState === 'draft' && !question && !proposal}
+			{#if !isDismissed && taskState === 'draft' && !question}
 				<button class="secondary danger" disabled={pending} onclick={() => void dismiss()}>Dismiss draft</button>
 			{/if}
 			{#if detailHref()}
