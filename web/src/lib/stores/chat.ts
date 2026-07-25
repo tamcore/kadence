@@ -319,10 +319,15 @@ async function consumeStream(
 			const copy = [...current];
 			const assistant = copy[assistantIdx];
 			if (!assistant) return current;
+			const content = event.assistantContent ?? assistant.content;
+			const scheduledArtifacts = assistant.scheduledArtifacts ?? [];
 			copy[assistantIdx] = {
 				...assistant,
 				...(event.assistantMessageId === undefined ? {} : { id: event.assistantMessageId }),
-				...(event.assistantContent === undefined ? {} : { content: event.assistantContent })
+				content,
+				parts: scheduledArtifacts.length
+					? textFirstParts({ ...assistant, content }, scheduledArtifacts)
+					: assistant.parts
 			};
 			return copy;
 		});

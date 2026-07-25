@@ -300,16 +300,41 @@ describe('chat store', () => {
 			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
 			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
 			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
-			{ type: 'done', assistantMessageId: 2 }
+			{ type: 'done', assistantMessageId: 2, assistantContent: 'I delegated scheduled follow-ups.' }
 		]));
 
 		await sendMessage('delegate this');
 
+		expect(get(messages)[1].content).toBe('I delegated scheduled follow-ups.');
 		expect(get(messages)[1].parts).toEqual([
-			{ kind: 'text', content: '' },
+			{ kind: 'text', content: 'I delegated scheduled follow-ups.' },
 			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
 			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) },
 			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
+		]);
+	});
+
+	it('rebuilds scheduled parts from persisted error content', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: '{"days":7}' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'done' },
+			{
+				type: 'error',
+				message: 'the assistant could not complete the response',
+				assistantMessageId: 2,
+				assistantContent: 'Partial canonical answer.'
+			}
+		]));
+
+		await sendMessage('delegate this');
+
+		expect(get(messages)[1].content).toBe('Partial canonical answer.');
+		expect(get(messages)[1].parts).toEqual([
+			{ kind: 'text', content: 'Partial canonical answer.' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'done', arguments: '{"days":7}' },
+			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1' }) }
 		]);
 	});
 
