@@ -1,0 +1,67 @@
+**
+
+# Docker build definition
+!Dockerfile.dev
+
+# Go dependency manifests
+!go.mod
+!go.sum
+
+# Production Go source
+!cmd/
+!cmd/**/
+!cmd/**/*.go
+!internal/
+!internal/**/
+!internal/**/*.go
+!web/
+!web/*.go
+
+# Go-embedded runtime assets
+!internal/store/migrations/
+!internal/store/migrations/*.sql
+!internal/chat/skill/skills/
+!internal/chat/skill/skills/*.md
+
+# Frontend dependency manifests and configuration
+!web/.npmrc
+!web/package.json
+!web/package-lock.json
+!web/svelte.config.js
+!web/tsconfig.json
+!web/vite.config.ts
+
+# Frontend production build inputs
+!web/scripts/
+!web/scripts/**
+!web/src/
+!web/src/**
+!web/static/
+!web/static/**
+
+# Tests are not image build inputs
+**/*_test.go
+internal/**/testdata/
+internal/**/testdata/**
+internal/store/testutil/
+internal/store/testutil/**
+web/.svelte-kit/
+web/.svelte-kit/**
+web/build/
+web/build/**
+web/coverage/
+web/coverage/**
+web/dist/
+web/dist/**
+web/e2e/
+web/e2e/**
+web/node_modules/
+web/node_modules/**
+web/playwright-report/
+web/playwright-report/**
+web/test-results/
+web/test-results/**
+web/playwright.config.ts
+web/src/**/*.test.ts
+web/src/tests/
+web/src/tests/**

@@ -1,0 +1,38 @@
+# Version-control and agent state
+.git
+.github
+.agents
+.claude
+.codex
+.playwright-mcp
+.superpowers
+
+# Local configuration and secrets
+.env
+.env.*
+.envrc
+charts/
+
+# Dependencies and generated frontend output
+node_modules
+web/node_modules
+web/build
+web/.svelte-kit
+web/dist
+web/coverage
+web/playwright-report
+web/test-results
+
+# Generated backend and release output
+bin
+coverage.out
+coverage.html
+*.test
+*.out
+
+# Development-only material
+docs
+e2e
+IDEA.md
+AGENTS.md.local
+CLAUDE.md

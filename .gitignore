@@ -51,6 +51,9 @@ docs/superpowers
 IDEA.md
 AGENTS.md.local
 
+# Playwright MCP local state
+.playwright-mcp/
+
 # Stray root-level node deps (frontend lives in web/)
 /node_modules/
 
