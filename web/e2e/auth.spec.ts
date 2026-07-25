@@ -66,6 +66,9 @@ test('serves install identity and shows branding on login, desktop, and mobile',
 		expect(response.ok()).toBe(true);
 		expect(response.headers()['content-type']).toContain('image/png');
 	}
+	const workerResponse = await request.get('/service-worker.js');
+	expect(workerResponse.ok()).toBe(true);
+	expect(workerResponse.headers()['content-type']).toMatch(/javascript|text\/plain/);
 
 	await login(page, USERNAME, PASSWORD);
 	const desktopBrand = page.getByRole('link', { name: 'Kadence', exact: true });
@@ -80,4 +83,37 @@ test('serves install identity and shows branding on login, desktop, and mobile',
 	await expect(mobileBrand.locator('img')).toHaveAttribute('alt', '');
 	await expect(mobileBrand.locator('img')).toHaveAttribute('width', '24');
 	await expect(mobileBrand.locator('img')).toHaveAttribute('height', '24');
+});
+
+test('reloads the cached shell offline without serving cached API data', async ({ page, context }) => {
+	await login(page, USERNAME, PASSWORD);
+	await page.evaluate(async () => {
+		await navigator.serviceWorker.ready;
+		if (!navigator.serviceWorker.controller) {
+			await new Promise<void>((resolve) => {
+				navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true });
+			});
+		}
+	});
+
+	await page.reload();
+	await context.setOffline(true);
+	try {
+		await page.reload({ waitUntil: 'domcontentloaded' });
+
+		await expect(page.getByRole('status')).toContainText('You’re offline');
+		await expect(page.locator('.sidebar .who')).toHaveText(USERNAME);
+		expect(
+			await page.evaluate(async () => {
+				try {
+					await fetch('/api/session');
+					return 'resolved';
+				} catch {
+					return 'rejected';
+				}
+			})
+		).toBe('rejected');
+	} finally {
+		await context.setOffline(false);
+	}
 });

@@ -1,16 +1,19 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import '$lib/styles/app.css';
-	import { api, APIError } from '$lib/api/client';
+	import { api } from '$lib/api/client';
+	import { bootstrapSession } from '$lib/auth/bootstrap';
 	import { getOverview } from '$lib/api/context';
 	import { listMcp } from '$lib/api/mcp';
 	import { clearAuth, setAuth } from '$lib/stores/auth';
+	import { PwaLifecycle, type PwaStatus } from '$lib/pwa/lifecycle';
 	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import ReindexStrip from '$lib/components/ReindexStrip.svelte';
 	import McpHealthStrip from '$lib/components/McpHealthStrip.svelte';
+	import PwaStatusStrip from '$lib/components/PwaStatusStrip.svelte';
 
 	const MOBILE_BREAKPOINT_PX = 900;
 	const REINDEX_POLL_INTERVAL_MS = 10000;
@@ -24,6 +27,12 @@
 	let mcpTimer: ReturnType<typeof setInterval> | undefined;
 	let warnedReindex = false;
 	let warnedMcp = false;
+	let pwaLifecycle: PwaLifecycle | undefined;
+	let pwaStatus = $state<PwaStatus>({
+		online: true,
+		updateAvailable: false,
+		applyingUpdate: false
+	});
 
 	function isPublic(path: string): boolean {
 		return path === '/login';
@@ -79,20 +88,26 @@
 		}
 	}
 
+	afterNavigate(() => {
+		void pwaLifecycle?.checkForUpdate();
+	});
+
 	onMount(async () => {
 		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
+		pwaLifecycle = new PwaLifecycle((status) => {
+			pwaStatus = status;
+		});
+		void pwaLifecycle.start();
 
 		const path = window.location.pathname;
 		try {
-			const user = await api.getCurrentUser();
-			setAuth(user);
-			await refreshReindexStatus();
-			await refreshMcp();
-			reindexTimer = setInterval(refreshReindexStatus, REINDEX_POLL_INTERVAL_MS);
-			mcpTimer = setInterval(refreshMcp, MCP_POLL_INTERVAL_MS);
-		} catch (err) {
-			clearAuth();
-			if (err instanceof APIError && err.status === 401 && !isPublic(path)) {
+			const session = await bootstrapSession(api.getCurrentUser, { setAuth, clearAuth });
+			if (session === 'authenticated') {
+				await refreshReindexStatus();
+				await refreshMcp();
+				reindexTimer = setInterval(refreshReindexStatus, REINDEX_POLL_INTERVAL_MS);
+				mcpTimer = setInterval(refreshMcp, MCP_POLL_INTERVAL_MS);
+			} else if (session === 'unauthorized' && !isPublic(path)) {
 				await goto('/login?returnTo=' + encodeURIComponent(path));
 			}
 		} finally {
@@ -103,10 +118,18 @@
 	onDestroy(() => {
 		stopReindexPoll();
 		stopMcpPoll();
+		pwaLifecycle?.destroy();
 	});
 </script>
 
 <svelte:window onkeydown={closeSidebarOnEscape} />
+
+<PwaStatusStrip
+	online={pwaStatus.online}
+	updateAvailable={pwaStatus.updateAvailable}
+	applyingUpdate={pwaStatus.applyingUpdate}
+	onReload={() => pwaLifecycle?.applyUpdate()}
+/>
 
 {#if checking}
 	<div class="loading">Loading…</div>

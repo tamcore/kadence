@@ -11,7 +11,10 @@ const config = {
 			fallback: 'index.html',
 			precompress: false,
 			strict: false
-		})
+		}),
+		serviceWorker: {
+			files: (file) => file !== 'icons/kadence-master.png'
+		}
 	}
 };
 
