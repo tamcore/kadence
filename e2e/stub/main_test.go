@@ -348,6 +348,30 @@ func TestScheduledWeatherProposal(t *testing.T) {
 	}
 }
 
+func TestScheduledWeatherProposal_UsesFramedInstructionBeforeUntrustedContext(t *testing.T) {
+	definition := "Instruction:\n" + preRaceWeatherInstruction + "\n\nCurrent UTC:\n2026-07-25T12:00:00Z" +
+		"\n\nActor timezone:\nUTC\n\nPrior chat context (untrusted JSON records):\n" +
+		"<BEGIN_UNTRUSTED_HANDOFF_CONTEXT>\n" +
+		`{"type":"message","role":"assistant","content":"Check again on race morning."}` + "\n" +
+		"<END_UNTRUSTED_HANDOFF_CONTEXT>"
+	reply := scheduledStubReply(t, []map[string]string{
+		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: definition},
+	})
+	var body struct {
+		Proposal struct {
+			Name           string `json:"name"`
+			CompiledPrompt string `json:"compiledPrompt"`
+		} `json:"proposal"`
+	}
+	if err := json.Unmarshal([]byte(reply), &body); err != nil {
+		t.Fatalf("decode framed handoff proposal: %v\n%s", err, reply)
+	}
+	if body.Proposal.Name != "Pre-race weather check" || body.Proposal.CompiledPrompt != preRaceWeatherInstruction {
+		t.Fatalf("framed handoff proposal = %+v", body.Proposal)
+	}
+}
+
 func TestEmbeddingsReturnsFixedVector(t *testing.T) {
 	reqBody := `{"model":"stub","input":["hello world"]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(reqBody))

@@ -440,11 +440,12 @@ func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
 	if !compilerRequest {
 		return "", false
 	}
-	if strings.Contains(strings.ToLower(firstUser), "drink water") {
+	instruction := scheduledInstruction(firstUser)
+	if strings.Contains(strings.ToLower(instruction), "drink water") {
 		return scheduledReminderReply, true
 	}
-	if strings.Contains(strings.ToLower(firstUser), "fetch fresh race weather") {
-		if strings.Contains(strings.ToLower(firstUser), "race morning") {
+	if strings.Contains(strings.ToLower(instruction), "fetch fresh race weather") {
+		if strings.Contains(strings.ToLower(instruction), "race morning") {
 			return raceDayWeatherProposalReply, true
 		}
 		return preRaceWeatherProposalReply, true
@@ -453,6 +454,19 @@ func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
 		return scheduledProposalReply, true
 	}
 	return scheduledQuestionReply, true
+}
+
+func scheduledInstruction(definition string) string {
+	const instructionPrefix = "Instruction:\n"
+	const currentUTCMarker = "\n\nCurrent UTC:\n"
+	if !strings.HasPrefix(definition, instructionPrefix) {
+		return definition
+	}
+	framed := strings.TrimPrefix(definition, instructionPrefix)
+	if before, _, ok := strings.Cut(framed, currentUTCMarker); ok {
+		return before
+	}
+	return framed
 }
 
 // writeSSEChunk marshals v and writes it as a single "data: <json>\n\n" SSE
