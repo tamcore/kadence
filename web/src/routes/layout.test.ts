@@ -87,4 +87,17 @@ describe('root layout PWA state', () => {
 		expect(viewport).not.toBeNull();
 		expect(viewport!.querySelector('.main > main')).not.toBeNull();
 	});
+
+	it('links the mobile Kadence brand to the home page', async () => {
+		pageStore.set({ url: new URL('https://kadence.example/documents'), params: {} });
+		getCurrentUserMock.mockResolvedValueOnce({ id: 1, username: 'coach', scheduledEnabled: false });
+		const children = createRawSnippet(() => ({ render: () => '<p>Documents</p>' }));
+
+		const { container } = render(Layout, { children });
+
+		await waitFor(() => expect(container.querySelector('.mobilebar .brand-sm')).not.toBeNull());
+		const brand = container.querySelector('.mobilebar .brand-sm');
+		expect(brand?.tagName).toBe('A');
+		expect(brand).toHaveAttribute('href', '/');
+	});
 });
