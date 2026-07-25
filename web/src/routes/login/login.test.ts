@@ -8,6 +8,11 @@ vi.mock('$lib/api/client', () => ({
 }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
+vi.mock('$lib/api/webauthn', () => ({
+	isWebAuthnEnabled: vi.fn().mockResolvedValue(true),
+	loginWithPasskey: vi.fn()
+}));
+
 import Login from './+page.svelte';
 
 afterEach(() => vi.clearAllMocks());
@@ -28,6 +33,15 @@ describe('login page', () => {
 		expect(screen.getByLabelText(/username/i)).toBeInTheDocument();
 		expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument();
+	});
+
+	it('renders both login actions at full width when passkeys are enabled', async () => {
+		render(Login);
+
+		expect(screen.getByRole('button', { name: 'Log in' })).toHaveClass('full-width');
+		expect(await screen.findByRole('button', { name: '🔑 Sign in with a passkey' })).toHaveClass(
+			'full-width'
+		);
 	});
 
 	it('shows an error message when login rejects', async () => {

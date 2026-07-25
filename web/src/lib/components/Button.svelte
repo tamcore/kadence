@@ -4,6 +4,7 @@
 		type = 'button',
 		loading = false,
 		disabled = false,
+		fullWidth = false,
 		children,
 		onclick
 	}: {
@@ -11,12 +12,13 @@
 		type?: 'button' | 'submit';
 		loading?: boolean;
 		disabled?: boolean;
+		fullWidth?: boolean;
 		children: import('svelte').Snippet;
 		onclick?: () => void;
 	} = $props();
 </script>
 
-<button {type} class="btn {variant}" disabled={disabled || loading} {onclick}>
+<button {type} class="btn {variant}" class:full-width={fullWidth} disabled={disabled || loading} {onclick}>
 	{@render children()}
 </button>
 
@@ -31,6 +33,7 @@
 		transition: background 0.15s ease;
 	}
 	.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+	.full-width { width: 100%; }
 	.primary { background: var(--accent); color: #fff; }
 	.primary:hover:not(:disabled) { background: var(--accent-hover); }
 	.danger { background: var(--danger); color: #fff; }

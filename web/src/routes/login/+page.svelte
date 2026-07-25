@@ -69,10 +69,10 @@
 			<span>Remember me</span>
 		</label>
 		{#if error}<div class="error" role="alert">{error}</div>{/if}
-		<Button type="submit" variant="primary" {loading}>{loading ? 'Logging in…' : 'Log in'}</Button>
+		<Button type="submit" variant="primary" {loading} fullWidth>{loading ? 'Logging in…' : 'Log in'}</Button>
 		{#if passkeysEnabled}
 			<div class="divider">or</div>
-			<Button type="button" variant="ghost" onclick={handlePasskey} {loading}>🔑 Sign in with a passkey</Button>
+			<Button type="button" variant="ghost" onclick={handlePasskey} {loading} fullWidth>🔑 Sign in with a passkey</Button>
 		{/if}
 	</form>
 </main>

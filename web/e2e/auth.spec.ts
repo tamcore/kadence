@@ -9,6 +9,28 @@ test('unauthenticated visit to /chat redirects to /login', async ({ page }) => {
 	await expect(page).toHaveURL(/\/login/);
 });
 
+test('login actions span the login card content width on desktop', async ({ page }) => {
+	await page.setViewportSize({ width: 1280, height: 720 });
+	await page.route('**/api/webauthn/enabled', (route) => route.fulfill({ json: { enabled: true } }));
+	await page.goto('/login');
+
+	const card = page.locator('.login .card');
+	const passwordLogin = page.getByRole('button', { name: 'Log in' });
+	const passkeyLogin = page.getByRole('button', { name: '🔑 Sign in with a passkey' });
+	await expect(passkeyLogin).toBeVisible();
+
+	const [cardBox, passwordBox, passkeyBox] = await Promise.all([
+		card.boundingBox(),
+		passwordLogin.boundingBox(),
+		passkeyLogin.boundingBox()
+	]);
+	expect(cardBox).not.toBeNull();
+	expect(passwordBox).not.toBeNull();
+	expect(passkeyBox).not.toBeNull();
+	expect(passwordBox!.width).toBeCloseTo(passkeyBox!.width, 1);
+	expect(passwordBox!.width).toBeCloseTo(cardBox!.width - 64, 1);
+});
+
 test('login navigates away from /login, and logout returns to it', async ({ page }) => {
 	await login(page, USERNAME, PASSWORD);
 	await expect(page).not.toHaveURL(/\/login/);
