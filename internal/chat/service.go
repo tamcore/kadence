@@ -1052,9 +1052,7 @@ func (s *Service) runToolCall(
 	var out string
 	var cErr error
 	if mcpSnap != nil {
-		out, cErr = s.audit.Call(ctx, tc.Name, callArgs, func(callCtx context.Context) (string, error) {
-			return mcpSnap.Call(callCtx, tc.Name, callArgs)
-		})
+		out, cErr = mcpSnap.Call(ctx, tc.Name, callArgs)
 	} else {
 		cErr = fmt.Errorf("mcp: no MCP servers available for tool %q", tc.Name)
 	}

@@ -110,17 +110,21 @@ func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Mess
 }
 
 type chatAuditStore struct {
-	started  model.MCPAuditCall
-	finished model.MCPAuditCall
+	started     model.MCPAuditCall
+	finished    model.MCPAuditCall
+	startCount  int
+	finishCount int
 }
 
 func (s *chatAuditStore) Start(_ context.Context, call model.MCPAuditCall) (int64, error) {
 	s.started = call
+	s.startCount++
 	return 9, nil
 }
 
 func (s *chatAuditStore) Finish(_ context.Context, id int64, status, result, errorText string, finishedAt time.Time) error {
 	s.finished = model.MCPAuditCall{ID: id, Status: status, Result: result, Error: errorText, FinishedAt: &finishedAt}
+	s.finishCount++
 	return nil
 }
 
@@ -771,6 +775,9 @@ func TestStreamAuditsRemoteMCPCallWithChatAndModel(t *testing.T) {
 	}
 	if auditStore.finished.Status != model.MCPAuditStatusSucceeded || auditStore.finished.Result != testToolReply {
 		t.Fatalf("finished audit = %+v", auditStore.finished)
+	}
+	if auditStore.startCount != 1 || auditStore.finishCount != 1 {
+		t.Fatalf("audit lifecycle counts = start %d, finish %d; want one each", auditStore.startCount, auditStore.finishCount)
 	}
 }
 
