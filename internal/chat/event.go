@@ -1,31 +1,35 @@
 // Package chat orchestrates streaming LLM conversations.
 package chat
 
+import "github.com/tamcore/kadence/internal/scheduled"
+
 // Event types emitted over SSE.
 const (
-	EventMeta        = "meta"
-	EventToken       = "token"
-	EventDone        = "done"
-	EventError       = "error"
-	EventTool        = "tool"
-	EventCredentials = "credentials_request"
+	EventMeta              = "meta"
+	EventToken             = "token"
+	EventDone              = "done"
+	EventError             = "error"
+	EventTool              = "tool"
+	EventCredentials       = "credentials_request"
+	EventScheduledArtifact = "scheduled_artifact"
 )
 
 // ChatEvent is a single server-sent event in a chat stream.
 type ChatEvent struct {
-	Type               string            `json:"type"`
-	Delta              string            `json:"delta,omitempty"`
-	ConversationID     string            `json:"conversationId,omitempty"`
-	UserMessageID      int64             `json:"userMessageId,omitempty"`
-	AssistantMessageID int64             `json:"assistantMessageId,omitempty"`
-	AssistantContent   *string           `json:"assistantContent,omitempty"`
-	Message            string            `json:"message,omitempty"`
-	Tool               string            `json:"tool,omitempty"`
-	Status             string            `json:"status,omitempty"`
-	Arguments          string            `json:"arguments,omitempty"`
-	RequestID          string            `json:"requestId,omitempty"`
-	Reason             string            `json:"reason,omitempty"`
-	Fields             []CredentialField `json:"fields,omitempty"`
+	Type               string                  `json:"type"`
+	Delta              string                  `json:"delta,omitempty"`
+	ConversationID     string                  `json:"conversationId,omitempty"`
+	UserMessageID      int64                   `json:"userMessageId,omitempty"`
+	AssistantMessageID int64                   `json:"assistantMessageId,omitempty"`
+	AssistantContent   *string                 `json:"assistantContent,omitempty"`
+	Message            string                  `json:"message,omitempty"`
+	Tool               string                  `json:"tool,omitempty"`
+	Status             string                  `json:"status,omitempty"`
+	Arguments          string                  `json:"arguments,omitempty"`
+	RequestID          string                  `json:"requestId,omitempty"`
+	Reason             string                  `json:"reason,omitempty"`
+	Fields             []CredentialField       `json:"fields,omitempty"`
+	ScheduledArtifact  *scheduled.ChatArtifact `json:"scheduledArtifact,omitempty"`
 }
 
 // CredentialField describes one credential field being requested from the
