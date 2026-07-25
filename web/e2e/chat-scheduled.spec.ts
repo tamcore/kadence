@@ -25,12 +25,32 @@ async function hrefs(cards: Locator): Promise<string[]> {
 }
 
 async function scheduledTaskIDs(page: Page): Promise<string[]> {
-	const response = await page.request.get('/api/scheduled/tasks');
-	if (!response.ok()) {
-		throw new Error(`Could not list Scheduled tasks before regeneration: HTTP ${response.status()}`);
+	type ScheduledTaskPage = {
+		tasks: { id: string }[];
+		hasMore: boolean;
+		nextOffset?: number;
+	};
+	const ids: string[] = [];
+	const seenOffsets = new Set<number>();
+	let offset = 0;
+	for (;;) {
+		if (seenOffsets.has(offset)) {
+			throw new Error(`Scheduled task pagination repeated offset ${offset}`);
+		}
+		seenOffsets.add(offset);
+		const response = await page.request.get(`/api/scheduled/tasks?offset=${encodeURIComponent(offset)}`);
+		if (!response.ok()) {
+			throw new Error(`Could not list Scheduled tasks at offset ${offset}: HTTP ${response.status()}`);
+		}
+		const payload = (await response.json()).data as ScheduledTaskPage;
+		ids.push(...payload.tasks.map((task) => task.id));
+		if (!payload.hasMore) return ids.sort();
+		const nextOffset = payload.nextOffset;
+		if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
+			throw new Error(`Scheduled task pagination did not advance: offset=${offset} nextOffset=${nextOffset}`);
+		}
+		offset = nextOffset;
 	}
-	const payload = (await response.json()).data as { tasks: { id: string }[] };
-	return payload.tasks.map((task) => task.id).sort();
 }
 
 test('explicitly schedules, confirms, revises, preserves, and runs two weather checks', async ({ page }) => {
