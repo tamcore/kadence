@@ -130,16 +130,14 @@ func (r *ScheduledHandoffRepository) CreateOrGetDraft(
 func (r *ScheduledHandoffRepository) MarkTaskReady(ctx context.Context, userID int64, taskID string) error {
 	command, err := r.pool.Exec(ctx,
 		`UPDATE chat_scheduled_handoffs SET artifact_state = $1, error_code = '', retryable = FALSE, updated_at = NOW()
-		 WHERE user_id = $2 AND scheduled_task_id = $3::uuid AND artifact_state = $4`,
+		 WHERE user_id = $2 AND scheduled_task_id = $3::uuid AND artifact_state IN ($4, $5, $6)`,
 		model.ScheduledHandoffStateReady, userID, taskID, model.ScheduledHandoffStateCreating,
+		model.ScheduledHandoffStateFailed, model.ScheduledHandoffStateReady,
 	)
 	if err != nil {
 		return fmt.Errorf("mark chat handoff ready: %w", err)
 	}
-	if command.RowsAffected() != 1 {
-		return ErrNotFound
-	}
-	return nil
+	return handoffTaskUpdateResult(ctx, r.pool, userID, taskID, command.RowsAffected())
 }
 
 // MarkTaskFailed records a safe, retryable or terminal compiler failure.
@@ -148,16 +146,28 @@ func (r *ScheduledHandoffRepository) MarkTaskFailed(
 ) error {
 	command, err := r.pool.Exec(ctx,
 		`UPDATE chat_scheduled_handoffs SET artifact_state = $1, error_code = $2, retryable = $3, updated_at = NOW()
-		 WHERE user_id = $4 AND scheduled_task_id = $5::uuid AND artifact_state = $6`,
+		 WHERE user_id = $4 AND scheduled_task_id = $5::uuid AND artifact_state IN ($6, $7, $8)`,
 		model.ScheduledHandoffStateFailed, errorCode, retryable, userID, taskID, model.ScheduledHandoffStateCreating,
+		model.ScheduledHandoffStateReady, model.ScheduledHandoffStateFailed,
 	)
 	if err != nil {
 		return fmt.Errorf("mark chat handoff failed: %w", err)
 	}
-	if command.RowsAffected() != 1 {
-		return ErrNotFound
+	return handoffTaskUpdateResult(ctx, r.pool, userID, taskID, command.RowsAffected())
+}
+
+func handoffTaskUpdateResult(ctx context.Context, pool *pgxpool.Pool, userID int64, taskID string, affected int64) error {
+	if affected == 1 {
+		return nil
 	}
-	return nil
+	var owned bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scheduled_tasks WHERE id = $1::uuid AND user_id = $2)`, taskID, userID).Scan(&owned); err != nil {
+		return fmt.Errorf("check chat handoff task owner: %w", err)
+	}
+	if owned {
+		return nil
+	}
+	return ErrNotFound
 }
 
 // ListByAssistantMessages batch-loads the cards placed in source messages.

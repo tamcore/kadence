@@ -290,6 +290,64 @@ func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {
 	}
 }
 
+func TestChatScheduledHandoffStateUpdatesRecoverAndIgnoreOrdinaryTasks(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "handoff-recover", "handoff-recover@example.com")
+	source, err := conversations.Create(ctx, owner.ID, "Source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _, err := repo.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+		UserID: owner.ID, SourceConversationID: source.ID, SourceUserMessageID: message.ID,
+		SourceContentFingerprint: handoffFingerprint(42), InvocationOrdinal: 1, Title: "Recover", Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkTaskReady(ctx, owner.ID, row.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkTaskFailed(ctx, owner.ID, row.Task.ID, "compiler_failed", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkTaskReady(ctx, owner.ID, row.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := pool.QueryRow(ctx, `SELECT artifact_state FROM chat_scheduled_handoffs WHERE id = $1::uuid`, row.Handoff.ID).Scan(&state); err != nil || state != model.ScheduledHandoffStateReady {
+		t.Fatalf("recovered state=%q err=%v", state, err)
+	}
+
+	ordinaryConversation, err := conversations.CreateWithKind(ctx, owner.ID, "Ordinary", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ordinaryTaskID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO scheduled_tasks (user_id, conversation_id, name, kind, state, timezone)
+		 VALUES ($1, $2::uuid, 'Ordinary', 'reminder', 'draft', $3) RETURNING id::text`,
+		owner.ID, ordinaryConversation.ID, scheduledTimezoneUTC,
+	).Scan(&ordinaryTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkTaskReady(ctx, owner.ID, ordinaryTaskID); err != nil {
+		t.Fatalf("ordinary MarkTaskReady err=%v", err)
+	}
+	if err := repo.MarkTaskFailed(ctx, owner.ID, ordinaryTaskID, "compiler_failed", true); err != nil {
+		t.Fatalf("ordinary MarkTaskFailed err=%v", err)
+	}
+}
+
 func handoffFingerprint(last byte) []byte {
 	fingerprint := make([]byte, 32)
 	fingerprint[len(fingerprint)-1] = last

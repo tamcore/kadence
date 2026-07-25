@@ -63,12 +63,25 @@ type Refiner interface {
 // never calls tools and Compiler excludes the interactive credentials tool.
 type ToolResolver func(context.Context, string) ([]provider.ToolDefinition, error)
 
+// ChatHandoffStore is the owner-scoped persistence boundary for chat-created
+// Scheduled drafts. It is deliberately narrow so ordinary Scheduled tasks do
+// not acquire chat persistence coupling.
+type ChatHandoffStore interface {
+	CreateOrGetDraft(context.Context, store.CreateChatHandoffInput) (store.HydratedChatHandoff, bool, error)
+	MarkTaskReady(context.Context, int64, string) error
+	MarkTaskFailed(context.Context, int64, string, string, bool) error
+	ListByAssistantMessages(context.Context, int64, string, []int64) ([]store.HydratedChatHandoff, error)
+	DiscardDraft(context.Context, int64, string) error
+	CleanupDrafts(context.Context, int64, []string) error
+}
+
 type ServiceDeps struct {
 	Conversations ConversationStore
 	Messages      MessageStore
 	Tasks         TaskStore
 	Compiler      Refiner
 	ToolsForUser  ToolResolver
+	ChatHandoffs  ChatHandoffStore
 	Now           func() time.Time
 }
 
@@ -166,23 +179,42 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 		}
 		return DefinitionResult{}, err
 	}
-	return s.refine(ctx, actor, task, message)
+	result, err := s.refine(ctx, actor, task, message)
+	if s.deps.ChatHandoffs == nil {
+		return result, err
+	}
+	if err != nil {
+		if markErr := s.deps.ChatHandoffs.MarkTaskFailed(ctx, actor.ID, task.ID, "compiler_failed", true); markErr != nil {
+			return DefinitionResult{}, fmt.Errorf("scheduled: persist chat handoff failure: %w", markErr)
+		}
+		return DefinitionResult{}, err
+	}
+	if err := s.deps.ChatHandoffs.MarkTaskReady(ctx, actor.ID, result.Task.ID); err != nil {
+		return DefinitionResult{}, fmt.Errorf("scheduled: mark chat handoff ready: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Service) refine(ctx context.Context, actor Actor, task model.ScheduledTask, message string) (DefinitionResult, error) {
+	tools, err := s.availableTools(ctx, actor.Username)
+	if err != nil {
+		return DefinitionResult{}, fmt.Errorf("scheduled: resolve visible tools: %w", err)
+	}
+	return s.compileDraft(ctx, actor, task, strings.TrimSpace(message), tools)
+}
+
+func (s *Service) compileDraft(
+	ctx context.Context, actor Actor, task model.ScheduledTask, userDefinition string, visibleTools []provider.ToolDefinition,
+) (DefinitionResult, error) {
 	revision := task.Version
-	if _, err := s.deps.Messages.AddDefinition(ctx, task.ConversationID, model.MsgRoleUser, strings.TrimSpace(message)); err != nil {
+	if _, err := s.deps.Messages.AddDefinition(ctx, task.ConversationID, model.MsgRoleUser, userDefinition); err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: save user message: %w", err)
 	}
 	history, err := s.deps.Messages.ListRecentDefinitionByConversation(ctx, task.ConversationID, definitionHistoryLimit)
 	if err != nil {
 		return DefinitionResult{}, fmt.Errorf("scheduled: load definition history: %w", err)
 	}
-	tools, err := s.availableTools(ctx, actor.Username)
-	if err != nil {
-		return DefinitionResult{}, fmt.Errorf("scheduled: resolve visible tools: %w", err)
-	}
-	refinement, err := s.deps.Compiler.Refine(ctx, historyForCompiler(history), tools, task.Version)
+	refinement, err := s.deps.Compiler.Refine(ctx, historyForCompiler(history), visibleTools, task.Version)
 	if err != nil {
 		return DefinitionResult{}, err
 	}
@@ -385,6 +417,16 @@ func (s *Service) MarkRead(ctx context.Context, userID int64, taskID string) err
 func (s *Service) ready() error {
 	if s == nil || s.deps.Conversations == nil || s.deps.Messages == nil || s.deps.Tasks == nil || s.deps.Compiler == nil {
 		return errors.New("scheduled: lifecycle service dependencies are required")
+	}
+	return nil
+}
+
+func (s *Service) readyHandoff() error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if s.deps.ChatHandoffs == nil {
+		return errors.New("scheduled: chat handoff store is required")
 	}
 	return nil
 }
