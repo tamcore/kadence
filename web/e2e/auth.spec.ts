@@ -11,7 +11,9 @@ test('unauthenticated visit to /chat redirects to /login', async ({ page }) => {
 
 test('login actions span the login card content width on desktop', async ({ page }) => {
 	await page.setViewportSize({ width: 1280, height: 720 });
-	await page.route('**/api/webauthn/enabled', (route) => route.fulfill({ json: { enabled: true } }));
+	await page.route('**/api/webauthn/enabled', (route) =>
+		route.fulfill({ json: { data: { enabled: true } } })
+	);
 	await page.goto('/login');
 
 	const card = page.locator('.login .card');
