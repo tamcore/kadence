@@ -69,7 +69,8 @@
 
 	function beginLifecycleMutation(): LifecycleSnapshot {
 		const snapshot = {
-			hasLocalState: hasLocalLifecycleState,
+			hasLocalState:
+				hasLocalLifecycleState || controller.question !== null || controller.proposal !== null,
 			question,
 			proposal,
 			artifactState: localArtifactState
