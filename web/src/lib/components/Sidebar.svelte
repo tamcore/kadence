@@ -321,7 +321,7 @@
 	.sidebar-header { border-bottom: 1px solid var(--border); }
 	.brand { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 1.1rem; font-weight: 700; padding: 0 4px; text-decoration: none; }
 	.brand img { border-radius: 5px; flex: 0 0 auto; }
-	.sidebar-scroll { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 12px; }
+	.sidebar-scroll { display: flex; flex: 1; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; padding: 12px; }
 	.new { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; font: inherit; padding: 10px; }
 	.new:hover { background: var(--bg); }
 	svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
@@ -329,9 +329,10 @@
 	.links a { display: flex; align-items: center; justify-content: space-between; border-radius: 6px; color: var(--text); padding: 7px 8px; text-decoration: none; }
 	.links a:hover, .links a.active { background: var(--bg); color: var(--accent); font-weight: 600; }
 	.unread { display: inline-grid; min-width: 1.35rem; height: 1.35rem; place-items: center; border-radius: 999px; background: var(--accent); color: #fff; font: 600 .72rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
-	.conversation-section { display: grid; gap: 6px; }
+	.conversation-section { display: grid; gap: 6px; min-width: 0; }
+	.conversation-section > div, .section-toggle, .conversation-list { min-width: 0; }
 	.section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: 650 .72rem/1 var(--font); letter-spacing: .06em; padding: 7px 6px; text-align: left; text-transform: uppercase; }
-	.conversation-list { list-style: none; margin: 0; padding: 0; }
+	.conversation-list { overflow: hidden; list-style: none; margin: 0; padding: 0; }
 	.conversation-list li { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
 	.conversation-list li:hover, .conversation-list li:focus-within, .conversation-list li.active { background: var(--bg); }
 	.conversation-list a { flex: 1; min-width: 0; overflow: hidden; color: var(--text); padding: 8px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }

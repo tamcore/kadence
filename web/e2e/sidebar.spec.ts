@@ -63,10 +63,17 @@ const pinnedConversations = [
 	conversation('pin-old', 'Pinned earlier', '2026-07-25T11:00:00Z', '2026-07-25T10:00:00Z')
 ];
 
+const longConversationTitle =
+	'Reviewing the complete marathon build-up before choosing the next recovery week and race-day pacing strategy';
+
 const recentConversations = Array.from({ length: 22 }, (_, index) =>
 	conversation(
 		`recent-${String(index + 1).padStart(2, '0')}`,
-		index === 0 ? 'Recent first' : `Recent ${String(index + 1).padStart(2, '0')}`,
+		index === 0
+			? 'Recent first'
+			: index === 1
+				? longConversationTitle
+				: `Recent ${String(index + 1).padStart(2, '0')}`,
 		`2026-07-${String(25 - index).padStart(2, '0')}T12:00:00Z`
 	)
 );
@@ -169,6 +176,31 @@ async function openConversationActions(page: Page, title: string) {
 	return page.getByRole('menu', { name: `${title} actions`, exact: true });
 }
 
+async function expectConversationRegionToStayWithinSidebar(sidebar: Locator): Promise<void> {
+	const sidebarBox = await sidebar.boundingBox();
+	expect(sidebarBox).not.toBeNull();
+	const sidebarRight = sidebarBox!.x + sidebarBox!.width;
+	const regions = sidebar.locator(
+		'.sidebar-scroll, .conversation-section, .conversation-section > div, .section-toggle, .conversation-list, .conversation-list li'
+	);
+	const metrics = await regions.evaluateAll((elements) =>
+		elements.map((element) => {
+			const box = element.getBoundingClientRect();
+			return {
+				label: element.className || element.id || element.tagName,
+				clientWidth: element.clientWidth,
+				scrollWidth: element.scrollWidth,
+				right: box.right
+			};
+		})
+	);
+	expect(metrics.length).toBeGreaterThan(0);
+	for (const metric of metrics) {
+		expect(metric.scrollWidth, `${metric.label} scrolls horizontally`).toBeLessThanOrEqual(metric.clientWidth);
+		expect(metric.right, `${metric.label} extends past the sidebar`).toBeLessThanOrEqual(sidebarRight);
+	}
+}
+
 async function expectSidebarChromeToStayInViewport(
 	sidebar: Locator,
 	viewport: { width: number; height: number }
@@ -184,6 +216,7 @@ async function expectSidebarChromeToStayInViewport(
 		expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
 		expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
 	}
+	await expectConversationRegionToStayWithinSidebar(sidebar);
 
 	const metrics = await scroll.evaluate((element) => ({
 		clientHeight: element.clientHeight,
@@ -205,19 +238,20 @@ async function expectSidebarChromeToStayInViewport(
 		expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
 		expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
 	}
+	await expectConversationRegionToStayWithinSidebar(sidebar);
 	expect(after[1]!.y).toBeCloseTo(before[1]!.y, 3);
 	expect(after[2]!.y).toBeCloseTo(before[2]!.y, 3);
 	expect(await sidebar.evaluate((element) => element.scrollTop)).toBe(0);
 }
 
 test('keeps header and account footer visible while the crowded conversation region scrolls', async ({ page }, testInfo) => {
-	await page.setViewportSize({ width: 1280, height: 700 });
+	await page.setViewportSize({ width: 1440, height: 648 });
 	await installSidebarFixture(page, testInfo);
 	await page.goto('/');
 
 	const sidebar = page.locator('.sidebar');
 	await expect(page.getByRole('button', { name: 'Pinned', exact: true })).toBeVisible();
-	await expectSidebarChromeToStayInViewport(sidebar, { width: 1280, height: 700 });
+	await expectSidebarChromeToStayInViewport(sidebar, { width: 1440, height: 648 });
 });
 
 test('partitions ordered pinned and recent conversations without duplication', async ({ page }, testInfo) => {
