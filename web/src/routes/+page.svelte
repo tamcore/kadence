@@ -4,14 +4,23 @@
 	import Composer from '$lib/components/Composer.svelte';
 	import { currentUser } from '$lib/stores/auth';
 	import { activeId, newChat, sendMessage, sending } from '$lib/stores/chat';
+	import type { Document } from '$lib/types';
 
 	onMount(() => newChat()); // fresh state on landing
 
 	// Navigate to /chat/[id] as soon as the conversation id is known (on the
 	// `meta` stream event), not after the whole stream completes — the stream
 	// keeps rendering inside /chat/[id] since it isn't tied to this component.
-	function start(text: string): void {
-		void sendMessage(text);
+	function start(
+		text: string,
+		files: File[] = [],
+		documentReferences: Document[] = []
+	): void {
+		if (files.length > 0 || documentReferences.length > 0) {
+			void sendMessage(text, files, documentReferences);
+		} else {
+			void sendMessage(text);
+		}
 		const unsubscribe = activeId.subscribe((id) => {
 			if (id != null) {
 				void goto(`/chat/${id}`);

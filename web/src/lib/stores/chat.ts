@@ -1,5 +1,14 @@
 import { get, writable } from 'svelte/store';
-import type { ChatEvent, ChatMessage, Conversation, CredentialRequest, MessagePart } from '$lib/types';
+import type {
+	ChatAttachment,
+	ChatDocumentReference,
+	ChatEvent,
+	ChatMessage,
+	Conversation,
+	CredentialRequest,
+	Document,
+	MessagePart
+} from '$lib/types';
 import * as chatApi from '$lib/api/chat';
 
 export const messages = writable<ChatMessage[]>([]);
@@ -97,24 +106,67 @@ function updateToolPart(
 	return [...parts, { kind: 'tool', tool, status }];
 }
 
+function optimisticAttachments(files: File[]): ChatAttachment[] {
+	return files.map((file, ordinal) => ({
+		filename: file.name,
+		mime: file.type,
+		kind: file.type.startsWith('image/') ? 'image' : 'document',
+		sizeBytes: file.size,
+		ordinal
+	}));
+}
+
+function optimisticReferences(documents: Document[]): ChatDocumentReference[] {
+	return documents.map((document, ordinal) => ({
+		documentId: document.id,
+		filename: document.filename,
+		scope: document.scope,
+		ordinal,
+		available: true
+	}));
+}
+
 // sendMessage streams a reply; returns the conversation id (new or existing), or null on error.
-export async function sendMessage(text: string): Promise<string | null> {
+export async function sendMessage(
+	text: string,
+	files: File[] = [],
+	documentReferences: Document[] = []
+): Promise<string | null> {
 	if (get(sending)) return null;
 	chatError.set(null);
 	credentialRequest.set(null);
 	sending.set(true);
-	const userIdx = get(messages).length;
-	messages.update((m) => [...m, { role: 'user', content: text }]);
+	const restoreBeforeMeta = get(messages);
+	const userIdx = restoreBeforeMeta.length;
+	messages.update((m) => [
+		...m,
+		{
+			role: 'user',
+			content: text,
+			...(files.length === 0 ? {} : { attachments: optimisticAttachments(files) }),
+			...(documentReferences.length === 0
+				? {}
+				: { documentReferences: optimisticReferences(documentReferences) })
+		}
+	]);
 	messages.update((m) => [...m, { role: 'assistant', content: '', parts: [] }]);
 	const assistantIdx = get(messages).length - 1;
 	const localAbort = beginStream();
-	const body = { conversationId: get(activeId) ?? undefined, message: text };
+	const body = {
+		conversationId: get(activeId) ?? undefined,
+		message: text,
+		...(files.length === 0 ? {} : { files }),
+		...(documentReferences.length === 0
+			? {}
+			: { documentIds: documentReferences.map((document) => document.id) })
+	};
 	const convId = await consumeStream(
 		chatApi.streamChat(body, localAbort.signal),
 		userIdx,
 		assistantIdx,
 		get(activeId),
-		localAbort
+		localAbort,
+		restoreBeforeMeta
 	);
 	if (convId != null) void refreshConversations();
 	return convId;
@@ -223,8 +275,18 @@ async function consumeStream(
 
 	let convId = initialConversationId;
 	let receivedMeta = false;
+	function streamIsActive(): boolean {
+		const streamConversationId = receivedMeta ? convId : initialConversationId;
+		return get(activeId) === streamConversationId;
+	}
 	function restoreRejectedRewrite(): void {
-		if (!receivedMeta && restoreBeforeMeta) messages.set(restoreBeforeMeta);
+		if (
+			!receivedMeta &&
+			restoreBeforeMeta &&
+			get(activeId) === initialConversationId
+		) {
+			messages.set(restoreBeforeMeta);
+		}
 	}
 	function applyPersistedAssistant(
 		event: Extract<ChatEvent, { type: 'done' | 'error' }>
@@ -244,14 +306,25 @@ async function consumeStream(
 	}
 	try {
 		for await (const ev of stream) {
+			if (!streamIsActive()) return null;
 			if (ev.type === 'meta') {
 				receivedMeta = true;
 				convId = ev.conversationId;
 				if (get(activeId) === null) activeId.set(convId);
+				if (!streamIsActive()) return null;
 				if (ev.userMessageId !== undefined) {
 					messages.update((current) => {
 						const copy = [...current];
-						if (copy[userIdx]) copy[userIdx] = { ...copy[userIdx], id: ev.userMessageId };
+						if (copy[userIdx]) {
+							copy[userIdx] = {
+								...copy[userIdx],
+								id: ev.userMessageId,
+								...(ev.attachments === undefined ? {} : { attachments: ev.attachments }),
+								...(ev.documentReferences === undefined
+									? {}
+									: { documentReferences: ev.documentReferences })
+							};
+						}
 						return copy;
 					});
 				}
@@ -277,7 +350,9 @@ async function consumeStream(
 			} else if (ev.type === 'error') {
 				applyPersistedAssistant(ev);
 				restoreRejectedRewrite();
-				chatError.set(ev.message);
+				if (streamIsActive()) {
+					chatError.set(ev.message);
+				}
 				credentialRequest.set(null);
 				break;
 			} else if (ev.type === 'done') {
@@ -291,13 +366,15 @@ async function consumeStream(
 		// partial assistant reply as stopped instead so the UI can end cleanly.
 		if (!localAbort.signal.aborted) {
 			restoreRejectedRewrite();
-			chatError.set('The chat stream was interrupted');
+			if (streamIsActive()) {
+				chatError.set('The chat stream was interrupted');
+			}
 		} else if (!receivedMeta && restoreBeforeMeta) {
 			// Navigation/new-chat already replaced this conversation state.
 			// Only restore an unaccepted rewrite when the same conversation
 			// remains active (for example, Stop was pressed before meta).
 			if (get(activeId) === initialConversationId) messages.set(restoreBeforeMeta);
-		} else {
+		} else if (streamIsActive()) {
 			messages.update((m) => {
 				const copy = [...m];
 				const current = copy[assistantIdx];
@@ -314,5 +391,5 @@ async function consumeStream(
 			abort = null;
 		}
 	}
-	return convId;
+	return streamIsActive() ? convId : null;
 }

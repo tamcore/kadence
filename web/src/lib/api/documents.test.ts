@@ -3,7 +3,8 @@ import {
 	uploadDocument,
 	listDocuments,
 	deleteDocument,
-	getDocumentUploadCapabilities
+	getDocumentUploadCapabilities,
+	listDocumentReferences
 } from './documents';
 import { setCsrfToken, APIError } from './client';
 
@@ -90,5 +91,17 @@ describe('documents api', () => {
 
 		await expect(getDocumentUploadCapabilities()).resolves.toEqual(capabilities);
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/documents/capabilities');
+	});
+
+	it('loads grouped visible document options for chat references', async () => {
+		const options = {
+			own: [sampleDoc],
+			public: [{ ...sampleDoc, id: 2, filename: 'guide.pdf', scope: 'public' }]
+		};
+		const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: options }));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await expect(listDocumentReferences()).resolves.toEqual(options);
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/documents/references');
 	});
 });

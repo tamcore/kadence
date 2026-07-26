@@ -11,13 +11,14 @@
 		sending,
 		stopGeneration
 	} from '$lib/stores/chat';
-	import type { MessagePart } from '$lib/types';
+	import type { Document, MessagePart } from '$lib/types';
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import CredentialPrompt from '$lib/components/CredentialPrompt.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import MessageActions from '$lib/components/MessageActions.svelte';
 	import MessageEditor from '$lib/components/MessageEditor.svelte';
+	import MessageResources from '$lib/components/MessageResources.svelte';
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
@@ -41,10 +42,17 @@
 		void scrollToBottom();
 	});
 
-	async function submit(text: string) {
+	async function submit(
+		text: string,
+		files: File[] = [],
+		documentReferences: Document[] = []
+	) {
 		if ($sending) return;
 		const wasNew = $activeId === null;
-		const id = await sendMessage(text);
+		const id =
+			files.length > 0 || documentReferences.length > 0
+				? await sendMessage(text, files, documentReferences)
+				: await sendMessage(text);
 		if (wasNew && id != null && onNewConversation) onNewConversation(id);
 		void scrollToBottom();
 	}
@@ -147,7 +155,13 @@
 								onCancel={() => (editingMessageId = null)}
 							/>
 						{:else}
-							<p>{m.content}</p>
+							<MessageResources
+								conversationId={$activeId}
+								messageId={m.id}
+								attachments={m.attachments}
+								documentReferences={m.documentReferences}
+							/>
+							{#if m.content}<p>{m.content}</p>{/if}
 						{/if}
 					</div>
 					{#if !(m.role === 'user' && m.id === editingMessageId)}
@@ -176,7 +190,10 @@
 			<button class="stop-btn" type="button" onclick={stopGeneration}>Stop generating</button>
 		{/if}
 		<div class="composer-column" data-testid="chat-composer">
-			<Composer disabled={$sending} onSubmit={(t) => submit(t)} />
+			<Composer
+				disabled={$sending}
+				onSubmit={(text, files, documents) => submit(text, files, documents)}
+			/>
 		</div>
 	</div>
 </div>

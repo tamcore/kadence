@@ -36,6 +36,15 @@ async function* events(evs: unknown[]) {
 	for (const e of evs) yield e;
 }
 
+function navigatedConversation() {
+	return [
+		{ id: 11, role: 'user' as const, content: 'conversation B first prompt' },
+		{ id: 12, role: 'assistant' as const, content: 'conversation B first answer' },
+		{ id: 13, role: 'user' as const, content: 'conversation B current prompt' },
+		{ id: 14, role: 'assistant' as const, content: 'conversation B current answer' }
+	];
+}
+
 beforeEach(() => {
 	newChat();
 	streamChatMock.mockReset();
@@ -66,6 +75,65 @@ describe('chat store', () => {
 			role: 'assistant',
 			content: 'Hello',
 			parts: [{ kind: 'text', content: 'Hello' }]
+		});
+	});
+
+	it('reconciles optimistic file and document metadata from the persisted meta event', async () => {
+		const file = new File(['image'], 'finish.png', { type: 'image/png' });
+		const selectedDocument = {
+			id: 41,
+			filename: 'marathon-plan.pdf',
+			mime: 'application/pdf',
+			source_type: 'pdf',
+			scope: 'private' as const,
+			created_at: '2026-07-25T20:00:00Z'
+		};
+		const persistedAttachments = [{
+			id: 91,
+			filename: 'finish.png',
+			mime: 'image/png',
+			kind: 'image' as const,
+			sizeBytes: 5,
+			imageWidth: 1200,
+			imageHeight: 800,
+			ordinal: 0
+		}];
+		const persistedReferences = [{
+			id: 92,
+			documentId: 41,
+			filename: 'marathon-plan.pdf',
+			scope: 'private' as const,
+			ordinal: 0,
+			available: true
+		}];
+		streamChatMock.mockReturnValueOnce(events([
+			{
+				type: 'meta',
+				conversationId: 'conv-1',
+				userMessageId: 90,
+				attachments: persistedAttachments,
+				documentReferences: persistedReferences
+			},
+			{ type: 'done', assistantMessageId: 93 }
+		]));
+
+		await sendMessage('', [file], [selectedDocument]);
+
+		expect(streamChatMock).toHaveBeenCalledWith(
+			{
+				conversationId: undefined,
+				message: '',
+				files: [file],
+				documentIds: [41]
+			},
+			expect.any(AbortSignal)
+		);
+		expect(get(messages)[0]).toEqual({
+			id: 90,
+			role: 'user',
+			content: '',
+			attachments: persistedAttachments,
+			documentReferences: persistedReferences
 		});
 	});
 
@@ -138,6 +206,57 @@ describe('chat store', () => {
 				parts: [{ kind: 'text', content: 'new response' }]
 			}
 		]);
+	});
+
+	it('preserves persisted attachments and references through edit and regeneration', async () => {
+		const resources = {
+			attachments: [{
+				id: 91,
+				filename: 'finish.png',
+				mime: 'image/png',
+				kind: 'image' as const,
+				sizeBytes: 5,
+				ordinal: 0
+			}],
+			documentReferences: [{
+				id: 92,
+				documentId: 41,
+				filename: 'my-plan.md',
+				scope: 'private' as const,
+				ordinal: 0,
+				available: true
+			}]
+		};
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'old prompt', ...resources },
+			{ id: 2, role: 'assistant', content: 'old answer' }
+		]);
+		editMessageMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'done', assistantMessageId: 3, assistantContent: 'edited answer' }
+		]));
+
+		await editMessage(1, 'edited prompt');
+		expect(get(messages)[0]).toEqual({
+			id: 1,
+			role: 'user',
+			content: 'edited prompt',
+			...resources
+		});
+
+		regenerateMessageMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'done', assistantMessageId: 4, assistantContent: 'regenerated answer' }
+		]));
+		await regenerateMessage(3);
+
+		expect(get(messages)[0]).toEqual({
+			id: 1,
+			role: 'user',
+			content: 'edited prompt',
+			...resources
+		});
 	});
 
 	it('restores the edit snapshot when the server rejects before meta', async () => {
@@ -216,6 +335,239 @@ describe('chat store', () => {
 		expect(get(chatError)).toBe('boom');
 	});
 
+	it('restores the pre-send transcript when a rich turn is rejected before meta', async () => {
+		const original = [
+			{ id: 1, role: 'user' as const, content: 'earlier prompt' },
+			{ id: 2, role: 'assistant' as const, content: 'earlier answer' }
+		];
+		activeId.set('conv-1');
+		messages.set(original);
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'error', message: 'attachments exceed maximum upload size' }
+		]));
+
+		await sendMessage('', [new File(['image'], 'finish.png', { type: 'image/png' })]);
+
+		expect(get(messages)).toEqual(original);
+		expect(get(chatError)).toBe('attachments exceed maximum upload size');
+		expect(get(sending)).toBe(false);
+	});
+
+	it('does not restore a pre-meta rejection over a newly active conversation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let release!: () => void;
+		streamChatMock.mockImplementationOnce(async function* () {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield { type: 'error', message: 'conversation A rejected' };
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = [
+			{ id: 11, role: 'user' as const, content: 'conversation B' },
+			{ id: 12, role: 'assistant' as const, content: 'answer B' }
+		];
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		release();
+		await sendPromise;
+
+		expect(get(activeId)).toBe('conv-b');
+		expect(get(messages)).toEqual(conversationB);
+		expect(get(chatError)).toBeNull();
+	});
+
+	it('does not surface a thrown stale-stream error in a newly active conversation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let release!: () => void;
+		streamChatMock.mockImplementationOnce(async function* () {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			throw new Error('conversation A network failure');
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = [
+			{ id: 11, role: 'user' as const, content: 'conversation B' },
+			{ id: 12, role: 'assistant' as const, content: 'answer B' }
+		];
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		release();
+		await sendPromise;
+
+		expect(get(activeId)).toBe('conv-b');
+		expect(get(messages)).toEqual(conversationB);
+		expect(get(chatError)).toBeNull();
+	});
+
+	it('ignores stale meta metadata and returns null after navigation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let release!: () => void;
+		streamChatMock.mockImplementationOnce(async function* () {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield {
+				type: 'meta',
+				conversationId: 'conv-a',
+				userMessageId: 99,
+				attachments: [{
+					id: 100,
+					filename: 'stale.png',
+					mime: 'image/png',
+					kind: 'image',
+					sizeBytes: 5,
+					ordinal: 0
+				}],
+				documentReferences: []
+			};
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = navigatedConversation();
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		release();
+
+		await expect(sendPromise).resolves.toBeNull();
+		expect(get(activeId)).toBe('conv-b');
+		expect(get(messages)).toEqual(conversationB);
+	});
+
+	it('ignores stale token updates and returns null after navigation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let release!: () => void;
+		streamChatMock.mockImplementationOnce(async function* () {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield { type: 'token', delta: 'stale A token' };
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = navigatedConversation();
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		release();
+
+		await expect(sendPromise).resolves.toBeNull();
+		expect(get(messages)).toEqual(conversationB);
+	});
+
+	it('ignores stale credential requests and returns null after navigation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let release!: () => void;
+		streamChatMock.mockImplementationOnce(async function* () {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield {
+				type: 'credentials_request',
+				requestId: 'stale-request',
+				reason: 'stale A credentials',
+				fields: [{ name: 'password', secret: true }]
+			};
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = navigatedConversation();
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		release();
+
+		await expect(sendPromise).resolves.toBeNull();
+		expect(get(messages)).toEqual(conversationB);
+		expect(get(credentialRequest)).toBeNull();
+	});
+
+	it('ignores stale done metadata and returns null after navigation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let release!: () => void;
+		streamChatMock.mockImplementationOnce(async function* () {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			yield {
+				type: 'done',
+				assistantMessageId: 101,
+				assistantContent: 'stale A answer'
+			};
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = navigatedConversation();
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		release();
+
+		await expect(sendPromise).resolves.toBeNull();
+		expect(get(messages)).toEqual(conversationB);
+	});
+
+	it('ignores a stale post-meta abort after navigation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		let reachedPause!: () => void;
+		const paused = new Promise<void>((resolve) => {
+			reachedPause = resolve;
+		});
+		streamChatMock.mockImplementationOnce(async function* (_body: unknown, signal: AbortSignal) {
+			yield { type: 'meta', conversationId: 'conv-a', userMessageId: 3 };
+			reachedPause();
+			await new Promise((_resolve, reject) => {
+				signal.addEventListener('abort', () =>
+					reject(new DOMException('aborted', 'AbortError'))
+				);
+			});
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await paused;
+		const conversationB = navigatedConversation();
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		stopGeneration();
+
+		await expect(sendPromise).resolves.toBeNull();
+		expect(get(messages)).toEqual(conversationB);
+	});
+
 	it('does not set chatError when stream is intentionally aborted', async () => {
 		// Create a stream that yields meta and pauses, allowing us to abort mid-stream
 		streamChatMock.mockImplementationOnce(async function* () {
@@ -236,8 +588,8 @@ describe('chat store', () => {
 		// Wait for the send to settle
 		const result = await sendPromise;
 
-		// An aborted send after receiving meta returns the convId
-		expect(result).toBe('22222222-2222-2222-2222-222222222222');
+		// Navigation made this stream stale; never route back to its conversation.
+		expect(result).toBeNull();
 		// chatError should NOT be set (was already cleared by newChat())
 		expect(get(chatError)).toBeNull();
 		// sending should be false

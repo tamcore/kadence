@@ -1,10 +1,52 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { capabilitiesMock, referenceOptionsMock } = vi.hoisted(() => ({
+	capabilitiesMock: vi.fn(),
+	referenceOptionsMock: vi.fn()
+}));
+
+vi.mock('$lib/api/documents', () => ({
+	getDocumentUploadCapabilities: (...args: unknown[]) => capabilitiesMock(...args),
+	listDocumentReferences: (...args: unknown[]) => referenceOptionsMock(...args)
+}));
 
 import Composer from './Composer.svelte';
+import type { Document } from '$lib/types';
+
+const privateDocument: Document = {
+	id: 41,
+	filename: 'my-marathon-plan.pdf',
+	mime: 'application/pdf',
+	source_type: 'pdf',
+	scope: 'private',
+	created_at: '2026-07-25T10:00:00Z'
+};
+
+const publicDocument: Document = {
+	id: 72,
+	filename: 'public-race-guide.md',
+	mime: 'text/markdown',
+	source_type: 'text',
+	scope: 'public',
+	created_at: '2026-07-25T11:00:00Z'
+};
 
 afterEach(() => {
 	vi.clearAllMocks();
+	vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+	capabilitiesMock.mockResolvedValue({
+		max_bytes: 10 * 1024 * 1024,
+		rich_extraction: true,
+		accept: 'application/pdf,.pdf,text/markdown,.md'
+	});
+	referenceOptionsMock.mockResolvedValue({
+		own: [privateDocument],
+		public: [publicDocument]
+	});
 });
 
 describe('Composer', () => {
@@ -66,5 +108,177 @@ describe('Composer', () => {
 		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it('selects multiple files, removes one, and submits the remaining file without text', async () => {
+		const onSubmit = vi.fn();
+		const { container } = render(Composer, { props: { onSubmit } });
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const screenshot = new File(['image'], 'finish.png', { type: 'image/png' });
+		const notes = new File(['notes'], 'week.md', { type: 'text/markdown' });
+		Object.defineProperty(input, 'files', {
+			configurable: true,
+			value: [screenshot, notes]
+		});
+
+		await fireEvent.change(input);
+		expect(screen.getByText('finish.png')).toBeInTheDocument();
+		expect(screen.getByText('week.md')).toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove finish.png' }));
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		expect(onSubmit).toHaveBeenCalledWith('', [notes], []);
+		expect(screen.queryByText('week.md')).not.toBeInTheDocument();
+	});
+
+	it('accepts files dropped anywhere on the chat page', async () => {
+		const onSubmit = vi.fn();
+		render(Composer, { props: { onSubmit } });
+		const screenshot = new File(['image'], 'route.png', { type: 'image/png' });
+
+		await fireEvent.dragEnter(window, {
+			dataTransfer: { types: ['Files'], files: [screenshot] }
+		});
+		expect(screen.getByRole('status', { name: 'Chat file drop area' })).toHaveTextContent(
+			'Drop files into this chat'
+		);
+		await fireEvent.drop(window, {
+			dataTransfer: { types: ['Files'], files: [screenshot] }
+		});
+
+		expect(screen.queryByRole('status', { name: 'Chat file drop area' })).not.toBeInTheDocument();
+		expect(screen.getByText('route.png')).toBeInTheDocument();
+	});
+
+	it('clears the page-wide drop overlay when dragleave omits transfer types', async () => {
+		render(Composer, { props: { onSubmit: vi.fn() } });
+		const screenshot = new File(['image'], 'route.png', { type: 'image/png' });
+
+		await fireEvent.dragEnter(window, {
+			dataTransfer: { types: ['Files'], files: [screenshot] }
+		});
+		expect(screen.getByRole('status', { name: 'Chat file drop area' })).toBeInTheDocument();
+		await fireEvent.dragLeave(window, {
+			dataTransfer: { types: [], files: [] }
+		});
+
+		expect(screen.queryByRole('status', { name: 'Chat file drop area' })).not.toBeInTheDocument();
+	});
+
+	it('adds pasted clipboard images without swallowing ordinary text paste', async () => {
+		const onSubmit = vi.fn();
+		render(Composer, { props: { onSubmit } });
+		const textarea = screen.getByRole('textbox');
+		const screenshot = new File(['image'], 'clipboard.png', { type: 'image/png' });
+
+		const imagePasteAllowed = await fireEvent.paste(textarea, {
+			clipboardData: { files: [screenshot] }
+		});
+		expect(imagePasteAllowed).toBe(false);
+		expect(screen.getByText('clipboard.png')).toBeInTheDocument();
+
+		const textPasteAllowed = await fireEvent.paste(textarea, {
+			clipboardData: { files: [] }
+		});
+		expect(textPasteAllowed).toBe(true);
+	});
+
+	it('enforces five files and the aggregate configured byte limit before send', async () => {
+		const onSubmit = vi.fn();
+		const { container } = render(Composer, { props: { onSubmit } });
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const files = Array.from(
+			{ length: 6 },
+			(_, index) => new File(['x'], `file-${index}.png`, { type: 'image/png' })
+		);
+		Object.defineProperty(input, 'files', { configurable: true, value: files });
+
+		await fireEvent.change(input);
+		expect(screen.getByRole('alert')).toHaveTextContent('You can attach up to 5 files.');
+		expect(screen.getByText('file-4.png')).toBeInTheDocument();
+		expect(screen.queryByText('file-5.png')).not.toBeInTheDocument();
+
+		for (const file of files.slice(0, 5)) {
+			await fireEvent.click(screen.getByRole('button', { name: `Remove ${file.name}` }));
+		}
+		const largeA = new File([new Uint8Array(6 * 1024 * 1024)], 'large-a.png', {
+			type: 'image/png'
+		});
+		const largeB = new File([new Uint8Array(6 * 1024 * 1024)], 'large-b.png', {
+			type: 'image/png'
+		});
+		Object.defineProperty(input, 'files', {
+			configurable: true,
+			value: [largeA, largeB]
+		});
+		await fireEvent.change(input);
+
+		expect(screen.getByRole('alert')).toHaveTextContent(
+			'Attachments exceed the 10 MB total limit.'
+		);
+		expect(screen.queryByText('large-a.png')).not.toBeInTheDocument();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it('searches grouped private and public references and submits a reference-only turn', async () => {
+		const onSubmit = vi.fn();
+		render(Composer, { props: { onSubmit } });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
+		await waitFor(() => expect(screen.getByRole('heading', { name: 'Your documents' })).toBeInTheDocument());
+		expect(screen.getByRole('heading', { name: 'Public docs' })).toBeInTheDocument();
+		const search = screen.getByRole('searchbox', { name: 'Search documents' });
+		await fireEvent.input(search, { target: { value: 'race' } });
+		expect(screen.queryByText('my-marathon-plan.pdf')).not.toBeInTheDocument();
+		expect(screen.getByText('public-race-guide.md')).toBeInTheDocument();
+
+		await fireEvent.click(
+			screen.getByRole('button', { name: 'Add public-race-guide.md' })
+		);
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		expect(onSubmit).toHaveBeenCalledWith('', [], [publicDocument]);
+	});
+
+	it('does not submit the enclosing chat form when Enter is pressed in reference search', async () => {
+		const onSubmit = vi.fn();
+		render(Composer, { props: { onSubmit } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
+		const search = await screen.findByRole('searchbox', { name: 'Search documents' });
+		await fireEvent.input(search, { target: { value: 'race' } });
+
+		const notPrevented = await fireEvent.keyDown(search, { key: 'Enter' });
+
+		expect(notPrevented).toBe(false);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it('previews queued images and revokes every object URL after removal or unmount', async () => {
+		const createObjectURL = vi.fn((file: File) => `blob:${file.name}`);
+		const revokeObjectURL = vi.fn();
+		vi.stubGlobal('URL', class extends URL {
+			static createObjectURL = createObjectURL;
+			static revokeObjectURL = revokeObjectURL;
+		});
+		const { container, unmount } = render(Composer, { props: { onSubmit: vi.fn() } });
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const first = new File(['first'], 'first.png', { type: 'image/png' });
+		const second = new File(['second'], 'second.png', { type: 'image/png' });
+		Object.defineProperty(input, 'files', { configurable: true, value: [first, second] });
+
+		await fireEvent.change(input);
+		expect(screen.getByRole('img', { name: 'Preview first.png' })).toHaveAttribute(
+			'src',
+			'blob:first.png'
+		);
+		expect(screen.getByRole('img', { name: 'Preview second.png' })).toHaveAttribute(
+			'src',
+			'blob:second.png'
+		);
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove first.png' }));
+		await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:first.png'));
+		unmount();
+		expect(revokeObjectURL).toHaveBeenCalledWith('blob:second.png');
 	});
 });

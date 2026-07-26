@@ -4,6 +4,8 @@ import type { ChatEvent, Conversation, ChatMessage } from '$lib/types';
 export interface ChatRequestBody {
 	conversationId?: string;
 	message: string;
+	files?: File[];
+	documentIds?: number[];
 }
 
 // streamChat POSTs a message and yields parsed SSE ChatEvents from the response stream.
@@ -11,7 +13,20 @@ export async function* streamChat(
 	body: ChatRequestBody,
 	signal: AbortSignal
 ): AsyncIterable<ChatEvent> {
-	yield* streamRequest('/api/chat', body, signal);
+	const hasRichInput = (body.files?.length ?? 0) > 0 || (body.documentIds?.length ?? 0) > 0;
+	if (!hasRichInput) {
+		yield* streamRequest('/api/chat', body, signal);
+		return;
+	}
+
+	const form = new FormData();
+	if (body.conversationId !== undefined) form.append('conversationId', body.conversationId);
+	form.append('message', body.message);
+	for (const file of body.files ?? []) form.append('files', file);
+	for (const documentId of body.documentIds ?? []) {
+		form.append('documentIds', String(documentId));
+	}
+	yield* streamRequest('/api/chat', form, signal);
 }
 
 export async function* editMessage(
@@ -44,7 +59,8 @@ async function* streamRequest(
 	body: unknown,
 	signal: AbortSignal
 ): AsyncIterable<ChatEvent> {
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+	const multipart = body instanceof FormData;
+	const headers: Record<string, string> = multipart ? {} : { 'Content-Type': 'application/json' };
 	const token = getCsrfToken();
 	if (token) headers['X-CSRF-Token'] = token;
 
@@ -53,7 +69,7 @@ async function* streamRequest(
 		credentials: 'include',
 		signal,
 		headers,
-		body: body === undefined ? undefined : JSON.stringify(body)
+		body: body === undefined ? undefined : multipart ? body : JSON.stringify(body)
 	});
 	const rotated = resp.headers.get('X-CSRF-Token');
 	if (rotated) setCsrfToken(rotated);

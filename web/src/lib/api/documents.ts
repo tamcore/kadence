@@ -12,6 +12,11 @@ export interface DocumentUploadCapabilities {
 	accept: string;
 }
 
+export interface DocumentReferenceOptions {
+	own: Document[];
+	public: Document[];
+}
+
 function documentsPath(admin: boolean | undefined): string {
 	return admin ? '/admin/documents' : '/documents';
 }
@@ -57,6 +62,10 @@ export function listDocuments(opts: { admin?: boolean } = {}): Promise<Document[
 
 export function getDocumentUploadCapabilities(): Promise<DocumentUploadCapabilities> {
 	return api.get<DocumentUploadCapabilities>('/documents/capabilities');
+}
+
+export function listDocumentReferences(): Promise<DocumentReferenceOptions> {
+	return api.get<DocumentReferenceOptions>('/documents/references');
 }
 
 export function deleteDocument(id: number, opts: { admin?: boolean } = {}): Promise<void> {

@@ -114,6 +114,39 @@ describe('streamChat', () => {
 		expect(opts.headers).toHaveProperty('X-CSRF-Token');
 	});
 
+	it('sends files and document references as ordered multipart fields without setting content-type', async () => {
+		setCsrfToken('tok');
+		const f = vi.fn().mockResolvedValue(streamResponse([
+			'data: {"type":"meta","conversationId":"conv-1","attachments":[],"documentReferences":[]}\n\n',
+			'data: {"type":"done"}\n\n'
+		]));
+		vi.stubGlobal('fetch', f);
+		const screenshot = new File(['png'], 'finish.png', { type: 'image/png' });
+		const notes = new File(['notes'], 'week.md', { type: 'text/markdown' });
+
+		for await (const _ of streamChat(
+			{
+				conversationId: 'conv-1',
+				message: '',
+				files: [screenshot, notes],
+				documentIds: [41, 72]
+			},
+			new AbortController().signal
+		)) {
+			/* drain */
+		}
+
+		const [url, opts] = f.mock.calls[0];
+		expect(url).toBe('/api/chat');
+		expect(opts.headers).toEqual({ 'X-CSRF-Token': 'tok' });
+		expect(opts.body).toBeInstanceOf(FormData);
+		const form = opts.body as FormData;
+		expect(form.get('conversationId')).toBe('conv-1');
+		expect(form.get('message')).toBe('');
+		expect(form.getAll('files')).toEqual([screenshot, notes]);
+		expect(form.getAll('documentIds')).toEqual(['41', '72']);
+	});
+
 	it('handles a 401 via the central handler and yields a single error event with no dangling reader', async () => {
 		window.history.pushState({}, '', '/chat');
 		vi.stubGlobal(

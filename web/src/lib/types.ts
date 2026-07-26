@@ -21,11 +21,33 @@ export type MessagePart =
 	| { kind: 'text'; content: string }
 	| { kind: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string };
 
+export interface ChatAttachment {
+	id?: number;
+	filename: string;
+	mime: string;
+	kind: 'image' | 'document';
+	sizeBytes: number;
+	imageWidth?: number;
+	imageHeight?: number;
+	ordinal: number;
+}
+
+export interface ChatDocumentReference {
+	id?: number;
+	documentId?: number;
+	filename: string;
+	scope: 'private' | 'public';
+	ordinal: number;
+	available: boolean;
+}
+
 export interface ChatMessage {
 	id?: number;
 	role: 'user' | 'assistant';
 	content: string;
 	parts?: MessagePart[];
+	attachments?: ChatAttachment[];
+	documentReferences?: ChatDocumentReference[];
 	stopped?: boolean;
 }
 
@@ -42,7 +64,13 @@ export interface CredentialRequest {
 }
 
 export type ChatEvent =
-	| { type: 'meta'; conversationId: string; userMessageId?: number }
+	| {
+			type: 'meta';
+			conversationId: string;
+			userMessageId?: number;
+			attachments?: ChatAttachment[];
+			documentReferences?: ChatDocumentReference[];
+	  }
 	| { type: 'token'; delta: string }
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }

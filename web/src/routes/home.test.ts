@@ -98,6 +98,20 @@ describe('home page', () => {
 		resolveSend('66666666-6666-6666-6666-666666666666');
 	});
 
+	it('forwards home-composer file-only turns without waiting for the stream', async () => {
+		sendMessageMock.mockReturnValueOnce(new Promise(() => {}));
+		const { container } = render(Home);
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const screenshot = new File(['image'], 'start.png', { type: 'image/png' });
+		Object.defineProperty(input, 'files', { configurable: true, value: [screenshot] });
+
+		await fireEvent.change(input);
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		expect(sendMessageMock).toHaveBeenCalledWith('', [screenshot], []);
+		expect(gotoMock).not.toHaveBeenCalled();
+	});
+
 	it('navigates to the conversation as soon as activeId is set, mid-stream', async () => {
 		sendMessageMock.mockReturnValueOnce(new Promise(() => {})); // never resolves during test
 		render(Home);

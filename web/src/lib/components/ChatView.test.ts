@@ -23,7 +23,7 @@ vi.mock('$lib/stores/chat', async () => {
 });
 
 import ChatView from './ChatView.svelte';
-import { messages, sending } from '$lib/stores/chat';
+import { activeId, messages, sending } from '$lib/stores/chat';
 
 beforeEach(() => {
 	Object.defineProperty(navigator, 'clipboard', {
@@ -36,6 +36,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 	(messages as unknown as { set: (v: unknown[]) => void }).set([{ role: 'assistant', content: '**hi**' }]);
 	(sending as unknown as { set: (v: boolean) => void }).set(false);
+	(activeId as unknown as { set: (v: string | null) => void }).set(null);
 });
 
 describe('ChatView', () => {
@@ -53,6 +54,89 @@ describe('ChatView', () => {
 		expect(screen.getByText('hi').tagName.toLowerCase()).toBe('strong');
 	});
 
+	it('renders durable image previews, document downloads, and reference provenance from reload metadata', () => {
+		(activeId as unknown as { set: (v: string | null) => void }).set('conv-1');
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{
+				id: 11,
+				role: 'user',
+				content: 'Compare these',
+				attachments: [
+					{
+						id: 91,
+						filename: 'finish.png',
+						mime: 'image/png',
+						kind: 'image',
+						sizeBytes: 1234,
+						imageWidth: 1200,
+						imageHeight: 800,
+						ordinal: 0
+					},
+					{
+						id: 92,
+						filename: 'race-plan.pdf',
+						mime: 'application/pdf',
+						kind: 'document',
+						sizeBytes: 5678,
+						ordinal: 1
+					}
+				],
+				documentReferences: [
+					{
+						id: 93,
+						documentId: 41,
+						filename: 'my-plan.md',
+						scope: 'private',
+						ordinal: 0,
+						available: true
+					},
+					{
+						id: 94,
+						filename: 'retired-guide.pdf',
+						scope: 'public',
+						ordinal: 1,
+						available: false
+					}
+				]
+			}
+		]);
+		render(ChatView, { props: {} });
+
+		const imagePath = '/api/conversations/conv-1/messages/11/attachments/91';
+		expect(screen.getByRole('img', { name: 'finish.png' })).toHaveAttribute('src', imagePath);
+		expect(screen.getByRole('link', { name: 'Open finish.png' })).toHaveAttribute('href', imagePath);
+		const download = screen.getByRole('link', { name: 'Download race-plan.pdf' });
+		expect(download).toHaveAttribute(
+			'href',
+			'/api/conversations/conv-1/messages/11/attachments/92'
+		);
+		expect(download).toHaveAttribute('download', 'race-plan.pdf');
+		expect(screen.getByText('my-plan.md')).toBeInTheDocument();
+		expect(screen.getByText('Private reference')).toBeInTheDocument();
+		expect(screen.getByText('retired-guide.pdf')).toBeInTheDocument();
+		expect(screen.getByText('Public reference · unavailable')).toBeInTheDocument();
+	});
+
+	it('renders optimistic attachment metadata without exposing a broken download link', () => {
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{
+				role: 'user',
+				content: '',
+				attachments: [{
+					filename: 'sending.png',
+					mime: 'image/png',
+					kind: 'image',
+					sizeBytes: 5,
+					ordinal: 0
+				}]
+			}
+		]);
+		render(ChatView, { props: {} });
+
+		expect(screen.getByText('sending.png')).toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: 'Open sending.png' })).not.toBeInTheDocument();
+	});
+
 	it('exposes stable geometry hooks for browser layout checks', () => {
 		const { container } = render(ChatView, { props: {} });
 		expect(screen.getByTestId('chat-thread')).toBeInTheDocument();
@@ -66,6 +150,19 @@ describe('ChatView', () => {
 		await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'hello' } });
 		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
 		await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith('hello'));
+	});
+
+	it('forwards a file-only composer submission to the chat store', async () => {
+		sendMessageMock.mockResolvedValueOnce('conv-1');
+		const { container } = render(ChatView, { props: {} });
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const screenshot = new File(['image'], 'finish.png', { type: 'image/png' });
+		Object.defineProperty(input, 'files', { configurable: true, value: [screenshot] });
+
+		await fireEvent.change(input);
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith('', [screenshot], []));
 	});
 
 	it('copies exact user text and assistant markdown', async () => {
