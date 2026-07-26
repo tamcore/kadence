@@ -147,4 +147,27 @@ describe('ScheduledQuestionCard', () => {
 		expect(screen.getByRole('checkbox', { name: 'Pace' })).toBeChecked();
 		expect(screen.getByLabelText('Something else')).toHaveValue('Elevation');
 	});
+
+	it('keeps form controls and autofocus isolated across simultaneous cards', () => {
+		const question = {
+			id: 'focus',
+			prompt: 'What matters?',
+			kind: 'text' as const,
+			allowCustom: true,
+			optional: false
+		};
+		render(ScheduledQuestionCard, {
+			props: { question, onAnswer: vi.fn(), disabled: true, autofocus: false }
+		});
+		render(ScheduledQuestionCard, { props: { question, onAnswer: vi.fn() } });
+
+		const inputs = screen.getAllByLabelText('Your answer');
+		expect(new Set(inputs.map((input) => input.id)).size).toBe(2);
+		expect(inputs[0]).toBeDisabled();
+		expect(inputs[1]).not.toBeDisabled();
+		for (const input of inputs) {
+			expect(document.querySelector(`label[for="${input.id}"]`)).toContainElement(input);
+		}
+		expect(document.activeElement).toBe(inputs[1].closest('section'));
+	});
 });

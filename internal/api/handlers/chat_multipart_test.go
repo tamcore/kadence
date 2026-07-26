@@ -106,7 +106,7 @@ type ioWriter interface {
 func TestChatSendMultipartParsesOrderedTurn(t *testing.T) {
 	streamer := &multipartStreamer{}
 	handler := handlers.NewChatWithUploadLimit(
-		streamer, &fakeConvLister{}, fakeMsgLister{}, 64,
+		streamer, &fakeConvLister{}, fakeMsgLister{}, 64, nil, nil,
 	)
 	request := newMultipartChatRequest(t, []multipartPart{
 		{field: "message", data: []byte("compare these")},
@@ -166,7 +166,7 @@ func TestChatSendMultipartAllowsTextFileOrReferenceOnly(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			streamer := &multipartStreamer{}
 			handler := handlers.NewChatWithUploadLimit(
-				streamer, &fakeConvLister{}, fakeMsgLister{}, 64,
+				streamer, &fakeConvLister{}, fakeMsgLister{}, 64, nil, nil,
 			)
 			response := httptest.NewRecorder()
 
@@ -252,7 +252,7 @@ func TestChatSendMultipartRejectsInvalidInputBeforeStreaming(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			streamer := &multipartStreamer{}
 			handler := handlers.NewChatWithUploadLimit(
-				streamer, &fakeConvLister{}, fakeMsgLister{}, 64,
+				streamer, &fakeConvLister{}, fakeMsgLister{}, 64, nil, nil,
 			)
 			response := httptest.NewRecorder()
 
@@ -277,7 +277,7 @@ func TestChatSendMultipartEnforcesAggregateFileLimit(t *testing.T) {
 	t.Run("exact limit accepted", func(t *testing.T) {
 		streamer := &multipartStreamer{}
 		handler := handlers.NewChatWithUploadLimit(
-			streamer, &fakeConvLister{}, fakeMsgLister{}, 8,
+			streamer, &fakeConvLister{}, fakeMsgLister{}, 8, nil, nil,
 		)
 		response := httptest.NewRecorder()
 
@@ -295,7 +295,7 @@ func TestChatSendMultipartEnforcesAggregateFileLimit(t *testing.T) {
 	t.Run("one byte over rejected before service", func(t *testing.T) {
 		streamer := &multipartStreamer{}
 		handler := handlers.NewChatWithUploadLimit(
-			streamer, &fakeConvLister{}, fakeMsgLister{}, 8,
+			streamer, &fakeConvLister{}, fakeMsgLister{}, 8, nil, nil,
 		)
 		response := httptest.NewRecorder()
 
@@ -324,7 +324,7 @@ func TestChatSendMultipartCapsExplicitDocumentReferences(t *testing.T) {
 		}
 		streamer := &multipartStreamer{}
 		handler := handlers.NewChatWithUploadLimit(
-			streamer, &fakeConvLister{}, fakeMsgLister{}, 64,
+			streamer, &fakeConvLister{}, fakeMsgLister{}, 64, nil, nil,
 		)
 		response := httptest.NewRecorder()
 
@@ -345,7 +345,7 @@ func TestChatSendMultipartCapsExplicitDocumentReferences(t *testing.T) {
 		}
 		streamer := &multipartStreamer{}
 		handler := handlers.NewChatWithUploadLimit(
-			streamer, &fakeConvLister{}, fakeMsgLister{}, 64,
+			streamer, &fakeConvLister{}, fakeMsgLister{}, 64, nil, nil,
 		)
 		response := httptest.NewRecorder()
 
@@ -372,7 +372,7 @@ func TestChatSendMultipartCapsExplicitDocumentReferences(t *testing.T) {
 func TestChatSendJSONUsesLegacyStreamPath(t *testing.T) {
 	streamer := &multipartStreamer{}
 	handler := handlers.NewChatWithUploadLimit(
-		streamer, &fakeConvLister{}, fakeMsgLister{}, 8,
+		streamer, &fakeConvLister{}, fakeMsgLister{}, 8, nil, nil,
 	)
 	request := withUser(httptest.NewRequest(
 		http.MethodPost, "/api/chat", strings.NewReader(`{"conversationId":"conversation-1","message":"hello"}`),

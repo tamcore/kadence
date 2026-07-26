@@ -33,6 +33,7 @@ func (s *turnDocumentStore) ListVisibleByIDs(
 type turnExtractor struct {
 	mime      string
 	markdown  string
+	err       error
 	calls     int
 	callOrder *[]string
 	onContext func(context.Context)
@@ -48,6 +49,9 @@ func (e *turnExtractor) Extract(
 	}
 	if e.callOrder != nil {
 		*e.callOrder = append(*e.callOrder, "extract")
+	}
+	if e.err != nil {
+		return ingest.Result{}, e.err
 	}
 	return ingest.Result{Markdown: e.markdown, SourceType: model.DocSourceText}, nil
 }
@@ -435,32 +439,49 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 	}
 }
 
-func TestStreamTurnOmitsHistoricalPayloadsAndCanDropAllHistory(t *testing.T) {
+func TestStreamTurnIncludesHistoricalPayloadsWhenTheyFit(t *testing.T) {
+	documentID := int64(91)
 	convs := &fakeConvs{byID: map[string]model.Conversation{
 		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
 	}}
 	msgs := &fakeMsgs{added: []model.Message{
 		{
 			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
-			Content: strings.Repeat("old user text", 80),
-			Attachments: []model.MessageAttachment{{
-				Filename: "historical.png", MIME: "image/png", Kind: model.AttachmentKindImage,
-				RawBytes: testPNG(t, 1, 1), ExtractedMarkdown: "historical secret",
+			Content: "old user text",
+			Attachments: []model.MessageAttachment{
+				{
+					Filename: "historical.png", MIME: "image/png",
+					Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+				},
+				{
+					Filename: "historical.md", MIME: "text/markdown",
+					Kind:               model.AttachmentKindDocument,
+					ExtractedMarkdown:  "historical attachment evidence",
+					ExtractionComplete: true,
+				},
+			},
+			DocumentReferences: []model.MessageDocumentReference{{
+				DocumentID: &documentID, Filename: "historical-reference.md",
+				Scope: model.ScopePrivate, Available: true,
 			}},
 		},
 		{
 			ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant,
-			Content: strings.Repeat("old answer", 80),
+			Content: "old answer",
 		},
 	}}
+	documents := &turnDocumentStore{documents: []model.Document{{
+		ID: documentID, Scope: model.ScopePrivate, Filename: "historical-reference.md",
+		ExtractedMarkdown: "historical referenced evidence",
+	}}}
 	capturing := &capturingProvider{reply: "ok"}
 	svc := chat.NewService(capturing,
 		chat.ServiceConfig{
 			Model: testModel, MaxTokens: testMaxTokens, SystemPrompt: "sp",
-			ContextBudgetTokens: 8,
+			ContextBudgetTokens: 2048,
 		},
 		chat.Deps{
-			Convs: convs, Msgs: msgs,
+			Convs: convs, Msgs: msgs, Documents: documents,
 			Attachments: chat.NewAttachmentProcessor(nil),
 		},
 	)
@@ -471,13 +492,132 @@ func TestStreamTurnOmitsHistoricalPayloadsAndCanDropAllHistory(t *testing.T) {
 	); err != nil {
 		t.Fatalf("StreamTurn: %v", err)
 	}
+	var historical provider.Message
 	for _, message := range capturing.gotMessages {
-		if strings.Contains(message.Content, "old user text") ||
-			strings.Contains(message.Content, "old answer") ||
-			strings.Contains(message.Content, "historical secret") ||
-			len(message.Images) != 0 {
-			t.Fatalf("historical payload reached provider: %+v", message)
+		if strings.Contains(message.Content, "old user text") {
+			historical = message
+			break
 		}
+	}
+	if historical.Content == "" {
+		t.Fatalf("historical user message missing: %+v", capturing.gotMessages)
+	}
+	if len(historical.Images) != 1 ||
+		!strings.Contains(historical.Content, "historical attachment evidence") ||
+		!strings.Contains(historical.Content, "historical referenced evidence") {
+		t.Fatalf("historical payload = %+v, want image, attachment, and reference", historical)
+	}
+	if len(documents.ids) != 1 || documents.ids[0] != documentID {
+		t.Fatalf("secure historical document lookup ids = %v, want [%d]", documents.ids, documentID)
+	}
+}
+
+func TestStreamTurnOmitsOversizedHistoricalPayloadAtomicallyButKeepsText(t *testing.T) {
+	documentID := int64(92)
+	msgs := &fakeMsgs{added: []model.Message{
+		{
+			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
+			Content: "keep this historical text",
+			Attachments: []model.MessageAttachment{
+				{
+					Filename: "small.png", MIME: "image/png",
+					Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+				},
+				{
+					Filename: "large.md", MIME: "text/markdown",
+					Kind:               model.AttachmentKindDocument,
+					ExtractedMarkdown:  strings.Repeat("historical attachment evidence ", 300),
+					ExtractionComplete: true,
+				},
+			},
+			DocumentReferences: []model.MessageDocumentReference{{
+				DocumentID: &documentID, Filename: "large-reference.md",
+				Scope: model.ScopePrivate, Available: true,
+			}},
+		},
+		{
+			ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant,
+			Content: "keep this historical answer",
+		},
+	}}
+	documents := &turnDocumentStore{documents: []model.Document{{
+		ID: documentID, Scope: model.ScopePrivate, Filename: "large-reference.md",
+		ExtractedMarkdown: strings.Repeat("historical referenced evidence ", 300),
+	}}}
+	capturing := &capturingProvider{reply: "ok"}
+	svc := chat.NewService(capturing,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens, SystemPrompt: "sp",
+			ContextBudgetTokens: 256,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
+			}},
+			Msgs: msgs, Documents: documents,
+			Attachments: chat.NewAttachmentProcessor(nil),
+		},
+	)
+
+	if err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
+		chat.TurnInput{Text: "current evidence has priority"}, &capturingSink{},
+	); err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	var historical provider.Message
+	for _, message := range capturing.gotMessages {
+		if strings.Contains(message.Content, "keep this historical text") {
+			historical = message
+			break
+		}
+	}
+	if historical.Content == "" {
+		t.Fatalf("historical text was dropped with payload: %+v", capturing.gotMessages)
+	}
+	if !strings.Contains(historical.Content, "omitted") ||
+		!strings.Contains(historical.Content, "context budget") {
+		t.Fatalf("historical omission marker missing: %q", historical.Content)
+	}
+	if len(historical.Images) != 0 ||
+		strings.Contains(historical.Content, "historical attachment evidence") ||
+		strings.Contains(historical.Content, "historical referenced evidence") {
+		t.Fatalf("historical payload must be omitted as one unit: %+v", historical)
+	}
+}
+
+func TestStreamTurnExtractionFailureDoesNotCreateEmptyConversation(t *testing.T) {
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
+	extractor := &turnExtractor{
+		mime: "text/markdown", err: errors.New("extractor unavailable"),
+	}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: convs, Msgs: msgs,
+			Attachments: chat.NewAttachmentProcessor([]ingest.Extractor{extractor}),
+		},
+	)
+
+	err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{
+			Text: "review",
+			Files: []chat.FileInput{{
+				Filename: "plan.md", MIME: "text/markdown", Data: []byte("raw"),
+			}},
+		},
+		&capturingSink{},
+	)
+	if err == nil {
+		t.Fatal("StreamTurn error = nil, want extraction failure")
+	}
+	if msgs.createdConversation != nil || convs.created != nil {
+		t.Fatalf(
+			"failed rich turn left empty conversation: aggregate=%+v legacy=%+v",
+			msgs.createdConversation, convs.created,
+		)
 	}
 }
 
@@ -873,10 +1013,11 @@ func TestEditAndRegenerateReuseStoredCurrentPayload(t *testing.T) {
 func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testing.T) {
 	t.Run("trimmed empty text uses file", func(t *testing.T) {
 		convs := &fakeConvs{byID: map[string]model.Conversation{}}
+		msgs := &fakeMsgs{}
 		svc := chat.NewService(fakeProvider{reply: testReply},
 			chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
 			chat.Deps{
-				Convs: convs, Msgs: &fakeMsgs{},
+				Convs: convs, Msgs: msgs,
 				Attachments: chat.NewAttachmentProcessor(nil),
 			},
 		)
@@ -892,17 +1033,18 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 		); err != nil {
 			t.Fatalf("StreamTurn: %v", err)
 		}
-		if convs.created == nil || convs.created.Title != "fallback.png" {
-			t.Fatalf("trimmed-empty title = %q", convs.created.Title)
+		if msgs.createdConversation == nil || msgs.createdConversation.Title != "fallback.png" {
+			t.Fatalf("trimmed-empty title = %+v", msgs.createdConversation)
 		}
 	})
 
 	t.Run("control only filename uses safe fallback", func(t *testing.T) {
 		convs := &fakeConvs{byID: map[string]model.Conversation{}}
+		msgs := &fakeMsgs{}
 		svc := chat.NewService(fakeProvider{reply: testReply},
 			chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
 			chat.Deps{
-				Convs: convs, Msgs: &fakeMsgs{},
+				Convs: convs, Msgs: msgs,
 				Attachments: chat.NewAttachmentProcessor(nil),
 			},
 		)
@@ -915,16 +1057,18 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 		); err != nil {
 			t.Fatalf("StreamTurn: %v", err)
 		}
-		if convs.created == nil || convs.created.Title != "New conversation" {
-			t.Fatalf("control-only filename title = %q", convs.created.Title)
+		if msgs.createdConversation == nil ||
+			msgs.createdConversation.Title != "New conversation" {
+			t.Fatalf("control-only filename title = %+v", msgs.createdConversation)
 		}
 	})
 
 	t.Run("file only", func(t *testing.T) {
 		convs := &fakeConvs{byID: map[string]model.Conversation{}}
+		msgs := &fakeMsgs{}
 		svc := chat.NewService(fakeProvider{reply: testReply},
 			chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
-			chat.Deps{Convs: convs, Msgs: &fakeMsgs{}, Attachments: chat.NewAttachmentProcessor(nil)},
+			chat.Deps{Convs: convs, Msgs: msgs, Attachments: chat.NewAttachmentProcessor(nil)},
 		)
 		longFilename := "../../" + strings.Repeat("🏃", 70) + ".png"
 		if err := svc.StreamTurn(
@@ -936,23 +1080,24 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 		); err != nil {
 			t.Fatalf("StreamTurn: %v", err)
 		}
-		if convs.created == nil ||
-			strings.Contains(convs.created.Title, "/") ||
-			len([]rune(convs.created.Title)) != chat.TitleMaxLen ||
-			!utf8.ValidString(convs.created.Title) {
-			t.Fatalf("file-only title = %q", convs.created.Title)
+		if msgs.createdConversation == nil ||
+			strings.Contains(msgs.createdConversation.Title, "/") ||
+			len([]rune(msgs.createdConversation.Title)) != chat.TitleMaxLen ||
+			!utf8.ValidString(msgs.createdConversation.Title) {
+			t.Fatalf("file-only title = %+v", msgs.createdConversation)
 		}
 	})
 
 	t.Run("reference only", func(t *testing.T) {
 		convs := &fakeConvs{byID: map[string]model.Conversation{}}
+		msgs := &fakeMsgs{}
 		documents := &turnDocumentStore{documents: []model.Document{{
 			ID: 88, Scope: model.ScopePublic, Filename: "../Training Guide.md",
 			ExtractedMarkdown: "guide",
 		}}}
 		svc := chat.NewService(fakeProvider{reply: testReply},
 			chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
-			chat.Deps{Convs: convs, Msgs: &fakeMsgs{}, Documents: documents},
+			chat.Deps{Convs: convs, Msgs: msgs, Documents: documents},
 		)
 		if err := svc.StreamTurn(
 			context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
@@ -960,8 +1105,9 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 		); err != nil {
 			t.Fatalf("StreamTurn: %v", err)
 		}
-		if convs.created == nil || convs.created.Title != "Training Guide.md" {
-			t.Fatalf("reference-only title = %q", convs.created.Title)
+		if msgs.createdConversation == nil ||
+			msgs.createdConversation.Title != "Training Guide.md" {
+			t.Fatalf("reference-only title = %+v", msgs.createdConversation)
 		}
 	})
 }

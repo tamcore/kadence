@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { login } from './helpers';
 
@@ -14,7 +15,7 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-pw';
 async function createThrowawayUser(
 	page: import('@playwright/test').Page
 ): Promise<{ username: string; password: string }> {
-	const username = `e2e-profile-${Date.now()}`;
+	const username = `e2e-profile-${randomUUID()}`;
 	const password = 'e2e-profile-pw-12345';
 
 	await login(page, ADMIN_USERNAME, ADMIN_PASSWORD);

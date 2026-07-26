@@ -90,7 +90,7 @@
 	}
 
 	function handleDragLeave(event: DragEvent): void {
-		if (!containsFiles(event)) return;
+		if (!containsFiles(event) && !dragActive) return;
 		event.preventDefault();
 		dragDepth = Math.max(0, dragDepth - 1);
 		if (dragDepth === 0) dragActive = false;

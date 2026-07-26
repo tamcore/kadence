@@ -1,6 +1,8 @@
 // Package chat orchestrates streaming LLM conversations.
 package chat
 
+import "github.com/tamcore/kadence/internal/scheduled"
+
 // EventAttachment is safe attachment metadata for optimistic client
 // reconciliation. It never contains raw bytes or extracted document text.
 type EventAttachment struct {
@@ -27,12 +29,13 @@ type EventDocumentReference struct {
 
 // Event types emitted over SSE.
 const (
-	EventMeta        = "meta"
-	EventToken       = "token"
-	EventDone        = "done"
-	EventError       = "error"
-	EventTool        = "tool"
-	EventCredentials = "credentials_request"
+	EventMeta              = "meta"
+	EventToken             = "token"
+	EventDone              = "done"
+	EventError             = "error"
+	EventTool              = "tool"
+	EventCredentials       = "credentials_request"
+	EventScheduledArtifact = "scheduled_artifact"
 )
 
 // ChatEvent is a single server-sent event in a chat stream.
@@ -54,6 +57,7 @@ type ChatEvent struct {
 	// events encode an empty collection as [] rather than null/omitted.
 	Attachments        *[]EventAttachment        `json:"attachments,omitempty"`
 	DocumentReferences *[]EventDocumentReference `json:"documentReferences,omitempty"`
+	ScheduledArtifact  *scheduled.ChatArtifact   `json:"scheduledArtifact,omitempty"`
 }
 
 // CredentialField describes one credential field being requested from the

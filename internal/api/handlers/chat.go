@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/scheduled"
 	"github.com/tamcore/kadence/internal/store"
 )
 
@@ -69,6 +71,12 @@ type ScheduledConversationPauser interface {
 	PauseByConversation(ctx context.Context, conversationID string, userID int64) (bool, error)
 }
 
+// ChatArtifactHydrator batch-loads the persisted Scheduled cards attached to
+// assistant messages in one owned chat conversation.
+type ChatArtifactHydrator interface {
+	HydrateChatArtifacts(context.Context, int64, string, []int64) (map[int64][]scheduled.ChatArtifact, error)
+}
+
 // Chat handles the chat + conversation HTTP endpoints.
 type Chat struct {
 	svc            ChatStreamer
@@ -76,12 +84,18 @@ type Chat struct {
 	convs          ConvLister
 	msgs           MsgLister
 	scheduled      ScheduledConversationPauser
+	hydrator       ChatArtifactHydrator
 	uploadMaxBytes int64
 }
 
 // NewChat constructs the Chat handler.
-func NewChat(svc ChatStreamer, convs ConvLister, msgs MsgLister, scheduled ...ScheduledConversationPauser) *Chat {
-	return NewChatWithUploadLimit(svc, convs, msgs, defaultChatUploadMaxBytes, scheduled...)
+func NewChat(
+	svc ChatStreamer, convs ConvLister, msgs MsgLister,
+	scheduled ScheduledConversationPauser, hydrator ChatArtifactHydrator,
+) *Chat {
+	return NewChatWithUploadLimit(
+		svc, convs, msgs, defaultChatUploadMaxBytes, scheduled, hydrator,
+	)
 }
 
 // NewChatWithUploadLimit constructs the Chat handler with the aggregate byte
@@ -91,19 +105,17 @@ func NewChatWithUploadLimit(
 	convs ConvLister,
 	msgs MsgLister,
 	uploadMaxBytes int,
-	scheduled ...ScheduledConversationPauser,
+	scheduled ScheduledConversationPauser,
+	hydrator ChatArtifactHydrator,
 ) *Chat {
 	if uploadMaxBytes <= 0 {
 		uploadMaxBytes = defaultChatUploadMaxBytes
 	}
 	h := &Chat{
-		svc: svc, convs: convs, msgs: msgs,
+		svc: svc, convs: convs, msgs: msgs, scheduled: scheduled, hydrator: hydrator,
 		uploadMaxBytes: int64(uploadMaxBytes),
 	}
 	h.rewriter, _ = svc.(ChatRewriter)
-	if len(scheduled) > 0 {
-		h.scheduled = scheduled[0]
-	}
 	return h
 }
 
@@ -160,7 +172,7 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 		}
 		uc := chat.UserContext{
 			Username: u.Username, UnitSystem: u.UnitSystem,
-			Location: u.Location, AboutMe: u.AboutMe,
+			Location: u.Location, AboutMe: u.AboutMe, Timezone: u.Timezone,
 		}
 		h.streamSSE(w, func(sink chat.EventSink) {
 			_ = streamer.StreamTurn(r.Context(), u.ID, uc, conversationID, input, sink)
@@ -183,7 +195,7 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe}
+	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe, Timezone: u.Timezone}
 	h.streamSSE(w, func(sink chat.EventSink) {
 		_ = h.svc.Stream(r.Context(), u.ID, uc, body.ConversationID, body.Message, sink)
 	})
@@ -216,6 +228,7 @@ type messageDTO struct {
 	Content            string                        `json:"content"`
 	Attachments        []chat.EventAttachment        `json:"attachments"`
 	DocumentReferences []chat.EventDocumentReference `json:"documentReferences"`
+	ScheduledArtifacts []scheduled.ChatArtifact      `json:"scheduledArtifacts,omitempty"`
 }
 
 func toMessageDTO(message model.Message) messageDTO {
@@ -259,12 +272,30 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "could not load messages")
 		return
 	}
+	assistantIDs := make([]int64, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == model.MsgRoleAssistant {
+			assistantIDs = append(assistantIDs, m.ID)
+		}
+	}
+	artifactsByMessage := map[int64][]scheduled.ChatArtifact(nil)
+	if h.hydrator != nil {
+		artifactsByMessage, err = h.hydrator.HydrateChatArtifacts(r.Context(), u.ID, id, assistantIDs)
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "could not load scheduled artifacts")
+			return
+		}
+	}
 	out := make([]messageDTO, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Role == model.MsgRoleSystem {
 			continue
 		}
-		out = append(out, toMessageDTO(m))
+		artifacts := append([]scheduled.ChatArtifact(nil), artifactsByMessage[m.ID]...)
+		sort.SliceStable(artifacts, func(i, j int) bool { return artifacts[i].Ordinal < artifacts[j].Ordinal })
+		dto := toMessageDTO(m)
+		dto.ScheduledArtifacts = artifacts
+		out = append(out, dto)
 	}
 	RespondJSON(w, http.StatusOK, out)
 }
@@ -288,7 +319,7 @@ func (h *Chat) EditMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe}
+	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe, Timezone: u.Timezone}
 	if h.rewriter == nil {
 		RespondError(w, http.StatusInternalServerError, "message editing is unavailable")
 		return
@@ -306,7 +337,7 @@ func (h *Chat) RegenerateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.UserFromContext(r.Context())
-	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe}
+	uc := chat.UserContext{Username: u.Username, UnitSystem: u.UnitSystem, Location: u.Location, AboutMe: u.AboutMe, Timezone: u.Timezone}
 	if h.rewriter == nil {
 		RespondError(w, http.StatusInternalServerError, "response regeneration is unavailable")
 		return

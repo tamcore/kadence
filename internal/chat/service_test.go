@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
+	"github.com/tamcore/kadence/internal/scheduled"
 	"github.com/tamcore/kadence/internal/secret"
 )
 
@@ -51,6 +54,34 @@ func (f fakeProvider) StreamChatWithTools(ctx context.Context, req provider.Chat
 type scriptedProvider struct {
 	results []provider.StreamResult
 	calls   int
+}
+
+type scheduledFailingProvider struct {
+	results []provider.StreamResult
+	failAt  int
+	calls   int
+}
+
+func (p *scheduledFailingProvider) StreamChat(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
+	result, err := p.StreamChatWithTools(ctx, req, onToken)
+	return result.Content, err
+}
+
+func (p *scheduledFailingProvider) StreamChatWithTools(_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	if p.calls >= len(p.results) {
+		return provider.StreamResult{}, nil
+	}
+	result := p.results[p.calls]
+	p.calls++
+	if result.Content != "" {
+		if err := onToken(result.Content); err != nil {
+			return provider.StreamResult{}, err
+		}
+	}
+	if p.calls == p.failAt {
+		return result, errors.New("provider connection interrupted")
+	}
+	return result, nil
 }
 
 func (p *scriptedProvider) StreamChat(ctx context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
@@ -97,10 +128,13 @@ func (*fakeErr) Error() string { return "not found" }
 
 type fakeMsgs struct {
 	added                      []model.Message
+	createdConversation        *model.Conversation
 	rejectAssistant            bool
 	lastInput                  model.ChatUserInput
 	assistantSaveContextErrors []error
 	assistantSaveHadDeadlines  []bool
+	assistantHandoffIDs        []string
+	assistantHandoffTraces     [][]string
 }
 
 func (f *fakeMsgs) Add(_ context.Context, convID string, role, content string) (model.Message, error) {
@@ -141,6 +175,16 @@ func (f *fakeMsgs) AddChatUserInput(
 	f.added = append(f.added, m)
 	return m, nil
 }
+func (f *fakeMsgs) CreateConversationWithChatUserInput(
+	ctx context.Context, userID int64, title string, input model.ChatUserInput,
+) (model.Conversation, model.Message, error) {
+	conversation := model.Conversation{
+		ID: testNewConvID, UserID: userID, Title: title, Kind: model.ConversationKindChat,
+	}
+	f.createdConversation = &conversation
+	message, err := f.AddChatUserInput(ctx, conversation.ID, userID, input)
+	return conversation, message, err
+}
 func (f *fakeMsgs) UpdateChatAttachmentExtractions(
 	_ context.Context, convID string, messageID, _ int64,
 	attachments []model.MessageAttachment,
@@ -165,11 +209,13 @@ func (f *fakeMsgs) UpdateChatAttachmentExtractions(
 	return model.Message{}, errFakeNotFound
 }
 func (f *fakeMsgs) AddChatAssistantIfLatestUser(
-	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall,
+	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string,
 ) (model.Message, error) {
 	_, hadDeadline := ctx.Deadline()
 	f.assistantSaveHadDeadlines = append(f.assistantSaveHadDeadlines, hadDeadline)
 	f.assistantSaveContextErrors = append(f.assistantSaveContextErrors, ctx.Err())
+	f.assistantHandoffIDs = append([]string(nil), handoffIDs...)
+	f.assistantHandoffTraces = append(f.assistantHandoffTraces, append([]string(nil), handoffIDs...))
 	if f.rejectAssistant {
 		return model.Message{}, errFakeNotFound
 	}
@@ -182,7 +228,38 @@ func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 	}
 	return f.AddWithToolCalls(ctx, convID, model.MsgRoleAssistant, content, toolCalls)
 }
+
+type fakeScheduledHandoff struct {
+	artifacts []scheduled.ChatArtifact
+	requests  []scheduled.HandoffRequest
+	actors    []scheduled.Actor
+	cleanup   [][]string
+	err       error
+}
+
+func (f *fakeScheduledHandoff) DraftFromChat(
+	_ context.Context, actor scheduled.Actor, req scheduled.HandoffRequest,
+) (scheduled.ChatArtifact, error) {
+	f.actors = append(f.actors, actor)
+	f.requests = append(f.requests, req)
+	if f.err != nil {
+		return scheduled.ChatArtifact{}, f.err
+	}
+	index := len(f.requests) - 1
+	if index < len(f.artifacts) {
+		return f.artifacts[index], nil
+	}
+	return scheduled.ChatArtifact{HandoffID: "handoff-" + strconv.Itoa(index+1), TaskID: "task-" + strconv.Itoa(index+1), Ordinal: index + 1, ArtifactState: testScheduledArtifactReady}, nil
+}
+
+func (f *fakeScheduledHandoff) CleanupChatDrafts(_ context.Context, _ int64, ids []string) error {
+	f.cleanup = append(f.cleanup, append([]string(nil), ids...))
+	return nil
+}
 func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Message, error) {
+	return f.added, nil
+}
+func (f *fakeMsgs) ListChatHistory(_ context.Context, _ string) ([]model.Message, error) {
 	return f.added, nil
 }
 func (f *fakeMsgs) EditAndRewind(_ context.Context, _ string, messageID, _ int64, content string) (model.Message, error) {
@@ -273,16 +350,20 @@ func (s *syncCapturingSink) snapshot() []chat.ChatEvent {
 }
 
 const (
-	testReply     = "Hello!"
-	testSystemMsg = "You are a coach."
-	testModel     = "m"
-	testMaxTokens = 64
-	testTemp      = 0.2
-	testUserID    = 7
-	testUsername  = "alice"
-	testConvID    = "conv-uuid-1"
-	testNewConvID = "conv-uuid-new"
-	testConvTitle = "test"
+	testReply                  = "Hello!"
+	testSystemMsg              = "You are a coach."
+	testModel                  = "m"
+	testMaxTokens              = 64
+	testTemp                   = 0.2
+	testUserID                 = 7
+	testUsername               = "alice"
+	testConvID                 = "conv-uuid-1"
+	testNewConvID              = "conv-uuid-new"
+	testConvTitle              = "test"
+	testScheduledToolName      = "kadence__draft_scheduled_task"
+	testScheduledArtifactReady = "ready"
+	testScheduledCallID        = "call"
+	testScheduledArguments     = `{"instruction":"check recovery"}`
 )
 
 func TestStreamNewConversation(t *testing.T) {
@@ -316,8 +397,180 @@ func TestStreamNewConversation(t *testing.T) {
 	if len(msgs.added) != 2 || msgs.added[0].Role != model.MsgRoleUser || msgs.added[1].Role != model.MsgRoleAssistant || msgs.added[1].Content != testReply {
 		t.Fatalf("persisted messages wrong: %+v", msgs.added)
 	}
-	if convs.created == nil {
+	if msgs.createdConversation == nil {
 		t.Fatal("expected a conversation to be created")
+	}
+}
+
+func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testing.T) {
+	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{
+		{HandoffID: "handoff-one", TaskID: "task-one", Ordinal: 1, ArtifactState: testScheduledArtifactReady},
+		{HandoffID: "handoff-two", TaskID: "task-two", Ordinal: 2, ArtifactState: testScheduledArtifactReady},
+	}}
+	provider := &scriptedProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{
+			{ID: "call-one", Name: testScheduledToolName, Arguments: `{"instruction":"check my recovery"}`},
+			{ID: "call-two", Name: testScheduledToolName, Arguments: `{"instruction":"watch my weekly load"}`},
+		}},
+		{Content: "I drafted both tasks; review and confirm them."},
+	}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, SystemPrompt: testSystemMsg}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	sink := &capturingSink{}
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername, Timezone: "Europe/Berlin"}, testConvID, "schedule both", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got, want := msgs.assistantHandoffIDs, []string{"handoff-one", "handoff-two"}; !slices.Equal(got, want) {
+		t.Fatalf("persisted handoff IDs = %v, want %v", got, want)
+	}
+	if len(handoff.requests) != 2 || handoff.requests[0].Ordinal != 1 || handoff.requests[1].Ordinal != 2 {
+		t.Fatalf("handoff requests = %+v, want ordinal 1 then 2", handoff.requests)
+	}
+	if handoff.requests[0].SourceContent != "schedule both" || handoff.requests[0].SourceConversationID != testConvID {
+		t.Fatalf("source request = %+v", handoff.requests[0])
+	}
+	if len(handoff.actors) != 2 || handoff.actors[0].Timezone != "Europe/Berlin" {
+		t.Fatalf("handoff actors = %+v, want timezone forwarded", handoff.actors)
+	}
+
+	var artifacts []chat.ChatEvent
+	for _, event := range sink.events {
+		if event.Type == chat.EventTool && event.Tool == testScheduledToolName {
+			t.Fatalf("scheduling emitted generic tool event: %+v", event)
+		}
+		if event.Type == chat.EventScheduledArtifact {
+			artifacts = append(artifacts, event)
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal artifact event: %v", err)
+			}
+			if strings.Contains(string(encoded), "check my recovery") || strings.Contains(string(encoded), "watch my weekly load") {
+				t.Fatalf("artifact leaked tool instruction: %s", encoded)
+			}
+		}
+	}
+	if len(artifacts) != 2 || artifacts[0].ScheduledArtifact == nil || artifacts[0].ScheduledArtifact.Ordinal != 1 ||
+		artifacts[1].ScheduledArtifact == nil || artifacts[1].ScheduledArtifact.Ordinal != 2 {
+		t.Fatalf("artifact events = %+v", artifacts)
+	}
+}
+
+func TestServiceCleansScheduledDraftsAfterAssistantPersistenceFailure(t *testing.T) {
+	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{{
+		HandoffID: "draft-handoff", TaskID: "draft-task", Ordinal: 1, ArtifactState: testScheduledArtifactReady,
+	}}}
+	provider := &scriptedProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: testScheduledCallID, Name: testScheduledToolName, Arguments: testScheduledArguments}}},
+		{Content: "Drafted."},
+	}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{rejectAssistant: true}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
+		t.Fatal("Stream succeeded, want persistence failure")
+	}
+	if got, want := handoff.cleanup, [][]string{{"draft-handoff"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup calls = %v, want %v", got, want)
+	}
+}
+
+func TestServiceBindsScheduledHandoffsWhenProviderFailsAfterToolCalls(t *testing.T) {
+	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{{
+		HandoffID: "partial-handoff", TaskID: "partial-task", Ordinal: 1, ArtifactState: testScheduledArtifactReady,
+	}}}
+	provider := &scheduledFailingProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: testScheduledCallID, Name: testScheduledToolName, Arguments: testScheduledArguments}}},
+		{Content: "I drafted the task."},
+	}, failAt: 2}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
+		t.Fatal("Stream succeeded, want provider failure")
+	}
+	if got, want := msgs.assistantHandoffIDs, []string{"partial-handoff"}; !slices.Equal(got, want) {
+		t.Fatalf("persisted partial handoff IDs = %v, want %v", got, want)
+	}
+	if len(handoff.cleanup) != 0 {
+		t.Fatalf("cleanup = %v, want none after successful partial persistence", handoff.cleanup)
+	}
+}
+
+func TestServiceBindsScheduledHandoffsWhenProviderFailsWithoutContent(t *testing.T) {
+	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{{
+		HandoffID: "empty-partial-handoff", TaskID: "empty-partial-task", Ordinal: 1, ArtifactState: testScheduledArtifactReady,
+	}}}
+	provider := &scheduledFailingProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: testScheduledCallID, Name: testScheduledToolName, Arguments: testScheduledArguments}}},
+		{},
+	}, failAt: 2}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
+		t.Fatal("Stream succeeded, want provider failure")
+	}
+	if got, want := msgs.assistantHandoffIDs, []string{"empty-partial-handoff"}; !slices.Equal(got, want) {
+		t.Fatalf("persisted empty partial handoff IDs = %v, want %v", got, want)
+	}
+	if len(msgs.added) != 2 || msgs.added[1].Content != "I prepared the scheduling task drafts below, but could not finish the response." {
+		t.Fatalf("persisted messages = %+v, want scheduled partial fallback", msgs.added)
+	}
+	if len(handoff.cleanup) != 0 {
+		t.Fatalf("cleanup = %v, want none after successful empty partial persistence", handoff.cleanup)
+	}
+}
+
+func TestServiceCleansScheduledDraftsWhenEmptyProviderFailureCannotPersist(t *testing.T) {
+	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{{
+		HandoffID: "empty-failed-handoff", TaskID: "empty-failed-task", Ordinal: 1, ArtifactState: testScheduledArtifactReady,
+	}}}
+	provider := &scheduledFailingProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: testScheduledCallID, Name: testScheduledToolName, Arguments: testScheduledArguments}}},
+		{},
+	}, failAt: 2}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{rejectAssistant: true}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
+		t.Fatal("Stream succeeded, want provider failure")
+	}
+	if got, want := handoff.cleanup, [][]string{{"empty-failed-handoff"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup calls = %v, want %v", got, want)
+	}
+}
+
+func TestServiceLimitsScheduledDraftCallsPerTurn(t *testing.T) {
+	calls := make([]provider.ToolCall, 0, 6)
+	for i := 1; i <= 6; i++ {
+		calls = append(calls, provider.ToolCall{ID: "call-" + strconv.Itoa(i), Name: testScheduledToolName, Arguments: testScheduledArguments})
+	}
+	handoff := &fakeScheduledHandoff{}
+	provider := &scriptedProvider{results: []provider.StreamResult{{ToolCalls: calls}, {Content: "Only five drafts were created."}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule tasks", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(handoff.requests) != 5 {
+		t.Fatalf("DraftFromChat calls = %d, want 5", len(handoff.requests))
+	}
+	if got, want := msgs.assistantHandoffIDs, []string{"handoff-1", "handoff-2", "handoff-3", "handoff-4", "handoff-5"}; !slices.Equal(got, want) {
+		t.Fatalf("persisted handoff IDs = %v, want %v", got, want)
 	}
 }
 
@@ -2226,14 +2479,14 @@ func TestStreamTruncatesTitleASCII(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	if convs.created == nil {
+	if msgs.createdConversation == nil {
 		t.Fatal("expected a conversation to be created")
 	}
-	if len(convs.created.Title) != 60 {
-		t.Fatalf("title length = %d, want 60 (runes)", len(convs.created.Title))
+	if len(msgs.createdConversation.Title) != 60 {
+		t.Fatalf("title length = %d, want 60 (runes)", len(msgs.createdConversation.Title))
 	}
-	if convs.created.Title != strings.Repeat("a", 60) {
-		t.Fatalf("title = %q, want 60 'a' characters", convs.created.Title)
+	if msgs.createdConversation.Title != strings.Repeat("a", 60) {
+		t.Fatalf("title = %q, want 60 'a' characters", msgs.createdConversation.Title)
 	}
 }
 
@@ -2252,24 +2505,24 @@ func TestStreamTruncatesTitleMultibyte(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	if convs.created == nil {
+	if msgs.createdConversation == nil {
 		t.Fatal("expected a conversation to be created")
 	}
 
 	// Verify it's valid UTF-8
-	if !utf8.ValidString(convs.created.Title) {
-		t.Fatalf("title is not valid UTF-8: %q", convs.created.Title)
+	if !utf8.ValidString(msgs.createdConversation.Title) {
+		t.Fatalf("title is not valid UTF-8: %q", msgs.createdConversation.Title)
 	}
 
 	// Verify it's 60 runes (not bytes)
-	runes := []rune(convs.created.Title)
+	runes := []rune(msgs.createdConversation.Title)
 	if len(runes) != 60 {
 		t.Fatalf("title has %d runes, want 60", len(runes))
 	}
 
 	// Verify it's the correct content (60 fire emojis)
-	if convs.created.Title != strings.Repeat("🎯", 60) {
-		t.Fatalf("title = %q, want 60 fire emojis", convs.created.Title)
+	if msgs.createdConversation.Title != strings.Repeat("🎯", 60) {
+		t.Fatalf("title = %q, want 60 fire emojis", msgs.createdConversation.Title)
 	}
 }
 
@@ -2441,12 +2694,12 @@ func TestStreamKeepsTitleUnchangedWhenShort(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	if convs.created == nil {
+	if msgs.createdConversation == nil {
 		t.Fatal("expected a conversation to be created")
 	}
 
 	// Short strings should be unchanged.
-	if convs.created.Title != shortTitle {
-		t.Fatalf("title = %q, want %q", convs.created.Title, shortTitle)
+	if msgs.createdConversation.Title != shortTitle {
+		t.Fatalf("title = %q, want %q", msgs.createdConversation.Title, shortTitle)
 	}
 }

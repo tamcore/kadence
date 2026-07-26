@@ -16,7 +16,23 @@ import (
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/scheduled"
+	"github.com/tamcore/kadence/internal/store"
 )
+
+func TestScheduledChatWiringUsesSharedServiceOnlyWhenEnabled(t *testing.T) {
+	service := &scheduled.Service{}
+	tasks := &store.ScheduledTaskRepository{}
+
+	disabled := newScheduledChatWiring(false, service, tasks)
+	if disabled.handoff != nil || disabled.hydrator != nil || disabled.pauser != nil {
+		t.Fatalf("disabled wiring = %+v, want nil dependencies", disabled)
+	}
+	enabled := newScheduledChatWiring(true, service, tasks)
+	if enabled.handoff != service || enabled.hydrator != service || enabled.pauser != tasks {
+		t.Fatalf("enabled wiring does not share service/repository: %+v", enabled)
+	}
+}
 
 // buildIngestExtractors is pure enough to unit test without refactoring
 // serve.go: it only depends on config.Config (a value, no DB/network
@@ -187,6 +203,8 @@ func TestNewChatHandlerUsesConfiguredAggregateUploadLimit(t *testing.T) {
 	handler := newChatHandler(
 		config.Config{UploadMaxBytes: 8},
 		streamer,
+		nil,
+		nil,
 		nil,
 		nil,
 	)

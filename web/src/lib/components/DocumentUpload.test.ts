@@ -106,6 +106,17 @@ describe('DocumentUpload', () => {
 		expect(spy).not.toHaveBeenCalled();
 	});
 
+	it('clears the route-wide overlay when dragleave omits file transfer types', async () => {
+		render(DocumentUpload, { capabilities: richCapabilities, onUploaded: vi.fn() });
+		const file = new File(['x'], 'route.png', { type: 'image/png' });
+
+		await fireEvent.dragEnter(window, { dataTransfer: { types: ['Files'], files: [file] } });
+		expect(screen.getByRole('status', { name: 'File drop area' })).toBeInTheDocument();
+
+		await fireEvent.dragLeave(window, { dataTransfer: { types: [], files: [] } });
+		expect(screen.queryByRole('status', { name: 'File drop area' })).not.toBeInTheDocument();
+	});
+
 	it('uses the server accept profile, allows multiple files, and explains rich support', () => {
 		const { container } = render(DocumentUpload, {
 			capabilities: richCapabilities,

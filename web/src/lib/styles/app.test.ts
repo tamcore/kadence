@@ -18,4 +18,10 @@ describe('app mobile scroll containment', () => {
 			/\.sidebar\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior-y:\s*contain;/
 		);
 	});
+
+	it('keeps the mobile brand link visually neutral', () => {
+		expect(styles).toMatch(
+			/\.brand-sm\s*\{[\s\S]*?color:\s*inherit;[\s\S]*?text-decoration:\s*none;/
+		);
+	});
 });

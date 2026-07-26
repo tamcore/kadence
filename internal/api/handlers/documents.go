@@ -51,6 +51,13 @@ func NewDocuments(svc documentIngester, repo documentRepo, capabilities ingest.U
 	return &Documents{svc: svc, repo: repo, capabilities: capabilities}
 }
 
+// CRUDEnabled reports whether document storage/ingestion routes are safe to
+// mount. Chat may expose upload capabilities with both dependencies nil when
+// RAG-backed document storage is disabled.
+func (d *Documents) CRUDEnabled() bool {
+	return d != nil && d.svc != nil && d.repo != nil
+}
+
 type documentDTO struct {
 	ID         int64  `json:"id"`
 	Filename   string `json:"filename"`

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,9 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 const (
@@ -21,6 +25,22 @@ const (
 	// vector(1024) column without the caller having to ask for it explicitly.
 	defaultEmbeddingVectorLen = 1024
 	stubModelName             = "stub"
+	functionToolType          = "function"
+	finishToolCalls           = "tool_calls"
+	messageRoleTool           = "tool"
+	draftScheduledToolName    = "kadence__draft_scheduled_task"
+	workerPromptPrefix        = "Gather evidence using only the offered tools."
+	synthesisPromptPrefix     = "Write the concise user-facing Scheduled result"
+	browserNavigateTool       = "browser__browser_navigate"
+	browserSnapshotTool       = "browser__browser_snapshot"
+	preRaceWeatherInstruction = "Fetch fresh race weather two days before the race and deliver updated " +
+		"pacing, hydration, and kit guidance."
+	raceDayWeatherInstruction = "Fetch fresh race weather on race morning and deliver updated pacing, " +
+		"hydration, and kit guidance."
+	weatherSuggestionReply = "Two future weather checks would help: one two days before your race and " +
+		"another on race morning. Please explicitly ask me to schedule them if you want drafts."
+	//nolint:lll // Exact single-line worker JSON outcome exercises strict parsing.
+	workerWeatherOutcomeReply = `{"status":"deliver","summary":"Fresh race weather is cool and breezy.","evidence":["race weather fixture: 12C, light rain"],"monitoringState":{}}`
 )
 
 // chatContentTokens are the deterministic content deltas streamed back for
@@ -86,15 +106,54 @@ const (
 			"staticMessage": "Time to drink some water."
 		}
 	}`
+	preRaceWeatherProposalReply = `{
+		"assistantText": "Your pre-race weather check is ready for review.",
+		"proposal": {
+			"name": "Pre-race weather check",
+			"taskKind": "data",
+			"compiledPrompt": "` + preRaceWeatherInstruction + `",
+			"executionMode": "data",
+			"schedule": {"at": "2040-01-03T08:00:00Z", "timezone": "UTC"},
+			"timezone": "UTC",
+			"authorizedTools": ["` + browserNavigateTool + `", "` + browserSnapshotTool + `"],
+			"deliveryPolicy": "always",
+			"initialRun": "wait"
+		}
+	}`
+	raceDayWeatherProposalReply = `{
+		"assistantText": "Your race-day weather check is ready for review.",
+		"proposal": {
+			"name": "Race-day weather check",
+			"taskKind": "data",
+			"compiledPrompt": "` + raceDayWeatherInstruction + `",
+			"executionMode": "data",
+			"schedule": {"at": "2040-01-05T05:30:00Z", "timezone": "UTC"},
+			"timezone": "UTC",
+			"authorizedTools": ["` + browserNavigateTool + `", "` + browserSnapshotTool + `"],
+			"deliveryPolicy": "always",
+			"initialRun": "wait"
+		}
+	}`
 )
 
 type chatCompletionRequest struct {
 	Messages []chatCompletionRequestMessage `json:"messages"`
+	Tools    []chatCompletionToolDefinition `json:"tools"`
 }
 
 type chatCompletionRequestMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role       string            `json:"role"`
+	Content    json.RawMessage   `json:"content"`
+	ToolCalls  []json.RawMessage `json:"tool_calls"`
+	ToolCallID string            `json:"tool_call_id"`
+	Name       string            `json:"name"`
+}
+
+type chatCompletionToolDefinition struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
 }
 
 // chatCompletionChunk mirrors the shape the openai-go/v3 stream decoder
@@ -105,11 +164,25 @@ type chatCompletionChunk struct {
 }
 
 type chatCompletionChunkChoice struct {
-	Delta chatCompletionChunkDelta `json:"delta"`
+	Delta        chatCompletionChunkDelta `json:"delta"`
+	FinishReason string                   `json:"finish_reason,omitempty"`
 }
 
 type chatCompletionChunkDelta struct {
-	Content string `json:"content"`
+	Content   string                        `json:"content,omitempty"`
+	ToolCalls []chatCompletionChunkToolCall `json:"tool_calls,omitempty"`
+}
+
+type chatCompletionChunkToolCall struct {
+	Index    int                             `json:"index"`
+	ID       string                          `json:"id,omitempty"`
+	Type     string                          `json:"type,omitempty"`
+	Function chatCompletionChunkToolFunction `json:"function"`
+}
+
+type chatCompletionChunkToolFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // embeddingsRequest is the subset of the OpenAI embeddings request body this
@@ -148,6 +221,7 @@ func handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", handleChatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", handleEmbeddings)
+	mux.Handle("/mcp", browserMCPHandler())
 	return mux
 }
 
@@ -170,6 +244,46 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	flusher, canFlush := w.(http.Flusher)
+	writeChunk := func(chunk chatCompletionChunk) bool {
+		if err := writeSSEChunk(w, chunk); err != nil {
+			slog.Error("write chat completion chunk", "error", err)
+			return false
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	if isWorkerRequest(req.Messages) {
+		if hasToolResult(req.Messages) {
+			tokens = []string{workerWeatherOutcomeReply}
+		} else {
+			writeWorkerToolCalls(w, canFlush, flusher)
+			return
+		}
+	} else if isSynthesisRequest(req.Messages) {
+		tokens = []string{"Fresh race weather is ready: adjust pacing for conditions, " +
+			"hydrate steadily, and bring the appropriate kit."}
+	} else if !isScheduledCompiler(req.Messages) {
+		switch {
+		case hasToolResult(req.Messages):
+			tokens = []string{"I prepared two weather checks for review."}
+		case hasDraftScheduledTool(req.Tools) && explicitlySchedulesWeatherChecks(req.Messages):
+			for _, chunk := range scheduledToolCallChunks() {
+				if !writeChunk(chunk) {
+					return
+				}
+			}
+			if !writeChunk(chatCompletionChunk{Choices: []chatCompletionChunkChoice{{FinishReason: finishToolCalls}}}) {
+				return
+			}
+			writeDone(w, canFlush, flusher)
+			return
+		case asksForWeatherForecast(req.Messages):
+			tokens = []string{weatherSuggestionReply}
+		}
+	}
 
 	for _, token := range tokens {
 		chunk := chatCompletionChunk{
@@ -177,15 +291,128 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				{Delta: chatCompletionChunkDelta{Content: token}},
 			},
 		}
-		if err := writeSSEChunk(w, chunk); err != nil {
-			slog.Error("write chat completion chunk", "error", err)
+		if !writeChunk(chunk) {
 			return
-		}
-		if canFlush {
-			flusher.Flush()
 		}
 	}
 
+	writeDone(w, canFlush, flusher)
+}
+
+func isScheduledCompiler(messages []chatCompletionRequestMessage) bool {
+	_, ok := scheduledReply(messages)
+	return ok
+}
+
+func asksForWeatherForecast(messages []chatCompletionRequestMessage) bool {
+	for _, message := range messages {
+		if message.Role == messageRoleUser && strings.Contains(strings.ToLower(messageText(message.Content)), "weather") {
+			return true
+		}
+	}
+	return false
+}
+
+func explicitlySchedulesWeatherChecks(messages []chatCompletionRequestMessage) bool {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role == messageRoleUser {
+			return strings.Contains(strings.ToLower(messageText(message.Content)), "schedule it")
+		}
+	}
+	return false
+}
+
+func hasToolResult(messages []chatCompletionRequestMessage) bool {
+	for _, message := range messages {
+		if message.Role == messageRoleTool && message.ToolCallID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDraftScheduledTool(tools []chatCompletionToolDefinition) bool {
+	for _, tool := range tools {
+		if tool.Type == functionToolType && tool.Function.Name == draftScheduledToolName {
+			return true
+		}
+	}
+	return false
+}
+
+func scheduledToolCallChunks() []chatCompletionChunk {
+	return []chatCompletionChunk{
+		{Choices: []chatCompletionChunkChoice{{Delta: chatCompletionChunkDelta{ToolCalls: []chatCompletionChunkToolCall{
+			draftToolCall(0, "call_weather_before", `{"instruction":"fetch fresh race weather two `),
+			draftToolCall(1, "call_weather_race_day", `{"instruction":"fetch fresh race weather on `),
+		}}}}},
+		{Choices: []chatCompletionChunkChoice{{Delta: chatCompletionChunkDelta{ToolCalls: []chatCompletionChunkToolCall{
+			draftToolCall(0, "", `days before the race and deliver updated pacing, hydration, and kit guidance."}`),
+			draftToolCall(1, "", `race morning and deliver updated pacing, hydration, and kit guidance."}`),
+		}}}}},
+	}
+}
+
+func draftToolCall(index int, id, arguments string) chatCompletionChunkToolCall {
+	if id == "" {
+		return chatCompletionChunkToolCall{
+			Index: index, Function: chatCompletionChunkToolFunction{Arguments: arguments},
+		}
+	}
+	return chatCompletionChunkToolCall{
+		Index: index, ID: id, Type: functionToolType,
+		Function: chatCompletionChunkToolFunction{Name: draftScheduledToolName, Arguments: arguments},
+	}
+}
+
+func writeWorkerToolCalls(w http.ResponseWriter, canFlush bool, flusher http.Flusher) {
+	chunk := chatCompletionChunk{Choices: []chatCompletionChunkChoice{{
+		Delta: chatCompletionChunkDelta{ToolCalls: []chatCompletionChunkToolCall{
+			{Index: 0, ID: "call_weather_navigate", Type: functionToolType,
+				//nolint:lll // Exact URL is part of deterministic browser fixture.
+				Function: chatCompletionChunkToolFunction{Name: browserNavigateTool, Arguments: `{"url":"https://weather.example.test/race"}`}},
+			{Index: 1, ID: "call_weather_snapshot", Type: functionToolType,
+				Function: chatCompletionChunkToolFunction{Name: browserSnapshotTool, Arguments: `{}`}},
+		}},
+	}}}
+	if err := writeSSEChunk(w, chunk); err != nil {
+		slog.Error("write worker tool-call chunk", "error", err)
+		return
+	}
+	if canFlush {
+		flusher.Flush()
+	}
+	finish := chatCompletionChunk{Choices: []chatCompletionChunkChoice{{FinishReason: finishToolCalls}}}
+	if err := writeSSEChunk(w, finish); err != nil {
+		slog.Error("write worker finish chunk", "error", err)
+		return
+	}
+	writeDone(w, canFlush, flusher)
+}
+
+func isWorkerRequest(messages []chatCompletionRequestMessage) bool {
+	return len(messages) > 0 && strings.HasPrefix(messageText(messages[0].Content), workerPromptPrefix)
+}
+
+func isSynthesisRequest(messages []chatCompletionRequestMessage) bool {
+	return len(messages) > 0 && strings.HasPrefix(messageText(messages[0].Content), synthesisPromptPrefix)
+}
+
+func browserMCPHandler() http.Handler {
+	srv := mcpserver.NewMCPServer("e2e-browser", "0.0.1")
+	navigate := mcpgo.NewTool("browser_navigate", mcpgo.WithString("url"))
+	srv.AddTool(navigate, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(`{"forecast":"race weather fixture: cool and breezy"}`), nil
+	})
+	snapshot := mcpgo.NewTool("browser_snapshot")
+	srv.AddTool(snapshot, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText(`{"snapshot":"race weather fixture: 12C, light rain"}`), nil
+	})
+	return mcpserver.NewStreamableHTTPServer(srv)
+}
+
+func writeDone(w http.ResponseWriter, canFlush bool, flusher http.Flusher) {
 	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
 		slog.Error("write [DONE] frame", "error", err)
 		return
@@ -214,8 +441,15 @@ func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
 	if !compilerRequest {
 		return "", false
 	}
-	if strings.Contains(strings.ToLower(firstUser), "drink water") {
+	instruction := scheduledInstruction(firstUser)
+	if strings.Contains(strings.ToLower(instruction), "drink water") {
 		return scheduledReminderReply, true
+	}
+	if strings.Contains(strings.ToLower(instruction), "fetch fresh race weather") {
+		if strings.Contains(strings.ToLower(instruction), "race morning") {
+			return raceDayWeatherProposalReply, true
+		}
+		return preRaceWeatherProposalReply, true
 	}
 	if userMessages > 1 {
 		return scheduledProposalReply, true
@@ -243,6 +477,19 @@ func messageText(content json.RawMessage) string {
 		}
 	}
 	return joined.String()
+}
+
+func scheduledInstruction(definition string) string {
+	const instructionPrefix = "Instruction:\n"
+	const currentUTCMarker = "\n\nCurrent UTC:\n"
+	if !strings.HasPrefix(definition, instructionPrefix) {
+		return definition
+	}
+	framed := strings.TrimPrefix(definition, instructionPrefix)
+	if before, _, ok := strings.Cut(framed, currentUTCMarker); ok {
+		return before
+	}
+	return framed
 }
 
 // writeSSEChunk marshals v and writes it as a single "data: <json>\n\n" SSE

@@ -30,6 +30,9 @@ const (
 	scheduledTestDelete  = "delete"
 	scheduledTestRun     = "run"
 	scheduledTestRead    = "read"
+	scheduledTestDiscard = "discard"
+	scheduledDiscardID   = "00000000-0000-0000-0000-000000000001"
+	scheduledTimezoneUTC = "UTC"
 	scheduledTestMessage = `{"message":"x"}`
 	scheduledTestPaused  = `{"state":"paused"}`
 )
@@ -93,6 +96,48 @@ func (f *fakeScheduledLifecycle) RunNow(_ context.Context, owner int64, id strin
 func (f *fakeScheduledLifecycle) MarkRead(_ context.Context, owner int64, id string) error {
 	f.gotMethod, f.gotOwner, f.gotID = scheduledTestRead, owner, id
 	return f.lifecycleErr
+}
+func (f *fakeScheduledLifecycle) DiscardChatDraft(_ context.Context, owner int64, id string) error {
+	f.gotMethod, f.gotOwner, f.gotID = scheduledTestDiscard, owner, id
+	return f.lifecycleErr
+}
+
+func TestScheduledDiscardDraftIsOwnerScopedAndRejectsFinalizedTasks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "success", want: http.StatusOK},
+		{name: "missing", err: store.ErrNotFound, want: http.StatusNotFound},
+		{name: "finalized", err: scheduled.ErrInvalidTransition, want: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeScheduledLifecycle{lifecycleErr: tc.err}
+			h := handlers.NewScheduled(fake)
+			req := withChiParam(withUser(httptest.NewRequest(http.MethodPost, "/api/scheduled/tasks/"+scheduledDiscardID+"/discard", nil), 7), "id", scheduledDiscardID)
+			rec := httptest.NewRecorder()
+
+			h.Discard(rec, req)
+
+			if rec.Code != tc.want || fake.gotMethod != scheduledTestDiscard || fake.gotOwner != 7 || fake.gotID != scheduledDiscardID {
+				t.Fatalf("status=%d fake=%+v body=%s", rec.Code, fake, rec.Body.String())
+			}
+			if tc.want == http.StatusOK && !strings.Contains(rec.Body.String(), `"ok":true`) {
+				t.Fatalf("body=%s", rec.Body.String())
+			}
+		})
+	}
+
+	for _, id := range []string{"", " ", "not-a-task"} {
+		rec := httptest.NewRecorder()
+		req := withChiParam(withUser(httptest.NewRequest(http.MethodPost, "/api/scheduled/tasks/x/discard", nil), 7), "id", id)
+		h := handlers.NewScheduled(&fakeScheduledLifecycle{})
+		h.Discard(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("id=%q status=%d body=%s", id, rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestScheduledCreateStreamsBoundedDefinitionEvents(t *testing.T) {
@@ -190,7 +235,7 @@ func TestScheduledLifecycleRoutesSuccessAndOwnerForwarding(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	task := model.ScheduledTask{
 		ID: scheduledTestTask1, ConversationID: scheduledTestConv1, Version: 2, Name: "Morning", Kind: model.ScheduledTaskKindReminder,
-		State: model.ScheduledTaskStateActive, CompiledPrompt: "prompt", Timezone: "UTC",
+		State: model.ScheduledTaskStateActive, CompiledPrompt: "prompt", Timezone: scheduledTimezoneUTC,
 		ExecutionMode: "static", AuthorizedTools: []string{}, DeliveryPolicy: "always", InitialRun: "wait",
 		NextRunAt: &now, CreatedAt: now, UpdatedAt: now,
 	}

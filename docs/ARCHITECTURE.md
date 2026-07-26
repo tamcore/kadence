@@ -78,6 +78,32 @@ requests and are fully parsed before SSE begins, so a rejected upload cannot cre
 partial turn. Responses stream to the browser as Server-Sent Events (`ChatEvent`
 JSON); attachment payloads never appear in message JSON.
 
+### Inline Scheduled handoff
+
+Chat can offer future follow-ups, but it may create a Scheduled draft only when
+the **current user turn explicitly requests scheduling**. A suggestion, a prior
+turn, or model inference is not an authorization. One
+`kadence__draft_scheduled_task` call represents one independently confirmable
+task. Its instruction is a bounded, safe transfer of the source request and a
+small recent-text context; it is not a copied tool transcript, credential, or
+unbounded chat history.
+
+The handoff creates a relational draft and a source-message artifact, then hands
+compiler authority to `scheduled/`. The chat model cannot choose the final
+schedule, task kind, or integrations: the Scheduled compiler validates the
+proposal against the owner-scoped MCP snapshot and only exact authorized tools.
+Each card is reviewed, adjusted, dismissed, or confirmed independently. The UI
+hydrates artifacts for a batch of source message IDs in one request, so loading a
+conversation does not issue one request per card.
+
+Handoffs are keyed by `(source conversation, source user message, ordinal)`.
+Regenerating or rewinding a source assistant response therefore reuses its same
+draft slots rather than multiplying tasks. Deleting/rewinding source messages
+uses tombstones for obsolete, unconfirmed artifacts; confirmed tasks and their
+links survive the rewind as auditable Scheduled work. There is no new environment
+variable for this handoff; it uses the existing Scheduled feature and provider/MCP
+configuration.
+
 ## Scheduled pipeline (`scheduled/`)
 
 Scheduled uses a separate owner-scoped conversation kind and a confirm-before-run
@@ -125,6 +151,11 @@ The compiler and result synthesis use the main provider. Evidence gathering can
 use independently configured worker model/base URL/key overrides, including a
 cheaper model or another compatible endpoint. Provider and MCP boundaries remain
 ordinary HTTP; the runtime has no Kubernetes dependency.
+
+Inline drafts retain their source chat link while their executions deliver into
+their separate Scheduled conversations/inboxes. Thus a source card continues to
+show its task state and details link after confirmation, while run results, unread
+state, and retryable execution history remain in the Scheduled surface.
 
 ## MCP orchestration (`mcp/`)
 
@@ -236,6 +267,12 @@ All timestamps are UTC. Migrations are embedded SQL run by `goose` on startup
   metadata for the active-sessions view.
 - **conversations** / **messages** — chat history; messages carry `content` and
   `tool_calls`. Conversations also have an immutable UUID.
+- **scheduled_tasks** / **scheduled_runs** / **scheduled_definition_messages** —
+  owner-scoped task definitions, immutable occurrence results, and the bounded
+  compiler thread behind the Scheduled inbox.
+- **scheduled_handoffs** — source-message artifacts and their per-source ordinal
+  slots, including draft/confirmed/tombstoned linkage used to make regeneration
+  and rewinds idempotent without deleting confirmed work.
 - **documents** / **chunks** — ingested material and their embeddings; `scope`
   distinguishes private from the admin public corpus. Chunks store the embedding model.
 - **user_mcp_servers** — user-registered MCP servers (auth password encrypted).

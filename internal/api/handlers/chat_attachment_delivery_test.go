@@ -64,7 +64,7 @@ func TestMessagesExposeSafeAttachmentAndReferenceMetadata(t *testing.T) {
 		{ID: 13, Role: model.MsgRoleAssistant, Content: "answer"},
 	}}
 	handler := handlers.NewChat(
-		&fakeStreamer{}, &fakeConvLister{}, messages,
+		&fakeStreamer{}, &fakeConvLister{}, messages, nil, nil,
 	)
 	request := withChiParam(
 		withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/conv/messages", nil), 7),
@@ -186,7 +186,7 @@ func TestDownloadAttachmentUsesSafeDispositionAndPayload(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &attachmentDeliveryLister{attachment: test.attachment}
 			handler := handlers.NewChat(
-				&fakeStreamer{}, &fakeConvLister{}, repository,
+				&fakeStreamer{}, &fakeConvLister{}, repository, nil, nil,
 			)
 			request := withChiParams(
 				withUser(httptest.NewRequest(http.MethodGet, "/attachment", nil), 7),
@@ -237,7 +237,7 @@ func TestDownloadAttachmentUsesSafeDispositionAndPayload(t *testing.T) {
 func TestDownloadAttachmentConcealsOwnershipMiss(t *testing.T) {
 	repository := &attachmentDeliveryLister{err: store.ErrNotFound}
 	handler := handlers.NewChat(
-		&fakeStreamer{}, &fakeConvLister{}, repository,
+		&fakeStreamer{}, &fakeConvLister{}, repository, nil, nil,
 	)
 	request := withChiParams(
 		withUser(httptest.NewRequest(http.MethodGet, "/attachment", nil), 7),
@@ -257,7 +257,7 @@ func TestDownloadAttachmentConcealsOwnershipMiss(t *testing.T) {
 func TestDownloadAttachmentMapsUnexpectedStoreFailure(t *testing.T) {
 	repository := &attachmentDeliveryLister{err: errors.New("database unavailable")}
 	handler := handlers.NewChat(
-		&fakeStreamer{}, &fakeConvLister{}, repository,
+		&fakeStreamer{}, &fakeConvLister{}, repository, nil, nil,
 	)
 	request := withChiParams(
 		withUser(httptest.NewRequest(http.MethodGet, "/attachment", nil), 7),

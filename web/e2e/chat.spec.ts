@@ -77,6 +77,7 @@ test('explicitly references private and public documents and preserves them on r
 	await expect(references).toContainText('Private reference');
 	await expect(references).toContainText('chat-public-reference.pdf');
 	await expect(references).toContainText('Public reference');
+	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
 	await page.reload();
 	await expect(page.getByRole('list', { name: 'Referenced documents' })).toContainText(
 		'chat-private-reference.pdf'
@@ -111,9 +112,15 @@ test('edits and regenerates persisted chat turns', async ({ page }) => {
 	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(1);
 
 	const regenerate = page.getByRole('button', { name: 'Regenerate response' });
+	const regenerated = page.waitForResponse(
+		(response) =>
+			response.request().method() === 'POST' &&
+			/\/api\/conversations\/[^/]+\/messages\/\d+\/regenerate$/.test(response.url())
+	);
 	await regenerate.click();
-	await expect(regenerate).toHaveCount(0);
-	await expect(page.getByRole('button', { name: 'Regenerate response' })).toHaveCount(1);
+	const regeneratedResponse = await regenerated;
+	expect(regeneratedResponse.status()).toBe(200);
+	await expect(page.getByRole('button', { name: 'Regenerate response' })).toBeEnabled();
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 

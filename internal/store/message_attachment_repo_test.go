@@ -81,6 +81,19 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 	assertAttachmentPayloadsOmitted(t, listed[0].Attachments)
 	assertReferenceMetadata(t, listed[0].DocumentReferences, publicDocument.ID, privateDocument.ID)
 
+	history, err := messages.ListChatHistory(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("list provider chat history: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("provider history messages = %d, want 1", len(history))
+	}
+	assertAttachmentMetadata(t, history[0].Attachments)
+	assertAttachmentPayloads(t, history[0].Attachments)
+	assertReferenceMetadata(
+		t, history[0].DocumentReferences, publicDocument.ID, privateDocument.ID,
+	)
+
 	got, err := messages.GetByID(ctx, conversation.ID, created.ID)
 	if err != nil {
 		t.Fatalf("get message: %v", err)
@@ -138,6 +151,44 @@ func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {
 	}
 
 	assertMessageRelationCounts(t, pool, conversation.ID, 0, 0, 0)
+}
+
+func TestMessageRepositoryNewConversationAndFirstInputRollBackTogether(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "first-input-rollback", Email: "first-input-rollback@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = messages.CreateConversationWithChatUserInput(
+		ctx, owner.ID, "must roll back", model.ChatUserInput{
+			Content: "first rich input",
+			Attachments: []model.MessageAttachment{{
+				Filename: "invalid.bin", MIME: "application/octet-stream",
+				Kind: "invalid-kind", RawBytes: []byte{1},
+			}},
+		},
+	)
+	if err == nil {
+		t.Fatal("invalid first rich input was accepted")
+	}
+
+	list, err := conversations.ListByUser(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("list conversations: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("failed first input left conversations behind: %+v", list)
+	}
 }
 
 func TestMessageRepositoryDocumentReferenceSnapshotSurvivesDelete(t *testing.T) {

@@ -62,6 +62,8 @@ KADENCE_ENV=dev \
 	KADENCE_ADMIN_PASSWORD="$admin_password" \
 	KADENCE_ENCRYPTION_KEY="$user_mcp_key" \
 	KADENCE_USER_MCP_ALLOWED_HOSTS="*.e2e.test" \
+	MCP_BROWSER_GLOBAL_URL="http://localhost:9099/mcp" \
+	MCP_BROWSER_GLOBAL_TRANSPORT="streamable-http" \
 	KADENCE_RATE_LIMIT_AUTH=0 \
 	KADENCE_RATE_LIMIT_GLOBAL=0 \
 	"$app_bin" &

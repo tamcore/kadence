@@ -105,16 +105,18 @@ func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	jar.capture(resp)
 	_ = resp.Body.Close()
 
-	scheduledReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/scheduled/tasks", strings.NewReader(`{"message":"x"}`))
-	scheduledReq.Header.Set("Content-Type", "application/json")
-	jar.apply(scheduledReq)
-	scheduledResp, err := http.DefaultClient.Do(scheduledReq)
-	if err != nil {
-		t.Fatalf("scheduled request: %v", err)
-	}
-	_ = scheduledResp.Body.Close()
-	if scheduledResp.StatusCode != http.StatusForbidden {
-		t.Fatalf("authenticated Scheduled POST without CSRF status=%d, want 403", scheduledResp.StatusCode)
+	for _, path := range []string{"/api/scheduled/tasks", "/api/scheduled/tasks/00000000-0000-0000-0000-000000000001/discard"} {
+		scheduledReq, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"message":"x"}`))
+		scheduledReq.Header.Set("Content-Type", "application/json")
+		jar.apply(scheduledReq)
+		scheduledResp, err := http.DefaultClient.Do(scheduledReq)
+		if err != nil {
+			t.Fatalf("scheduled request %s: %v", path, err)
+		}
+		_ = scheduledResp.Body.Close()
+		if scheduledResp.StatusCode != http.StatusForbidden {
+			t.Fatalf("authenticated Scheduled POST %s without CSRF status=%d, want 403", path, scheduledResp.StatusCode)
+		}
 	}
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/session", nil)
@@ -151,7 +153,7 @@ func TestChatEndToEnd(t *testing.T) {
 
 	chatSvc := chat.NewService(chatFakeProvider{reply: "Hi!"},
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, Temperature: 0.2}, chat.Deps{Convs: convs, Msgs: msgs})
-	chatH := handlers.NewChat(chatSvc, convs, msgs)
+	chatH := handlers.NewChat(chatSvc, convs, msgs, nil, nil)
 
 	srv := httptest.NewServer(api.NewRouter(api.Deps{
 		Users: users, Sessions: sessions, Config: config.Config{CSRFSecret: testCSRFSecret}, Chat: chatH,

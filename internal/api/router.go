@@ -168,6 +168,7 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Post("/api/scheduled/tasks/{id}/confirm", deps.Scheduled.Confirm)
 			r.Post("/api/scheduled/tasks/{id}/run", deps.Scheduled.RunNow)
 			r.Post("/api/scheduled/tasks/{id}/read", deps.Scheduled.MarkRead)
+			r.Post("/api/scheduled/tasks/{id}/discard", deps.Scheduled.Discard)
 		}
 
 		if deps.Context != nil {
@@ -185,6 +186,8 @@ func mountAuth(r chi.Router, deps Deps) {
 
 		if deps.Documents != nil {
 			r.Get("/api/documents/capabilities", deps.Documents.Capabilities)
+		}
+		if deps.Documents != nil && deps.Documents.CRUDEnabled() {
 			r.Get("/api/documents/references", deps.Documents.ReferenceOptions)
 			r.Post(documentsPath, deps.Documents.Upload)
 			r.Get(documentsPath, deps.Documents.List)
@@ -222,7 +225,7 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Patch("/api/users/{id}", usersH.Update)
 			r.Delete("/api/users/{id}", usersH.Delete)
 
-			if deps.Documents != nil {
+			if deps.Documents != nil && deps.Documents.CRUDEnabled() {
 				r.Post(adminDocumentsPath, deps.Documents.UploadPublic)
 				r.Get(adminDocumentsPath, deps.Documents.ListPublic)
 				r.Delete("/api/admin/documents/{id}", deps.Documents.DeletePublic)

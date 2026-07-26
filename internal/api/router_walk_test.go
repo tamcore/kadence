@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/ingest"
+	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
 )
 
@@ -31,6 +33,29 @@ var publicAllowlist = map[string]bool{
 // routeParam matches a chi path parameter placeholder, e.g. "{id}".
 var routeParam = regexp.MustCompile(`\{[^}]+\}`)
 
+type walkDocumentIngester struct{}
+
+func (walkDocumentIngester) Ingest(
+	context.Context, *int64, string, string, string, []byte,
+) (model.Document, error) {
+	return model.Document{}, nil
+}
+
+type walkDocumentRepo struct{}
+
+func (walkDocumentRepo) ListByOwner(context.Context, int64) ([]model.Document, error) {
+	return nil, nil
+}
+func (walkDocumentRepo) ListPublic(context.Context) ([]model.Document, error) {
+	return nil, nil
+}
+func (walkDocumentRepo) Delete(context.Context, int64, int64) error {
+	return nil
+}
+func (walkDocumentRepo) DeletePublic(context.Context, int64) error {
+	return nil
+}
+
 // fullDeps builds Deps with every handler populated (backed by nil-safe,
 // never-invoked-for-anonymous-requests fakes/repos) so chi.Walk discovers the
 // full route table, including handlers gated behind optional Deps fields.
@@ -40,11 +65,13 @@ func fullDeps() api.Deps {
 	cfg := config.Config{}
 
 	return api.Deps{
-		Users:       users,
-		Sessions:    sessions,
-		Config:      cfg,
-		Chat:        handlers.NewChat(nil, nil, nil),
-		Documents:   handlers.NewDocuments(nil, nil, ingest.UploadCapabilities{}),
+		Users:    users,
+		Sessions: sessions,
+		Config:   cfg,
+		Chat:     handlers.NewChat(nil, nil, nil, nil, nil),
+		Documents: handlers.NewDocuments(
+			walkDocumentIngester{}, walkDocumentRepo{}, ingest.UploadCapabilities{},
+		),
 		Context:     handlers.NewContext(nil, nil),
 		Credentials: handlers.NewCredentials(nil),
 		MCP:         handlers.NewMCP(nil, nil, nil, false, 10),
@@ -117,10 +144,33 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 		"PATCH /api/scheduled/tasks/{id}", "DELETE /api/scheduled/tasks/{id}",
 		"POST /api/scheduled/tasks/{id}/messages", "POST /api/scheduled/tasks/{id}/confirm",
 		"POST /api/scheduled/tasks/{id}/run", "POST /api/scheduled/tasks/{id}/read",
+		"POST /api/scheduled/tasks/{id}/discard",
 		"GET /api/admin/mcp-audit", "GET /api/admin/mcp-audit/{id}",
 	} {
 		if !seen[key] {
 			t.Errorf("scheduled route %q was never registered", key)
 		}
+	}
+}
+
+func TestRouterDoesNotExposeDiscardWhenScheduledIsDisabled(t *testing.T) {
+	users := store.NewUserRepository(nil)
+	sessions := store.NewSessionRepository(nil)
+	router := api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: config.Config{}})
+	chiRouter, ok := router.(chi.Router)
+	if !ok {
+		t.Fatalf("NewRouter() = %T, want chi.Router", router)
+	}
+	seen := false
+	if err := chi.Walk(chiRouter, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method == http.MethodPost && route == "/api/scheduled/tasks/{id}/discard" {
+			seen = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	if seen {
+		t.Fatal("discard route registered without Scheduled handler")
 	}
 }

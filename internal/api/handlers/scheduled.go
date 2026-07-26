@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/model"
@@ -33,6 +34,7 @@ type ScheduledLifecycle interface {
 	Delete(context.Context, int64, string) error
 	RunNow(context.Context, int64, string) (model.ScheduledTaskRun, error)
 	MarkRead(context.Context, int64, string) error
+	DiscardChatDraft(context.Context, int64, string) error
 }
 
 // Scheduled exposes the opt-in authenticated definition and lifecycle API.
@@ -411,6 +413,29 @@ func (h *Scheduled) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.UserFromContext(r.Context())
 	if err := h.service.Delete(r.Context(), u.ID, chi.URLParam(r, "id")); err != nil {
+		h.writeLifecycleError(w, err)
+		return
+	}
+	RespondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// Discard hard-removes an unconfirmed draft created from a chat handoff.
+// Established tasks keep using Delete, which is deliberately a soft delete.
+func (h *Scheduled) Discard(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if _, err := uuid.Parse(id); err != nil {
+		RespondError(w, http.StatusBadRequest, "valid id is required")
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	if err := h.service.DiscardChatDraft(r.Context(), u.ID, id); err != nil {
+		if errors.Is(err, scheduled.ErrInvalidTransition) {
+			RespondError(w, http.StatusConflict, "scheduled task conflict")
+			return
+		}
 		h.writeLifecycleError(w, err)
 		return
 	}
