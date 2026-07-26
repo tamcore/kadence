@@ -38,6 +38,7 @@ test('sends and reloads an attachment-only screenshot turn', async ({ page }) =>
 
 	await expect(page.getByRole('img', { name: 'chat-screenshot.png' })).toBeVisible();
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
+	await expect(page).toHaveURL(/\/chat\/[^/]+$/);
 	await page.reload();
 	await expect(page.getByRole('link', { name: 'Open chat-screenshot.png' })).toBeVisible();
 });
@@ -78,6 +79,7 @@ test('explicitly references private and public documents and preserves them on r
 	await expect(references).toContainText('chat-public-reference.pdf');
 	await expect(references).toContainText('Public reference');
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
+	await expect(page).toHaveURL(/\/chat\/[^/]+$/);
 	await page.reload();
 	await expect(page.getByRole('list', { name: 'Referenced documents' })).toContainText(
 		'chat-private-reference.pdf'
