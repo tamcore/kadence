@@ -6,6 +6,7 @@ export type ActionMenuItem =
 	| {
 				separator?: false;
 				label: string;
+				ariaLabel?: string;
 				href?: string;
 				danger?: boolean;
 				disabled?: boolean;
@@ -51,10 +52,15 @@ export type ActionMenuItem =
 		const menu = getMenu();
 		if (!menu || !triggerElement) return;
 		const rect = triggerElement.getBoundingClientRect();
-		const width = Math.min(224, window.innerWidth - 16);
-		const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-		const below = rect.bottom + 6;
-		const top = Math.min(below, window.innerHeight - 12);
+		const edge = 8;
+		const gap = 6;
+		const menuRect = menu.getBoundingClientRect();
+		const width = Math.min(menuRect.width || menu.offsetWidth || 224, window.innerWidth - edge * 2);
+		const height = Math.min(menuRect.height || menu.offsetHeight || 240, window.innerHeight - edge * 2);
+		const left = Math.max(edge, Math.min(rect.right - width, window.innerWidth - width - edge));
+		const below = rect.bottom + gap;
+		const above = rect.top - height - gap;
+		const top = Math.max(edge, Math.min(below + height > window.innerHeight - edge ? above : below, window.innerHeight - height - edge));
 		menu.style.setProperty('--action-menu-left', `${left}px`);
 		menu.style.setProperty('--action-menu-top', `${top}px`);
 	}
@@ -66,8 +72,9 @@ export type ActionMenuItem =
 		if (currentlyOpen && currentlyOpen !== getMenu()) currentlyOpen.hidePopover?.();
 		open = true;
 		tick().then(() => {
-			placeMenu();
 			getMenu()?.showPopover?.();
+			placeMenu();
+			focusItem(1, 'first');
 		});
 	}
 
@@ -169,14 +176,16 @@ export type ActionMenuItem =
 		{#each items as item, index (`${index}-${item.separator ? 'separator' : item.label}`)}
 			{#if item.separator}
 				<div class="action-menu-separator" role="separator"></div>
-			{:else if item.href}
-				<a class:danger={item.danger} role="menuitem" href={item.href} onclick={() => void select(item)}>{item.label}</a>
+			{:else if item.href && !item.disabled}
+				<a class:danger={item.danger} role="menuitem" href={item.href} aria-label={item.ariaLabel} onclick={() => void select(item)}>{item.label}</a>
 			{:else}
 				<button
 					type="button"
 					class:danger={item.danger}
 					role="menuitem"
 					disabled={item.disabled}
+					aria-disabled={item.disabled ? 'true' : undefined}
+					aria-label={item.ariaLabel}
 					onclick={() => void select(item)}
 				>{item.label}</button>
 			{/if}

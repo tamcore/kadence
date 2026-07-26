@@ -119,12 +119,26 @@ export async function renameConversation(id: string, title: string): Promise<voi
 	await refreshConversations();
 }
 
+function compareConversationTie(a: Conversation, b: Conversation): number {
+	return b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id);
+}
+
+function sortConversations(items: Conversation[]): Conversation[] {
+	const pinned = items
+		.filter((item) => item.pinnedAt !== null)
+		.sort((a, b) => b.pinnedAt!.localeCompare(a.pinnedAt!) || compareConversationTie(a, b));
+	const recents = items
+		.filter((item) => item.pinnedAt === null)
+		.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt) || compareConversationTie(a, b));
+	return [...pinned, ...recents];
+}
+
 // pinConversation waits for the canonical server response before changing the
 // list. This deliberately avoids optimistic state so a failed request leaves
 // the rendered Pinned/Recents partition exactly as it was.
 export async function pinConversation(id: string, pinned: boolean): Promise<void> {
 	const updated = await chatApi.pinConversation(id, pinned);
-	conversations.update((items) => items.map((item) => (item.id === id ? updated : item)));
+	conversations.update((items) => sortConversations(items.map((item) => (item.id === id ? updated : item))));
 }
 
 // appendTextDelta returns a copy of parts with delta appended to the trailing

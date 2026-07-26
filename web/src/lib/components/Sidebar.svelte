@@ -22,8 +22,8 @@
 	import Input from '$lib/components/Input.svelte';
 	import Button from '$lib/components/Button.svelte';
 
-	const PINNED_COLLAPSED_KEY = 'kadence.sidebar.pinned.collapsed';
-	const RECENTS_COLLAPSED_KEY = 'kadence.sidebar.recents.collapsed';
+	const PINNED_EXPANDED_KEY = 'kadence_sidebar_pinned_expanded';
+	const RECENTS_EXPANDED_KEY = 'kadence_sidebar_recents_expanded';
 	const pinnedSectionId = 'sidebar-pinned-conversations';
 	const recentSectionId = 'sidebar-recent-conversations';
 
@@ -32,8 +32,8 @@
 	let renameValue = $state('');
 	let renameError = $state('');
 	let actionError = $state('');
-	let pinnedCollapsed = $state(false);
-	let recentsCollapsed = $state(false);
+	let pinnedExpanded = $state(true);
+	let recentsExpanded = $state(true);
 
 	let pinned = $derived($conversations.filter((conversation) => conversation.pinnedAt !== null));
 	let recents = $derived($conversations.filter((conversation) => conversation.pinnedAt === null));
@@ -41,8 +41,8 @@
 	let initials = $derived(userName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase());
 
 	onMount(() => {
-		pinnedCollapsed = window.localStorage.getItem(PINNED_COLLAPSED_KEY) === 'true';
-		recentsCollapsed = window.localStorage.getItem(RECENTS_COLLAPSED_KEY) === 'true';
+		pinnedExpanded = window.localStorage.getItem(PINNED_EXPANDED_KEY) !== 'false';
+		recentsExpanded = window.localStorage.getItem(RECENTS_EXPANDED_KEY) !== 'false';
 		void refreshConversations();
 		if ($currentUser?.scheduledEnabled) void refreshScheduled();
 	});
@@ -110,23 +110,24 @@
 	function conversationItems(conversation: Conversation): ActionMenuItem[] {
 		const pinLabel = conversation.pinnedAt === null ? 'Pin' : 'Unpin';
 		return [
+			{ label: 'Share', ariaLabel: 'Share (coming soon)', disabled: true },
 			{ label: 'Rename', onSelect: () => requestRename(conversation.id, conversation.title) },
-			{ label: pinLabel, onSelect: () => togglePinned(conversation) },
 			{ separator: true },
-			{ label: 'Share', disabled: true },
-			{ label: 'Archive', disabled: true },
+			{ label: pinLabel, onSelect: () => togglePinned(conversation) },
+			{ label: 'Archive', ariaLabel: 'Archive (coming soon)', disabled: true },
+			{ separator: true },
 			{ label: 'Delete', danger: true, onSelect: () => requestDelete(conversation.id) }
 		];
 	}
 
 	function toggleSection(section: 'pinned' | 'recents'): void {
 		if (section === 'pinned') {
-			pinnedCollapsed = !pinnedCollapsed;
-			window.localStorage.setItem(PINNED_COLLAPSED_KEY, String(pinnedCollapsed));
+			pinnedExpanded = !pinnedExpanded;
+			window.localStorage.setItem(PINNED_EXPANDED_KEY, String(pinnedExpanded));
 			return;
 		}
-		recentsCollapsed = !recentsCollapsed;
-		window.localStorage.setItem(RECENTS_COLLAPSED_KEY, String(recentsCollapsed));
+		recentsExpanded = !recentsExpanded;
+		window.localStorage.setItem(RECENTS_EXPANDED_KEY, String(recentsExpanded));
 	}
 
 	async function handleLogout(): Promise<void> {
@@ -185,40 +186,38 @@
 			<p class="action-error" role="status">{actionError}</p>
 		{/if}
 
-		<section class="conversation-section">
-			<button
-				class="section-toggle"
-				aria-expanded={!pinnedCollapsed}
-				aria-controls={pinnedSectionId}
-				onclick={() => toggleSection('pinned')}
-			>
-				<span>Pinned</span><span aria-hidden="true">{pinnedCollapsed ? '›' : '⌄'}</span>
-			</button>
-			{#if !pinnedCollapsed}
-				<div id={pinnedSectionId}>
-					{#if pinned.length}
+		{#if pinned.length}
+			<section class="conversation-section">
+				<button
+					class="section-toggle"
+					aria-expanded={pinnedExpanded}
+					aria-controls={pinnedSectionId}
+					onclick={() => toggleSection('pinned')}
+				>
+					<span>Pinned</span><span aria-hidden="true">{pinnedExpanded ? '⌄' : '›'}</span>
+				</button>
+				{#if pinnedExpanded}
+					<div id={pinnedSectionId}>
 						<ul class="conversation-list">
 							{#each pinned as conversation (conversation.id)}
 								{@render conversationRow(conversation)}
 							{/each}
 						</ul>
-					{:else}
-						<p class="empty">No pinned conversations</p>
-					{/if}
-				</div>
-			{/if}
-		</section>
+					</div>
+				{/if}
+			</section>
+		{/if}
 
 		<section class="conversation-section">
 			<button
 				class="section-toggle"
-				aria-expanded={!recentsCollapsed}
+				aria-expanded={recentsExpanded}
 				aria-controls={recentSectionId}
 				onclick={() => toggleSection('recents')}
 			>
-				<span>Recents</span><span aria-hidden="true">{recentsCollapsed ? '›' : '⌄'}</span>
+				<span>Recents</span><span aria-hidden="true">{recentsExpanded ? '⌄' : '›'}</span>
 			</button>
-			{#if !recentsCollapsed}
+			{#if recentsExpanded}
 				<div id={recentSectionId}>
 					{#if recents.length}
 						<ul class="conversation-list">
@@ -271,7 +270,7 @@
 		<div class="row-actions">
 			<button
 				type="button"
-				class="icon-button"
+				class="icon-button pin-action"
 				aria-label={conversation.pinnedAt === null ? 'Pin conversation' : 'Unpin conversation'}
 				onclick={() => void togglePinned(conversation)}
 			>
@@ -354,5 +353,8 @@
 	.rename-form { display: flex; flex-direction: column; gap: 12px; }
 	.rename-actions { display: flex; justify-content: flex-end; gap: 8px; }
 	.error { color: var(--danger); font-size: .85rem; }
-	@media (hover: none) { .row-actions { opacity: 1; } }
+	@media (hover: none), (pointer: coarse) {
+		.row-actions { opacity: 1; }
+		.row-actions .pin-action { display: none; }
+	}
 </style>

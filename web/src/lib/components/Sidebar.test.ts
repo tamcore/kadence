@@ -145,6 +145,15 @@ describe('Sidebar', () => {
 		expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
 	});
 
+	it('omits the entire Pinned section when every conversation is recent', () => {
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
+		]);
+		render(Sidebar, { props: {} });
+		expect(screen.queryByRole('button', { name: 'Pinned' })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Recents' })).toBeInTheDocument();
+	});
+
 	it('renders conversation titles', () => {
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
 			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: '2026-07-26T09:01:00Z' },
@@ -287,13 +296,15 @@ describe('Sidebar', () => {
 		]);
 		render(Sidebar, { props: {} });
 
-		await fireEvent.click(screen.getByRole('button', { name: 'Pin conversation' }));
+		const pin = screen.getByRole('button', { name: 'Pin conversation' });
+		expect(pin).toHaveClass('pin-action');
+		await fireEvent.click(pin);
 
 		expect(pinConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111', true);
 		expect(await screen.findByRole('status')).toHaveTextContent('network down');
 	});
 
-	it('remembers collapsed conversation sections', async () => {
+	it('remembers expanded conversation sections with the stable local-storage keys', async () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
 			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
@@ -302,6 +313,24 @@ describe('Sidebar', () => {
 		const toggle = screen.getByRole('button', { name: 'Recents' });
 		await fireEvent.click(toggle);
 		expect(toggle).toHaveAttribute('aria-expanded', 'false');
-		expect(window.localStorage.getItem('kadence.sidebar.recents.collapsed')).toBe('true');
+		expect(window.localStorage.getItem('kadence_sidebar_recents_expanded')).toBe('false');
+	});
+
+	it('orders the overflow actions and marks unavailable actions as coming soon', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
+		]);
+		render(Sidebar, { props: {} });
+		await openConversationMenu('First chat');
+
+		expect(screen.getAllByRole('menuitem', { hidden: true }).map((item) => item.getAttribute('aria-label') ?? item.textContent)).toEqual([
+			'Share (coming soon)',
+			'Rename',
+			'Pin',
+			'Archive (coming soon)',
+			'Delete'
+		]);
+		expect(screen.getAllByRole('separator', { hidden: true })).toHaveLength(2);
 	});
 });

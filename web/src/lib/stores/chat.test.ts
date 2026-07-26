@@ -1108,4 +1108,29 @@ describe('chat store', () => {
 
 		expect(get(conversations)).toEqual([original]);
 	});
+
+	it('pinConversation immediately partitions and sorts pinned and recent conversations from the canonical response', async () => {
+		conversations.set([
+			{ id: 'recent-old', title: 'Recent old', createdAt: '2026-07-20T00:00:00Z', lastActivityAt: '2026-07-21T00:00:00Z', pinnedAt: null },
+			{ id: 'target', title: 'Target', createdAt: '2026-07-22T00:00:00Z', lastActivityAt: '2026-07-24T00:00:00Z', pinnedAt: null },
+			{ id: 'pinned-old', title: 'Pinned old', createdAt: '2026-07-20T00:00:00Z', lastActivityAt: '2026-07-23T00:00:00Z', pinnedAt: '2026-07-23T00:00:00Z' },
+			{ id: 'recent-new', title: 'Recent new', createdAt: '2026-07-25T00:00:00Z', lastActivityAt: '2026-07-25T00:00:00Z', pinnedAt: null }
+		]);
+		pinConversationMock.mockResolvedValueOnce({
+			id: 'target',
+			title: 'Target',
+			createdAt: '2026-07-22T00:00:00Z',
+			lastActivityAt: '2026-07-24T00:00:00Z',
+			pinnedAt: '2026-07-26T00:00:00Z'
+		});
+
+		await pinConversation('target', true);
+
+		expect(get(conversations).map((conversation) => conversation.id)).toEqual([
+			'target',
+			'pinned-old',
+			'recent-new',
+			'recent-old'
+		]);
+	});
 });
