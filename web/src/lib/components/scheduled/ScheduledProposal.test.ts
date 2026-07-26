@@ -61,6 +61,30 @@ describe('ScheduledProposal', () => {
 		expect(screen.getByText(/1:00 AM/)).toBeInTheDocument();
 	});
 
+	it('renders static proposals when integrations arrive as null', () => {
+		render(ScheduledProposal, {
+			props: {
+				proposal: {
+					version: 1,
+					name: 'Smoke test reminder',
+					taskKind: 'reminder',
+					compiledPrompt: 'Smoke test.',
+					executionMode: 'static',
+					schedule: { At: '2026-12-31T22:59:00Z', Timezone: 'Europe/Berlin' },
+					timezone: 'Europe/Berlin',
+					authorizedTools: null as unknown as string[],
+					deliveryPolicy: 'always',
+					initialRun: 'wait',
+					staticMessage: 'Smoke test.'
+				},
+				onConfirm: vi.fn()
+			}
+		});
+
+		expect(screen.getByRole('heading', { name: 'Smoke test reminder' })).toBeInTheDocument();
+		expect(screen.getByText('None — this reminder runs without integrations')).toBeInTheDocument();
+	});
+
 	it('preserves interval and completion constraints in the human cadence', () => {
 		render(ScheduledProposal, {
 			props: {

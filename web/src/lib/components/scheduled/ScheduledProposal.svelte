@@ -12,6 +12,7 @@
 	} = $props();
 	const instanceID = $props.id();
 	const headingID = `proposal-name-${instanceID}`;
+	const authorizedTools = $derived(proposal.authorizedTools ?? []);
 
 	const humanizedSelectors = new Set([
 		'FREQ',
@@ -181,8 +182,8 @@
 		<div>
 			<dt>Integrations</dt>
 			<dd>
-				{proposal.authorizedTools.length
-					? proposal.authorizedTools.map(readableTool).join(', ')
+				{authorizedTools.length
+					? authorizedTools.map(readableTool).join(', ')
 					: 'None — this reminder runs without integrations'}
 			</dd>
 		</div>
