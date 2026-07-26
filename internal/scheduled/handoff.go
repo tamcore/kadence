@@ -397,7 +397,7 @@ func chatArtifact(row store.HydratedChatHandoff, reused bool) (ChatArtifact, err
 }
 
 func proposalFromTask(task model.ScheduledTask) *Proposal {
-	proposal := &Proposal{Version: task.Version, Name: task.Name, TaskKind: TaskKind(task.Kind), CompiledPrompt: task.CompiledPrompt, ExecutionMode: ExecutionMode(task.ExecutionMode), Timezone: task.Timezone, AuthorizedTools: append([]string(nil), task.AuthorizedTools...), DeliveryPolicy: DeliveryPolicy(task.DeliveryPolicy), InitialRun: InitialRun(task.InitialRun), StopCondition: task.StopCondition, StaticMessage: task.StaticMessage}
+	proposal := &Proposal{Version: task.Version, Name: task.Name, TaskKind: TaskKind(task.Kind), CompiledPrompt: task.CompiledPrompt, ExecutionMode: ExecutionMode(task.ExecutionMode), Timezone: task.Timezone, AuthorizedTools: append([]string{}, task.AuthorizedTools...), DeliveryPolicy: DeliveryPolicy(task.DeliveryPolicy), InitialRun: InitialRun(task.InitialRun), StopCondition: task.StopCondition, StaticMessage: task.StaticMessage}
 	if task.OneOffAt != nil {
 		proposal.Schedule.At = *task.OneOffAt
 	}

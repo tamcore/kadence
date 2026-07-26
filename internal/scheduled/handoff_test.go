@@ -361,6 +361,17 @@ func TestHydrateChatArtifactsGroupsAndSorts(t *testing.T) {
 	}
 }
 
+func TestProposalFromTaskUsesEmptyToolArray(t *testing.T) {
+	proposal := proposalFromTask(model.ScheduledTask{
+		Version: 1, Name: "Reminder", Kind: model.ScheduledTaskKindReminder,
+		CompiledPrompt: "Remind the user.", ExecutionMode: string(ExecutionModeStatic),
+		Timezone: handoffTestTimezoneBerlin,
+	})
+	if proposal.AuthorizedTools == nil || len(proposal.AuthorizedTools) != 0 {
+		t.Fatalf("authorized tools = %#v, want non-nil empty slice", proposal.AuthorizedTools)
+	}
+}
+
 func TestConfirmSoleChatDraftRequiresExactlyOneReadyDraft(t *testing.T) {
 	at := time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)
 	ready := handoffRow(1, model.ScheduledHandoffStateReady)
