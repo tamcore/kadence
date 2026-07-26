@@ -438,6 +438,15 @@ async function consumeStream(
 			} else if (ev.type === 'scheduled_artifact') {
 				messages.update((current) => {
 					const copy = [...current];
+					const existingIdx = copy.findIndex((message) =>
+						message.scheduledArtifacts?.some(
+							(artifact) => artifact.handoffId === ev.scheduledArtifact.handoffId
+						)
+					);
+					if (existingIdx >= 0) {
+						copy[existingIdx] = upsertScheduledPart(copy[existingIdx], ev.scheduledArtifact);
+						return copy;
+					}
 					const assistant = copy[assistantIdx];
 					if (!assistant) return current;
 					copy[assistantIdx] = upsertScheduledPart(assistant, ev.scheduledArtifact);

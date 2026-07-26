@@ -54,6 +54,25 @@ type ChatArtifact struct {
 	Reused             bool          `json:"reused,omitempty"`
 }
 
+// ChatConfirmationStatus describes deterministic natural-language
+// confirmation resolution for one ordinary chat conversation.
+type ChatConfirmationStatus string
+
+const (
+	ChatConfirmationNone       ChatConfirmationStatus = "none"
+	ChatConfirmationMultiple   ChatConfirmationStatus = "multiple"
+	ChatConfirmationNeedsInput ChatConfirmationStatus = "needs_input"
+	ChatConfirmationConfirmed  ChatConfirmationStatus = "confirmed"
+	ChatConfirmationResolved   ChatConfirmationStatus = "resolved"
+)
+
+// ChatConfirmation reports whether an affirmation had zero, one, or multiple
+// pending chat-created drafts. Artifact is set only after a successful confirm.
+type ChatConfirmation struct {
+	Status   ChatConfirmationStatus
+	Artifact *ChatArtifact
+}
+
 // DraftFromChat creates one idempotent, bounded Scheduled definition draft.
 func (s *Service) DraftFromChat(ctx context.Context, actor Actor, req HandoffRequest) (ChatArtifact, error) {
 	if err := s.readyHandoff(); err != nil {
@@ -133,6 +152,51 @@ func (s *Service) HydrateChatArtifacts(ctx context.Context, userID int64, conver
 		sort.SliceStable(out[messageID], func(i, j int) bool { return out[messageID][i].Ordinal < out[messageID][j].Ordinal })
 	}
 	return out, nil
+}
+
+// ConfirmSoleChatDraft activates exactly one owner-scoped ready draft from
+// sourceConversationID. Multiple drafts never cause a bulk mutation.
+func (s *Service) ConfirmSoleChatDraft(
+	ctx context.Context, actor Actor, sourceConversationID string,
+) (ChatConfirmation, error) {
+	if err := s.readyHandoff(); err != nil {
+		return ChatConfirmation{}, err
+	}
+	if strings.TrimSpace(sourceConversationID) == "" {
+		return ChatConfirmation{}, errors.New("scheduled: source conversation is required")
+	}
+	rows, err := s.deps.ChatHandoffs.ListPendingBySourceConversation(ctx, actor.ID, sourceConversationID)
+	if err != nil {
+		return ChatConfirmation{}, fmt.Errorf("scheduled: list pending chat drafts: %w", err)
+	}
+	switch len(rows) {
+	case 0:
+		return ChatConfirmation{Status: ChatConfirmationNone}, nil
+	case 1:
+	default:
+		return ChatConfirmation{Status: ChatConfirmationMultiple}, nil
+	}
+	row := rows[0]
+	if row.Task == nil || row.Task.ID == "" {
+		return ChatConfirmation{}, errors.New("scheduled: confirmable chat handoff has no task")
+	}
+	if row.Handoff.ArtifactState != model.ScheduledHandoffStateReady ||
+		strings.TrimSpace(row.Task.CompiledPrompt) == "" {
+		return ChatConfirmation{Status: ChatConfirmationNeedsInput}, nil
+	}
+	confirmed, err := s.Confirm(ctx, actor, row.Task.ID, row.Task.Version)
+	if errors.Is(err, ErrStaleProposal) {
+		return ChatConfirmation{Status: ChatConfirmationResolved}, nil
+	}
+	if err != nil {
+		return ChatConfirmation{}, err
+	}
+	row.Task = &confirmed
+	artifact, err := chatArtifact(row, false)
+	if err != nil {
+		return ChatConfirmation{}, err
+	}
+	return ChatConfirmation{Status: ChatConfirmationConfirmed, Artifact: &artifact}, nil
 }
 
 // DiscardChatDraft discards only an owner-scoped, still-draft chat task.

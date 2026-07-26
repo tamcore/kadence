@@ -234,7 +234,10 @@ func TestExecutorGatherCallsOnlyAuthorizedToolsAndSynthesizesToolFree(t *testing
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	worker := &executorProvider{toolReplies: []provider.StreamResult{
 		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: `{"limit":1}`}}},
-		{Content: `{"status":"deliver","summary":"New run","evidence":["5 km"],"monitoringState":{"cursor":1}}`},
+		{ToolCalls: []provider.ToolCall{{
+			ID: "outcome", Name: submitScheduledOutcomeTool,
+			Arguments: `{"status":"deliver","summary":"New run","evidence":["5 km"],"monitoringState":{"cursor":1}}`,
+		}}},
 	}}
 	synthesis := &executorProvider{reply: "You ran 5 km."}
 	store := &executorStore{}
@@ -253,6 +256,13 @@ func TestExecutorGatherCallsOnlyAuthorizedToolsAndSynthesizesToolFree(t *testing
 	}
 	if !slices.Equal(catalog.users, []string{executorTestUsername}) || !slices.Equal(snapshot.calls, []string{`data__read:{"limit":1}`}) {
 		t.Fatalf("owner dispatch users=%v calls=%v", catalog.users, snapshot.calls)
+	}
+	for _, request := range worker.requests {
+		if !slices.ContainsFunc(request.Tools, func(tool provider.ToolDefinition) bool {
+			return tool.Name == submitScheduledOutcomeTool
+		}) {
+			t.Fatalf("worker request omitted outcome tool: %+v", request.Tools)
+		}
 	}
 	if len(snapshot.metadata) != 1 {
 		t.Fatalf("audit metadata calls = %d, want 1", len(snapshot.metadata))
@@ -483,6 +493,13 @@ func TestExecutorCoversGatherValidationFailures(t *testing.T) {
 			c.Task.CompiledPrompt = strings.Repeat("p", maxEvidenceContextBytes+1)
 		}, code: failureEvidenceTooLarge},
 		{name: "invalid outcome", replies: []provider.StreamResult{{Content: `{}`}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureInvalidOutcome},
+		{name: "malformed outcome tool", replies: []provider.StreamResult{{ToolCalls: []provider.ToolCall{{
+			Name: submitScheduledOutcomeTool, Arguments: `[]`,
+		}}}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureInvalidOutcome},
+		{name: "mixed outcome and data tools", replies: []provider.StreamResult{{ToolCalls: []provider.ToolCall{
+			{Name: submitScheduledOutcomeTool, Arguments: `{"status":"deliver","summary":"Observed","evidence":[],"monitoringState":{}}`},
+			{Name: executorDataTool, Arguments: `{}`},
+		}}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureInvalidOutcome},
 		{name: "malformed arguments", replies: []provider.StreamResult{{ToolCalls: []provider.ToolCall{{Name: executorDataTool, Arguments: `[]`}}}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureMalformedToolCall},
 		{name: "tool error", replies: []provider.StreamResult{{ToolCalls: []provider.ToolCall{{Name: executorDataTool, Arguments: `{}`}}}}, mutate: func(_ *Executor, _ *model.ClaimedScheduledTask, _ *executorCatalog, s *executorSnapshot) {
 			s.callErr = errors.New("call")

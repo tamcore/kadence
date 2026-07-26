@@ -22,6 +22,7 @@ const (
 	handoffOtherTool          = "other"
 	handoffDefinitionID       = "definition-1"
 	handoffTestVisibleTool    = "visible"
+	handoffTestSourceChat     = "chat-1"
 )
 
 type handoffStore struct {
@@ -33,6 +34,9 @@ type handoffStore struct {
 	failedCode  string
 	failedRetry bool
 	list        []store.HydratedChatHandoff
+	confirmable []store.HydratedChatHandoff
+	confirmUser int64
+	confirmChat string
 	discardErr  error
 	cleanupErr  error
 }
@@ -62,6 +66,10 @@ func (f *handoffStore) MarkTaskFailed(_ context.Context, _ int64, _ string, code
 func (f *handoffStore) ListByAssistantMessages(context.Context, int64, string, []int64) ([]store.HydratedChatHandoff, error) {
 	return f.list, nil
 }
+func (f *handoffStore) ListPendingBySourceConversation(_ context.Context, userID int64, conversationID string) ([]store.HydratedChatHandoff, error) {
+	f.confirmUser, f.confirmChat = userID, conversationID
+	return f.confirmable, nil
+}
 func (f *handoffStore) DiscardDraft(context.Context, int64, string) error    { return f.discardErr }
 func (f *handoffStore) CleanupDrafts(context.Context, int64, []string) error { return f.cleanupErr }
 
@@ -76,7 +84,10 @@ func (f *handoffMessages) ListRecentDefinitionByConversation(context.Context, st
 	return append([]model.Message(nil), f.messages...), nil
 }
 
-type handoffTasks struct{ task model.ScheduledTask }
+type handoffTasks struct {
+	task         model.ScheduledTask
+	confirmCalls int
+}
 
 func (f *handoffTasks) Create(context.Context, model.ScheduledTask) (model.ScheduledTask, error) {
 	return model.ScheduledTask{}, errors.New("unused")
@@ -103,8 +114,14 @@ func (f *handoffTasks) SaveProposal(_ context.Context, task model.ScheduledTask,
 	f.task = task
 	return task, nil
 }
-func (f *handoffTasks) ConfirmProposal(context.Context, string, int64, int, time.Time) (model.ScheduledTask, error) {
-	return model.ScheduledTask{}, errors.New("unused")
+func (f *handoffTasks) ConfirmProposal(_ context.Context, taskID string, _ int64, expectedVersion int, next time.Time) (model.ScheduledTask, error) {
+	f.confirmCalls++
+	if f.task.ID != taskID || f.task.Version != expectedVersion {
+		return model.ScheduledTask{}, store.ErrStaleScheduledProposal
+	}
+	f.task.State = model.ScheduledTaskStateActive
+	f.task.NextRunAt = new(next)
+	return f.task, nil
 }
 func (f *handoffTasks) SoftDelete(context.Context, string, int64) error { return errors.New("unused") }
 func (f *handoffTasks) RunNow(context.Context, int64, string, string, time.Time) (model.ScheduledTaskRun, error) {
@@ -144,7 +161,7 @@ func handoffRow(ordinal int, state string) store.HydratedChatHandoff {
 
 func TestHandoffRequestBounds(t *testing.T) {
 	actor := Actor{ID: 7, Username: executorTestUsername, Timezone: handoffTestTimezoneBerlin}
-	base := HandoffRequest{SourceConversationID: "chat-1", SourceUserMessageID: 11, SourceContent: "exact source", Ordinal: 1, Instruction: " Check weather "}
+	base := HandoffRequest{SourceConversationID: handoffTestSourceChat, SourceUserMessageID: 11, SourceContent: "exact source", Ordinal: 1, Instruction: " Check weather "}
 	for _, tc := range []struct {
 		name    string
 		mutate  func(*HandoffRequest)
@@ -292,7 +309,7 @@ func TestSourceFingerprintUsesExactContent(t *testing.T) {
 
 func TestDraftFromChatReusesExistingAndPersistsSafeFailure(t *testing.T) {
 	actor := Actor{ID: 7, Username: executorTestUsername, Timezone: handoffTestTimezoneBerlin}
-	req := HandoffRequest{SourceConversationID: "chat-1", SourceUserMessageID: 11, SourceContent: "source", Ordinal: 1, Instruction: "weather"}
+	req := HandoffRequest{SourceConversationID: handoffTestSourceChat, SourceUserMessageID: 11, SourceContent: "source", Ordinal: 1, Instruction: "weather"}
 	t.Run("confirmed existing is reused without compiler", func(t *testing.T) {
 		handoffs, compiler := &handoffStore{row: handoffRow(1, model.ScheduledHandoffStateReady)}, &handoffCompiler{}
 		svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: compiler, ChatHandoffs: handoffs})
@@ -338,9 +355,64 @@ func TestHydrateChatArtifactsGroupsAndSorts(t *testing.T) {
 	assistantID := int64(42)
 	first.Handoff.AssistantMessageID, second.Handoff.AssistantMessageID = &assistantID, &assistantID
 	svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: &handoffCompiler{}, ChatHandoffs: &handoffStore{list: []store.HydratedChatHandoff{first, second}}})
-	artifacts, err := svc.HydrateChatArtifacts(context.Background(), 7, "chat-1", []int64{assistantID})
+	artifacts, err := svc.HydrateChatArtifacts(context.Background(), 7, handoffTestSourceChat, []int64{assistantID})
 	if err != nil || len(artifacts[assistantID]) != 2 || artifacts[assistantID][0].Ordinal != 1 || artifacts[assistantID][1].Ordinal != 2 {
 		t.Fatalf("artifacts=%+v err=%v", artifacts, err)
+	}
+}
+
+func TestConfirmSoleChatDraftRequiresExactlyOneReadyDraft(t *testing.T) {
+	at := time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)
+	ready := handoffRow(1, model.ScheduledHandoffStateReady)
+	ready.Task.Name = "Race weather"
+	ready.Task.CompiledPrompt = "Check race weather"
+	ready.Task.OneOffAt = &at
+	incomplete := ready
+	incomplete.Task = new(model.ScheduledTask)
+	*incomplete.Task = *ready.Task
+	incomplete.Task.CompiledPrompt = ""
+
+	for _, test := range []struct {
+		name        string
+		rows        []store.HydratedChatHandoff
+		wantStatus  ChatConfirmationStatus
+		wantConfirm int
+	}{
+		{name: "none", wantStatus: ChatConfirmationNone},
+		{name: "needs input", rows: []store.HydratedChatHandoff{incomplete}, wantStatus: ChatConfirmationNeedsInput},
+		{name: "multiple", rows: []store.HydratedChatHandoff{ready, ready}, wantStatus: ChatConfirmationMultiple},
+		{name: "sole", rows: []store.HydratedChatHandoff{ready}, wantStatus: ChatConfirmationConfirmed, wantConfirm: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handoffs := &handoffStore{confirmable: test.rows}
+			tasks := &handoffTasks{task: *ready.Task}
+			svc := NewService(ServiceDeps{
+				Conversations: handoffConversations{},
+				Messages:      &handoffMessages{},
+				Tasks:         tasks,
+				Compiler:      &handoffCompiler{},
+				ChatHandoffs:  handoffs,
+				Now:           func() time.Time { return at.Add(-time.Hour) },
+			})
+
+			result, err := svc.ConfirmSoleChatDraft(t.Context(), Actor{ID: 7}, handoffTestSourceChat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != test.wantStatus || tasks.confirmCalls != test.wantConfirm {
+				t.Fatalf("result=%+v confirm calls=%d", result, tasks.confirmCalls)
+			}
+			if handoffs.confirmUser != 7 || handoffs.confirmChat != handoffTestSourceChat {
+				t.Fatalf("confirmable query user=%d chat=%q", handoffs.confirmUser, handoffs.confirmChat)
+			}
+			if test.wantConfirm == 1 {
+				if result.Artifact == nil || result.Artifact.TaskID != ready.Task.ID ||
+					result.Artifact.TaskState != model.ScheduledTaskStateActive ||
+					result.Artifact.Proposal == nil || result.Artifact.Proposal.Name != "Race weather" {
+					t.Fatalf("confirmed artifact = %+v", result.Artifact)
+				}
+			}
+		})
 	}
 }
 

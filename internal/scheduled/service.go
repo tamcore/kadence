@@ -71,6 +71,7 @@ type ChatHandoffStore interface {
 	MarkTaskReady(context.Context, int64, string) error
 	MarkTaskFailed(context.Context, int64, string, string, bool) error
 	ListByAssistantMessages(context.Context, int64, string, []int64) ([]store.HydratedChatHandoff, error)
+	ListPendingBySourceConversation(context.Context, int64, string) ([]store.HydratedChatHandoff, error)
 	DiscardDraft(context.Context, int64, string) error
 	CleanupDrafts(context.Context, int64, []string) error
 }

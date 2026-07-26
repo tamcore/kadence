@@ -214,6 +214,20 @@ func TestChatScheduledHandoffLifecycleHydrationAndOwnerScope(t *testing.T) {
 	if rows, err := repo.ListByAssistantMessages(ctx, other.ID, source.ID, []int64{assistant.ID}); err != nil || len(rows) != 0 {
 		t.Fatalf("cross-owner hydration rows=%+v err=%v", rows, err)
 	}
+	pending, err := repo.ListPendingBySourceConversation(ctx, owner.ID, source.ID)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending rows=%+v err=%v", pending, err)
+	}
+	if rows, err := repo.ListPendingBySourceConversation(ctx, other.ID, source.ID); err != nil || len(rows) != 0 {
+		t.Fatalf("cross-owner pending rows=%+v err=%v", rows, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = $1 WHERE id = $2::uuid`, model.ScheduledTaskStateActive, first.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := repo.ListPendingBySourceConversation(ctx, owner.ID, source.ID); err != nil || len(rows) != 1 ||
+		rows[0].Task == nil || rows[0].Task.ID != second.Task.ID {
+		t.Fatalf("active task remained pending rows=%+v err=%v", rows, err)
+	}
 }
 
 func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {

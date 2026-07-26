@@ -197,6 +197,36 @@ func (r *ScheduledHandoffRepository) ListByAssistantMessages(
 	return out, rows.Err()
 }
 
+// ListPendingBySourceConversation returns at most two owner-scoped,
+// assistant-bound unresolved drafts. Two rows are enough for callers to
+// distinguish a sole draft from multiple pending tasks.
+func (r *ScheduledHandoffRepository) ListPendingBySourceConversation(
+	ctx context.Context, userID int64, conversationID string,
+) ([]HydratedChatHandoff, error) {
+	rows, err := r.pool.Query(ctx, handoffHydrationQuery+`
+	 WHERE h.user_id = $1 AND h.source_conversation_id = $2::uuid
+	   AND h.assistant_message_id IS NOT NULL
+	   AND h.artifact_state <> $3
+	   AND task.user_id = $1 AND task.state = $4
+	 ORDER BY h.created_at, h.invocation_ordinal
+	 LIMIT 2`,
+		userID, conversationID, model.ScheduledHandoffStateDismissed, model.ScheduledTaskStateDraft,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending chat handoffs: %w", err)
+	}
+	defer rows.Close()
+	var out []HydratedChatHandoff
+	for rows.Next() {
+		row, err := scanHydratedHandoff(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // DiscardDraft deletes one unconfirmed Scheduled draft and its definition
 // conversation, retaining a durable dismissed source-slot tombstone.
 func (r *ScheduledHandoffRepository) DiscardDraft(ctx context.Context, userID int64, taskID string) error {

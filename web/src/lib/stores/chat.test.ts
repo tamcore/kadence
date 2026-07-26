@@ -393,6 +393,50 @@ describe('chat store', () => {
 		]);
 	});
 
+	it('updates an existing scheduled card in place when confirmation arrives in a later turn', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'schedule race weather' },
+			{
+				id: 2,
+				role: 'assistant',
+				content: 'Please confirm.',
+				scheduledArtifacts: [
+					{
+						handoffId: 'handoff-1',
+						taskId: 'task-1',
+						ordinal: 1,
+						artifactState: 'ready',
+						taskState: 'draft'
+					}
+				]
+			}
+		]);
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 3 },
+			{ type: 'token', delta: 'Scheduled task activated.' },
+			{
+				type: 'scheduled_artifact',
+				scheduledArtifact: {
+					handoffId: 'handoff-1',
+					taskId: 'task-1',
+					ordinal: 1,
+					artifactState: 'ready',
+					taskState: 'active'
+				}
+			},
+			{ type: 'done', assistantMessageId: 4 }
+		]));
+
+		await sendMessage('Yes');
+
+		expect(get(messages)[1].scheduledArtifacts).toEqual([
+			expect.objectContaining({ handoffId: 'handoff-1', taskState: 'active' })
+		]);
+		expect(get(messages)[3].scheduledArtifacts).toBeUndefined();
+		expect(get(messages)[3].content).toBe('Scheduled task activated.');
+	});
+
 	it('keeps later tokens before sorted scheduled cards when an artifact arrives mid-stream', async () => {
 		streamChatMock.mockReturnValueOnce(events([
 			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
