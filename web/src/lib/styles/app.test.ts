@@ -14,8 +14,9 @@ describe('app mobile scroll containment', () => {
 		expect(styles).toMatch(
 			/\.main\s*>\s*main\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior-y:\s*contain;/
 		);
+		expect(styles).toMatch(/\.sidebar\s*\{[\s\S]*?overflow:\s*hidden;/);
 		expect(styles).toMatch(
-			/\.sidebar\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior-y:\s*contain;/
+			/\.sidebar-scroll\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior-y:\s*contain;/
 		);
 	});
 

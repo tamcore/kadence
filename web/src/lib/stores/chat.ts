@@ -119,6 +119,14 @@ export async function renameConversation(id: string, title: string): Promise<voi
 	await refreshConversations();
 }
 
+// pinConversation waits for the canonical server response before changing the
+// list. This deliberately avoids optimistic state so a failed request leaves
+// the rendered Pinned/Recents partition exactly as it was.
+export async function pinConversation(id: string, pinned: boolean): Promise<void> {
+	const updated = await chatApi.pinConversation(id, pinned);
+	conversations.update((items) => items.map((item) => (item.id === id ? updated : item)));
+}
+
 // appendTextDelta returns a copy of parts with delta appended to the trailing
 // text part, adding a new text part first if the last part is a tool (or none exist).
 function appendTextDelta(parts: MessagePart[], delta: string): MessagePart[] {

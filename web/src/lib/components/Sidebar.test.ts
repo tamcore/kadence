@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const newChatMock = vi.fn();
 const removeConversationMock = vi.fn();
 const renameConversationMock = vi.fn();
+const pinConversationMock = vi.fn();
 const gotoMock = vi.fn();
 const closeSidebarMock = vi.fn();
 
@@ -26,7 +27,8 @@ vi.mock('$lib/stores/chat', async () => {
 		newChat: (...a: unknown[]) => newChatMock(...a),
 		refreshConversations: vi.fn().mockResolvedValue(undefined),
 		removeConversation: (...a: unknown[]) => removeConversationMock(...a),
-		renameConversation: (...a: unknown[]) => renameConversationMock(...a)
+		renameConversation: (...a: unknown[]) => renameConversationMock(...a),
+		pinConversation: (...a: unknown[]) => pinConversationMock(...a)
 	};
 });
 
@@ -64,6 +66,7 @@ import { page } from '$app/stores';
 
 afterEach(() => {
 	vi.clearAllMocks();
+	window.localStorage.clear();
 	(conversations as unknown as { set: (v: unknown[]) => void }).set([]);
 	(conversationsRefreshError as unknown as { set: (v: boolean) => void }).set(false);
 	(page as unknown as { set: (v: unknown) => void }).set({
@@ -79,6 +82,10 @@ afterEach(() => {
 });
 
 describe('Sidebar', () => {
+	async function openConversationMenu(title: string): Promise<void> {
+		const { fireEvent } = await import('@testing-library/svelte');
+		await fireEvent.click(screen.getByRole('button', { name: `${title} actions` }));
+	}
 	it('shows decorative artwork without changing the Kadence link name', () => {
 		render(Sidebar, { props: {} });
 
@@ -126,6 +133,13 @@ describe('Sidebar', () => {
 		expect(screen.queryByRole('link', { name: /scheduled/i })).not.toBeInTheDocument();
 	});
 
+	it('keeps the header and account footer fixed around one central sidebar scroller', () => {
+		const { container } = render(Sidebar, { props: {} });
+		expect(container.querySelector('.sidebar-header')).toBeInTheDocument();
+		expect(container.querySelector('.sidebar-scroll')).toBeInTheDocument();
+		expect(container.querySelector('.sidebar-footer')).toBeInTheDocument();
+	});
+
 	it('shows empty state text when there are no conversations', () => {
 		render(Sidebar, { props: {} });
 		expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
@@ -133,18 +147,20 @@ describe('Sidebar', () => {
 
 	it('renders conversation titles', () => {
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' },
-			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: '2026-07-26T09:01:00Z' },
+			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat', pinnedAt: null }
 		]);
 		render(Sidebar, { props: {} });
 		expect(screen.getByText('First chat')).toBeInTheDocument();
 		expect(screen.getByText('Second chat')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Pinned' })).toHaveAttribute('aria-expanded', 'true');
+		expect(screen.getByRole('button', { name: 'Recents' })).toHaveAttribute('aria-expanded', 'true');
 	});
 
 	it('marks the conversation matching the current route as active', () => {
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' },
-			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null },
+			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat', pinnedAt: null }
 		]);
 		(page as unknown as { set: (v: unknown) => void }).set({
 			params: { id: '22222222-2222-2222-2222-222222222222' },
@@ -167,10 +183,11 @@ describe('Sidebar', () => {
 	it('asks for confirmation before deleting, and cancel keeps the conversation', async () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
 		]);
 		render(Sidebar, { props: {} });
-		await fireEvent.click(screen.getByRole('button', { name: /delete conversation/i }));
+		await openConversationMenu('First chat');
+		await fireEvent.click(screen.getByRole('menuitem', { name: /delete/i, hidden: true }));
 		expect(await screen.findByRole('dialog', { name: 'Delete conversation' })).toBeInTheDocument();
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -182,14 +199,15 @@ describe('Sidebar', () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		removeConversationMock.mockResolvedValueOnce(undefined);
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
 		]);
 		(page as unknown as { set: (v: unknown) => void }).set({
 			params: { id: '11111111-1111-1111-1111-111111111111' },
 			url: { pathname: '/chat/11111111-1111-1111-1111-111111111111' }
 		});
 		render(Sidebar, { props: {} });
-		await fireEvent.click(screen.getByRole('button', { name: /delete conversation/i }));
+		await openConversationMenu('First chat');
+		await fireEvent.click(screen.getByRole('menuitem', { name: /delete/i, hidden: true }));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
 		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
@@ -201,16 +219,16 @@ describe('Sidebar', () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		removeConversationMock.mockResolvedValueOnce(undefined);
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' },
-			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null },
+			{ id: '22222222-2222-2222-2222-222222222222', title: 'Second chat', pinnedAt: null }
 		]);
 		(page as unknown as { set: (v: unknown) => void }).set({
 			params: { id: '22222222-2222-2222-2222-222222222222' },
 			url: { pathname: '/chat/22222222-2222-2222-2222-222222222222' }
 		});
 		render(Sidebar, { props: {} });
-		const deleteButtons = screen.getAllByRole('button', { name: /delete conversation/i });
-		await fireEvent.click(deleteButtons[0]);
+		await openConversationMenu('First chat');
+		await fireEvent.click(screen.getByRole('menuitem', { name: /delete/i, hidden: true }));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
 		expect(removeConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
@@ -227,10 +245,11 @@ describe('Sidebar', () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		renameConversationMock.mockResolvedValueOnce(undefined);
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
 		]);
 		render(Sidebar, { props: {} });
-		await fireEvent.click(screen.getByRole('button', { name: /rename conversation/i }));
+		await openConversationMenu('First chat');
+		await fireEvent.click(screen.getByRole('menuitem', { name: /rename/i, hidden: true }));
 
 		const dialog = await screen.findByRole('dialog', { name: 'Rename conversation' });
 		const input = screen.getByLabelText('Title') as HTMLInputElement;
@@ -249,13 +268,40 @@ describe('Sidebar', () => {
 		const { fireEvent } = await import('@testing-library/svelte');
 		renameConversationMock.mockRejectedValueOnce(new Error('title too long'));
 		(conversations as unknown as { set: (v: unknown[]) => void }).set([
-			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat' }
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
 		]);
 		render(Sidebar, { props: {} });
-		await fireEvent.click(screen.getByRole('button', { name: /rename conversation/i }));
+		await openConversationMenu('First chat');
+		await fireEvent.click(screen.getByRole('menuitem', { name: /rename/i, hidden: true }));
 		const dialog = await screen.findByRole('dialog', { name: 'Rename conversation' });
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
 
 		expect(await screen.findByText('title too long')).toBeInTheDocument();
+	});
+
+	it('pins through the store and reports a failed action without changing the row', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		pinConversationMock.mockRejectedValueOnce(new Error('network down'));
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
+		]);
+		render(Sidebar, { props: {} });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Pin conversation' }));
+
+		expect(pinConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111', true);
+		expect(await screen.findByRole('status')).toHaveTextContent('network down');
+	});
+
+	it('remembers collapsed conversation sections', async () => {
+		const { fireEvent } = await import('@testing-library/svelte');
+		(conversations as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: '11111111-1111-1111-1111-111111111111', title: 'First chat', pinnedAt: null }
+		]);
+		render(Sidebar, { props: {} });
+		const toggle = screen.getByRole('button', { name: 'Recents' });
+		await fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute('aria-expanded', 'false');
+		expect(window.localStorage.getItem('kadence.sidebar.recents.collapsed')).toBe('true');
 	});
 });

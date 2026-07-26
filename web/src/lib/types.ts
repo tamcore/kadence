@@ -17,6 +17,8 @@ export interface Conversation {
 	id: string;
 	title: string;
 	createdAt: string;
+	lastActivityAt: string;
+	pinnedAt: string | null;
 }
 
 export type MessagePart =

@@ -7,6 +7,8 @@ const regenerateMessageMock = vi.fn();
 const getMessagesMock = vi.fn().mockResolvedValue([]);
 const listConversationsMock = vi.fn().mockResolvedValue([]);
 const renameConversationMock = vi.fn().mockResolvedValue({ id: '1', title: 'renamed' });
+
+const pinConversationMock = vi.fn();
 vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
 	editMessage: (...a: unknown[]) => editMessageMock(...a),
@@ -14,12 +16,14 @@ vi.mock('$lib/api/chat', () => ({
 	listConversations: (...a: unknown[]) => listConversationsMock(...a),
 	getMessages: (...a: unknown[]) => getMessagesMock(...a),
 	renameConversation: (...a: unknown[]) => renameConversationMock(...a),
+	pinConversation: (...a: unknown[]) => pinConversationMock(...a),
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
 }));
 
 import {
 	activeId,
 	chatError,
+	conversations,
 	conversationsRefreshError,
 	credentialRequest,
 	messages,
@@ -29,6 +33,7 @@ import {
 	regenerateMessage,
 	refreshConversations,
 	renameConversation,
+	pinConversation,
 	sendMessage,
 	sending,
 	stopGeneration
@@ -55,6 +60,7 @@ beforeEach(() => {
 	getMessagesMock.mockReset().mockResolvedValue([]);
 	listConversationsMock.mockReset().mockResolvedValue([]);
 	renameConversationMock.mockReset().mockResolvedValue({ id: '1', title: 'renamed' });
+	pinConversationMock.mockReset();
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -1067,5 +1073,39 @@ describe('chat store', () => {
 	it('renameConversation propagates the API error without swallowing it', async () => {
 		renameConversationMock.mockRejectedValueOnce(new Error('title too long'));
 		await expect(renameConversation('1', 'x'.repeat(100))).rejects.toThrow('title too long');
+	});
+
+	it('pinConversation replaces only the server-returned conversation after success', async () => {
+		const original = {
+			id: '1',
+			title: 'Morning run',
+			createdAt: '2026-07-26T08:00:00Z',
+			lastActivityAt: '2026-07-26T09:00:00Z',
+			pinnedAt: null
+		};
+		const updated = { ...original, pinnedAt: '2026-07-26T09:01:00Z' };
+		conversations.set([original]);
+		pinConversationMock.mockResolvedValueOnce(updated);
+
+		await pinConversation('1', true);
+
+		expect(pinConversationMock).toHaveBeenCalledWith('1', true);
+		expect(get(conversations)).toEqual([updated]);
+	});
+
+	it('pinConversation leaves the previous conversation state untouched on failure', async () => {
+		const original = {
+			id: '1',
+			title: 'Morning run',
+			createdAt: '2026-07-26T08:00:00Z',
+			lastActivityAt: '2026-07-26T09:00:00Z',
+			pinnedAt: null
+		};
+		conversations.set([original]);
+		pinConversationMock.mockRejectedValueOnce(new Error('network down'));
+
+		await expect(pinConversation('1', true)).rejects.toThrow('network down');
+
+		expect(get(conversations)).toEqual([original]);
 	});
 });

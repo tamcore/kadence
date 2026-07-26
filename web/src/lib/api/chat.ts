@@ -114,4 +114,6 @@ export const listConversations = () => api.get<Conversation[]>('/conversations')
 export const getMessages = (id: string) => api.get<ChatMessage[]>(`/conversations/${id}/messages`);
 export const renameConversation = (id: string, title: string) =>
 	api.patch<Conversation>(`/conversations/${id}`, { title });
+export const pinConversation = (id: string, pinned: boolean) =>
+	api.patch<Conversation>(`/conversations/${id}`, { pinned });
 export const deleteConversation = (id: string) => api.del<{ ok: boolean }>(`/conversations/${id}`);

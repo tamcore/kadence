@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
 import { goto } from '$app/navigation';
-import { editMessage, regenerateMessage, streamChat } from './chat';
+import { editMessage, pinConversation, regenerateMessage, streamChat } from './chat';
+import { api } from './client';
 import { setCsrfToken } from './client';
 
 function streamResponse(frames: string[]): Response {
@@ -176,5 +177,21 @@ describe('streamChat', () => {
 
 		expect(events).toEqual([{ type: 'error', message: 'chat request failed (500)' }]);
 		expect(goto).not.toHaveBeenCalled();
+	});
+});
+
+describe('conversation mutations', () => {
+	it('pins a conversation through the PATCH endpoint', async () => {
+		const patch = vi.spyOn(api, 'patch').mockResolvedValue({
+			id: 'conv-1',
+			title: 'Morning run',
+			createdAt: '2026-07-26T08:00:00Z',
+			lastActivityAt: '2026-07-26T09:00:00Z',
+			pinnedAt: '2026-07-26T09:01:00Z'
+		});
+
+		await pinConversation('conv-1', true);
+
+		expect(patch).toHaveBeenCalledWith('/conversations/conv-1', { pinned: true });
 	});
 });

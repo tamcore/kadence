@@ -42,9 +42,9 @@ a { color: var(--accent); }
 }
 .shell { display: grid; grid-template-columns: var(--sidebar-w) 1fr; flex: 1; min-height: 0; }
 .sidebar {
-	border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto;
-	overscroll-behavior-y: contain;
+	border-right: 1px solid var(--border); background: var(--surface); overflow: hidden;
 }
+.sidebar-scroll { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .main > main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .public-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
