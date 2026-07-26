@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tamcore/kadence/internal/api/handlers"
@@ -71,6 +72,50 @@ type fakeConvLister struct {
 	updatePinned     *bool
 	updatePinnedResp model.Conversation
 	getByIDResp      model.Conversation
+}
+
+type navigationConversationDTO struct {
+	ID             string  `json:"id"`
+	Title          string  `json:"title"`
+	PinnedAt       *string `json:"pinnedAt"`
+	LastActivityAt string  `json:"lastActivityAt"`
+	CreatedAt      string  `json:"createdAt"`
+}
+
+func assertNavigationConversationDTO(
+	t *testing.T, got navigationConversationDTO, wantID, wantTitle string,
+	wantPinned *time.Time, wantLastActivity, wantCreated time.Time,
+) {
+	t.Helper()
+	if got.ID != wantID || got.Title != wantTitle {
+		t.Fatalf("conversation id/title=%q/%q, want %q/%q", got.ID, got.Title, wantID, wantTitle)
+	}
+	if wantPinned == nil {
+		if got.PinnedAt != nil {
+			t.Fatalf("pinnedAt=%q, want null", *got.PinnedAt)
+		}
+	} else {
+		if got.PinnedAt == nil {
+			t.Fatal("pinnedAt is null, want RFC3339 timestamp")
+		}
+		pinnedAt, err := time.Parse(time.RFC3339, *got.PinnedAt)
+		if err != nil || !pinnedAt.Equal(*wantPinned) {
+			t.Fatalf("pinnedAt=%q parsed=%s err=%v, want=%s", *got.PinnedAt, pinnedAt, err, *wantPinned)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want time.Time
+	}{
+		{name: "lastActivityAt", raw: got.LastActivityAt, want: wantLastActivity},
+		{name: "createdAt", raw: got.CreatedAt, want: wantCreated},
+	} {
+		parsed, err := time.Parse(time.RFC3339, tc.raw)
+		if tc.raw == "" || err != nil || !parsed.Equal(tc.want) {
+			t.Fatalf("%s=%q parsed=%s err=%v, want=%s", tc.name, tc.raw, parsed, err, tc.want)
+		}
+	}
 }
 
 func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation, error) {
@@ -210,16 +255,23 @@ func TestListConversations(t *testing.T) {
 }
 
 func TestListConversationsIncludesNavigationState(t *testing.T) {
+	pinnedAt := time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC)
+	lastActivityAt := pinnedAt.Add(time.Hour)
+	createdAt := pinnedAt.Add(-time.Hour)
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{
-		ID: "conv-uuid-1", Title: "a",
+		ID: "conv-uuid-1", Title: "a", PinnedAt: &pinnedAt,
+		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
 	}}}, fakeMsgLister{}, nil, nil)
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
 	rec := httptest.NewRecorder()
 	h.ListConversations(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"pinnedAt":null`) ||
-		!strings.Contains(rec.Body.String(), `"lastActivityAt":`) {
+	var response struct {
+		Data []navigationConversationDTO `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil || rec.Code != http.StatusOK || len(response.Data) != 1 {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	assertNavigationConversationDTO(t, response.Data[0], "conv-uuid-1", "a", &pinnedAt, lastActivityAt, createdAt)
 }
 
 func TestMessagesSuccess(t *testing.T) {
@@ -545,25 +597,41 @@ func TestPatchConversationSuccess(t *testing.T) {
 }
 
 func TestPatchConversationPins(t *testing.T) {
-	convs := &fakeConvLister{}
+	pinnedAt := time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC)
+	lastActivityAt := pinnedAt.Add(time.Hour)
+	createdAt := pinnedAt.Add(-time.Hour)
+	convs := &fakeConvLister{updatePinnedResp: model.Conversation{
+		ID: "1", Title: "chat", PinnedAt: &pinnedAt,
+		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
+	}}
 	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `{"pinned":true}`))
-	if rec.Code != http.StatusOK || convs.updatePinned == nil || !*convs.updatePinned ||
-		!strings.Contains(rec.Body.String(), `"pinnedAt":`) ||
-		!strings.Contains(rec.Body.String(), `"lastActivityAt":`) {
+	var response struct {
+		Data navigationConversationDTO `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil || rec.Code != http.StatusOK || convs.updatePinned == nil || !*convs.updatePinned {
 		t.Fatalf("status=%d pinned=%v body=%s", rec.Code, convs.updatePinned, rec.Body.String())
 	}
+	assertNavigationConversationDTO(t, response.Data, "1", "chat", &pinnedAt, lastActivityAt, createdAt)
 }
 
 func TestPatchConversationUnpins(t *testing.T) {
-	convs := &fakeConvLister{}
+	lastActivityAt := time.Date(2026, time.July, 26, 13, 0, 0, 0, time.UTC)
+	createdAt := lastActivityAt.Add(-2 * time.Hour)
+	convs := &fakeConvLister{updatePinnedResp: model.Conversation{
+		ID: "1", Title: "chat", LastActivityAt: lastActivityAt, CreatedAt: createdAt,
+	}}
 	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, nil, nil)
 	rec := httptest.NewRecorder()
 	h.PatchConversation(rec, patchReq(t, `{"pinned":false}`))
-	if rec.Code != http.StatusOK || convs.updatePinned == nil || *convs.updatePinned {
+	var response struct {
+		Data navigationConversationDTO `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil || rec.Code != http.StatusOK || convs.updatePinned == nil || *convs.updatePinned {
 		t.Fatalf("status=%d pinned=%v body=%s", rec.Code, convs.updatePinned, rec.Body.String())
 	}
+	assertNavigationConversationDTO(t, response.Data, "1", "chat", nil, lastActivityAt, createdAt)
 }
 
 func TestPatchConversationRejectsMixedNavigationAndTitleFields(t *testing.T) {

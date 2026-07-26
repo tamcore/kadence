@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"testing"
@@ -227,16 +228,33 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recentNew, err := conversations.Create(ctx, owner.ID, "recent new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recentOld, err := conversations.Create(ctx, owner.ID, "recent old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tieFirst, err := conversations.Create(ctx, owner.ID, "tie first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tieSecond, err := conversations.Create(ctx, owner.ID, "tie second")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conversations.CreateWithKind(ctx, owner.ID, "scheduled", model.ConversationKindScheduled); err != nil {
 		t.Fatal(err)
 	}
-	firstActivity := time.Date(2026, time.July, 1, 10, 0, 0, 0, time.UTC)
-	secondActivity := firstActivity.Add(time.Hour)
-	if _, err := pool.Exec(ctx, `UPDATE conversations SET last_activity_at = $2 WHERE id = $1::uuid`, first.ID, firstActivity); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE conversations SET last_activity_at = $2 WHERE id = $1::uuid`, second.ID, secondActivity); err != nil {
-		t.Fatal(err)
+	base := time.Date(2026, time.July, 1, 10, 0, 0, 0, time.UTC)
+	setNavigation := func(id string, pinnedAt *time.Time, lastActivityAt, createdAt time.Time) {
+		t.Helper()
+		if _, err := pool.Exec(ctx,
+			`UPDATE conversations SET pinned_at = $2, last_activity_at = $3, created_at = $4 WHERE id = $1::uuid`,
+			id, pinnedAt, lastActivityAt, createdAt); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	pinned, err := conversations.UpdatePinned(ctx, first.ID, owner.ID, true)
@@ -248,9 +266,32 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 	if err != nil || repinned.PinnedAt == nil || !repinned.PinnedAt.Equal(firstPin) {
 		t.Fatalf("re-pin must preserve timestamp: %+v, %v", repinned, err)
 	}
+	if _, err := conversations.UpdatePinned(ctx, second.ID, owner.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	pinnedOldAt := base.Add(time.Hour)
+	pinnedNewAt := pinnedOldAt.Add(time.Hour)
+	setNavigation(first.ID, &pinnedOldAt, base.Add(time.Minute), base)
+	setNavigation(second.ID, &pinnedNewAt, base.Add(2*time.Minute), base)
+	setNavigation(recentNew.ID, nil, base.Add(6*time.Hour), base)
+	setNavigation(recentOld.ID, nil, base.Add(5*time.Hour), base)
+	tieActivityAt := base.Add(4 * time.Hour)
+	tieCreatedAt := base.Add(30 * time.Minute)
+	setNavigation(tieFirst.ID, nil, tieActivityAt, tieCreatedAt)
+	setNavigation(tieSecond.ID, nil, tieActivityAt, tieCreatedAt)
 	list, err := conversations.ListByUser(ctx, owner.ID)
-	if err != nil || len(list) != 2 || list[0].ID != first.ID || list[1].ID != second.ID {
+	tieEarlier, tieLater := tieFirst.ID, tieSecond.ID
+	if tieEarlier < tieLater {
+		tieEarlier, tieLater = tieLater, tieEarlier
+	}
+	wantPinnedOrder := []string{second.ID, first.ID, recentNew.ID, recentOld.ID, tieEarlier, tieLater}
+	if err != nil || len(list) != len(wantPinnedOrder) {
 		t.Fatalf("ordered chats = %+v, err=%v", list, err)
+	}
+	for i, wantID := range wantPinnedOrder {
+		if list[i].ID != wantID {
+			t.Fatalf("pinned ordering[%d]=%s, want=%s full=%+v", i, list[i].ID, wantID, list)
+		}
 	}
 	if _, err := conversations.UpdatePinned(ctx, first.ID, other.ID, false); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-owner unpin err=%v, want ErrNotFound", err)
@@ -259,6 +300,19 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 		unpinned, err := conversations.UpdatePinned(ctx, first.ID, owner.ID, false)
 		if err != nil || unpinned.PinnedAt != nil {
 			t.Fatalf("idempotent unpin: %+v, %v", unpinned, err)
+		}
+	}
+	if _, err := conversations.UpdatePinned(ctx, second.ID, owner.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	list, err = conversations.ListByUser(ctx, owner.ID)
+	wantRecentOrder := []string{recentNew.ID, recentOld.ID, tieEarlier, tieLater, second.ID, first.ID}
+	if err != nil || len(list) != len(wantRecentOrder) {
+		t.Fatalf("recent chats = %+v, err=%v", list, err)
+	}
+	for i, wantID := range wantRecentOrder {
+		if list[i].ID != wantID {
+			t.Fatalf("recent ordering[%d]=%s, want=%s full=%+v", i, list[i].ID, wantID, list)
 		}
 	}
 }
@@ -333,6 +387,107 @@ func TestMessageRepositoryChatWritesAndRewindsTouchActivity(t *testing.T) {
 	if _, err := messages.AddDefinition(ctx, scheduled.ID, model.MsgRoleUser, "definition"); err != nil || !activity(scheduled.ID).Equal(baseline) {
 		t.Fatalf("scheduled definition activity=%s err=%v", activity(scheduled.ID), err)
 	}
+}
+
+func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	scheduledTasks := store.NewScheduledTaskRepository(pool, 10)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{Username: "navigation-no-activity", Email: "navigation-no-activity@example.com", PasswordHash: "h", Role: model.RoleUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := conversations.Create(ctx, owner.ID, "no activity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := time.Date(2026, time.July, 1, 10, 0, 0, 0, time.UTC)
+	setActivity := func(id string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE conversations SET last_activity_at = $2 WHERE id = $1::uuid`, id, baseline); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertActivity := func(id, operation string) {
+		t.Helper()
+		var got time.Time
+		if err := pool.QueryRow(ctx, `SELECT last_activity_at FROM conversations WHERE id = $1::uuid`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if !got.Equal(baseline) {
+			t.Fatalf("%s changed activity=%s, want=%s", operation, got, baseline)
+		}
+	}
+
+	setActivity(conversation.ID)
+	if _, err := conversations.UpdateTitle(ctx, conversation.ID, owner.ID, "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	assertActivity(conversation.ID, "rename")
+	if _, err := conversations.UpdatePinned(ctx, conversation.ID, owner.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	assertActivity(conversation.ID, "pin")
+	if _, err := conversations.UpdatePinned(ctx, conversation.ID, owner.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	assertActivity(conversation.ID, "unpin")
+
+	userMessage, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, model.ChatUserInput{
+		Content: "deferred extraction",
+		Attachments: []model.MessageAttachment{{
+			Filename: "deferred.md", MIME: "text/markdown", Kind: model.AttachmentKindDocument,
+			RawBytes: []byte("source"),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extracted := append([]model.MessageAttachment(nil), userMessage.Attachments...)
+	extracted[0].ExtractedMarkdown = "# Extracted"
+	setActivity(conversation.ID)
+	if _, err := messages.UpdateChatAttachmentExtractions(ctx, conversation.ID, userMessage.ID, owner.ID, extracted); err != nil {
+		t.Fatal(err)
+	}
+	assertActivity(conversation.ID, "attachment extraction")
+
+	scheduledConversation, err := conversations.CreateWithKind(ctx, owner.ID, "scheduled", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setActivity(scheduledConversation.ID)
+	if _, err := messages.AddDefinition(ctx, scheduledConversation.ID, model.MsgRoleUser, "definition"); err != nil {
+		t.Fatal(err)
+	}
+	assertActivity(scheduledConversation.ID, "scheduled definition")
+	task, err := scheduledTasks.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: scheduledConversation.ID, Name: "delivery",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: "deliver", Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := scheduledTasks.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "navigation-delivery", ScheduledFor: baseline,
+		State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduledTasks.FinishSuccess(ctx, model.ScheduledExecutionSuccess{
+		RunID: run.ID, UserID: owner.ID, ConversationID: scheduledConversation.ID,
+		RunState: model.ScheduledTaskRunStateDelivered, TaskState: model.ScheduledTaskStateActive,
+		Content: "scheduled delivery", Unread: true, MonitoringState: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertActivity(scheduledConversation.ID, "scheduled delivery")
 }
 
 func TestMessageRepositoryEditAndRewind(t *testing.T) {
