@@ -309,8 +309,17 @@ test('opens the overflow menu with the keyboard and keeps future actions disable
 	await trigger.press('Enter');
 	const menu = page.getByRole('menu', { name: 'Recent first actions', exact: true });
 	await expect(menu).toBeVisible();
-	await expect(menu.getByRole('menuitem', { name: 'Share (coming soon)', exact: true })).toBeDisabled();
-	await expect(menu.getByRole('menuitem', { name: 'Archive (coming soon)', exact: true })).toBeDisabled();
+	const share = menu.getByRole('menuitem', { name: 'Share (coming soon)', exact: true });
+	await expect(share).toHaveAttribute('aria-disabled', 'true');
+	await expect(menu.getByRole('menuitem', { name: 'Archive (coming soon)', exact: true })).toHaveAttribute(
+		'aria-disabled',
+		'true'
+	);
+	await expect(share).toBeFocused();
+	await share.press('Enter');
+	await expect(menu).toBeVisible();
+	await expect(share).toBeFocused();
+	await share.press('ArrowDown');
 	await expect(menu.getByRole('menuitem', { name: 'Rename', exact: true })).toBeFocused();
 	await menu.press('End');
 	await expect(menu.getByRole('menuitem', { name: 'Delete', exact: true })).toBeFocused();
