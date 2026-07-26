@@ -24,7 +24,12 @@ import (
 	"github.com/tamcore/kadence/internal/secret"
 )
 
-const replacementReply = "replacement"
+const (
+	replacementReply       = "replacement"
+	testHandoffOne         = "handoff-one"
+	testTimezoneBerlin     = "Europe/Berlin"
+	testProviderMustNotRun = "must not run"
+)
 
 type fakeProvider struct {
 	reply string
@@ -165,11 +170,16 @@ func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 }
 
 type fakeScheduledHandoff struct {
-	artifacts []scheduled.ChatArtifact
-	requests  []scheduled.HandoffRequest
-	actors    []scheduled.Actor
-	cleanup   [][]string
-	err       error
+	artifacts         []scheduled.ChatArtifact
+	requests          []scheduled.HandoffRequest
+	actors            []scheduled.Actor
+	cleanup           [][]string
+	confirmation      scheduled.ChatConfirmation
+	confirmationErr   error
+	confirmationCalls int
+	confirmationActor scheduled.Actor
+	confirmationChat  string
+	err               error
 }
 
 func (f *fakeScheduledHandoff) DraftFromChat(
@@ -190,6 +200,13 @@ func (f *fakeScheduledHandoff) DraftFromChat(
 func (f *fakeScheduledHandoff) CleanupChatDrafts(_ context.Context, _ int64, ids []string) error {
 	f.cleanup = append(f.cleanup, append([]string(nil), ids...))
 	return nil
+}
+func (f *fakeScheduledHandoff) ConfirmSoleChatDraft(
+	_ context.Context, actor scheduled.Actor, conversationID string,
+) (scheduled.ChatConfirmation, error) {
+	f.confirmationCalls++
+	f.confirmationActor, f.confirmationChat = actor, conversationID
+	return f.confirmation, f.confirmationErr
 }
 func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Message, error) {
 	return f.added, nil
@@ -328,7 +345,7 @@ func TestStreamNewConversation(t *testing.T) {
 
 func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testing.T) {
 	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{
-		{HandoffID: "handoff-one", TaskID: "task-one", Ordinal: 1, ArtifactState: testScheduledArtifactReady},
+		{HandoffID: testHandoffOne, TaskID: "task-one", Ordinal: 1, ArtifactState: testScheduledArtifactReady},
 		{HandoffID: "handoff-two", TaskID: "task-two", Ordinal: 2, ArtifactState: testScheduledArtifactReady},
 	}}
 	provider := &scriptedProvider{results: []provider.StreamResult{
@@ -344,10 +361,10 @@ func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testi
 		Convs: convs, Msgs: msgs, Scheduled: handoff,
 	})
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername, Timezone: "Europe/Berlin"}, testConvID, "schedule both", sink); err != nil {
+	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername, Timezone: testTimezoneBerlin}, testConvID, "schedule both", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
-	if got, want := msgs.assistantHandoffIDs, []string{"handoff-one", "handoff-two"}; !slices.Equal(got, want) {
+	if got, want := msgs.assistantHandoffIDs, []string{testHandoffOne, "handoff-two"}; !slices.Equal(got, want) {
 		t.Fatalf("persisted handoff IDs = %v, want %v", got, want)
 	}
 	if len(handoff.requests) != 2 || handoff.requests[0].Ordinal != 1 || handoff.requests[1].Ordinal != 2 {
@@ -356,7 +373,7 @@ func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testi
 	if handoff.requests[0].SourceContent != "schedule both" || handoff.requests[0].SourceConversationID != testConvID {
 		t.Fatalf("source request = %+v", handoff.requests[0])
 	}
-	if len(handoff.actors) != 2 || handoff.actors[0].Timezone != "Europe/Berlin" {
+	if len(handoff.actors) != 2 || handoff.actors[0].Timezone != testTimezoneBerlin {
 		t.Fatalf("handoff actors = %+v, want timezone forwarded", handoff.actors)
 	}
 
@@ -379,6 +396,143 @@ func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testi
 	if len(artifacts) != 2 || artifacts[0].ScheduledArtifact == nil || artifacts[0].ScheduledArtifact.Ordinal != 1 ||
 		artifacts[1].ScheduledArtifact == nil || artifacts[1].ScheduledArtifact.Ordinal != 2 {
 		t.Fatalf("artifact events = %+v", artifacts)
+	}
+}
+
+func TestServicePlainAffirmationConfirmsSoleScheduledDraftWithoutProvider(t *testing.T) {
+	artifact := scheduled.ChatArtifact{
+		HandoffID: testHandoffOne, TaskID: "task-one", Ordinal: 1,
+		ArtifactState: testScheduledArtifactReady, TaskState: model.ScheduledTaskStateActive,
+		Proposal: &scheduled.Proposal{Name: "Race weather"},
+	}
+	handoff := &fakeScheduledHandoff{confirmation: scheduled.ChatConfirmation{
+		Status: scheduled.ChatConfirmationConfirmed, Artifact: &artifact,
+	}}
+	provider := &scriptedProvider{results: []provider.StreamResult{{Content: testProviderMustNotRun}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID},
+	}}
+	msgs := &fakeMsgs{added: []model.Message{
+		{ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "schedule race weather"},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "Please confirm."},
+	}}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+	sink := &capturingSink{}
+
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{
+		Username: testUsername, Timezone: testTimezoneBerlin,
+	}, testConvID, "Yes!", sink); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+	if handoff.confirmationCalls != 1 || handoff.confirmationActor.ID != testUserID ||
+		handoff.confirmationActor.Timezone != testTimezoneBerlin || handoff.confirmationChat != testConvID {
+		t.Fatalf("confirmation calls=%d actor=%+v chat=%q", handoff.confirmationCalls, handoff.confirmationActor, handoff.confirmationChat)
+	}
+	last := msgs.added[len(msgs.added)-1]
+	if last.Role != model.MsgRoleAssistant || !strings.Contains(last.Content, "Race weather") {
+		t.Fatalf("persisted confirmation = %+v", last)
+	}
+	var artifacts []chat.ChatEvent
+	for _, event := range sink.events {
+		if event.Type == chat.EventScheduledArtifact {
+			artifacts = append(artifacts, event)
+		}
+	}
+	if len(artifacts) != 1 || artifacts[0].ScheduledArtifact == nil ||
+		artifacts[0].ScheduledArtifact.TaskState != model.ScheduledTaskStateActive {
+		t.Fatalf("artifact events = %+v", artifacts)
+	}
+	if sink.events[0].Type != chat.EventMeta || sink.events[len(sink.events)-1].Type != chat.EventDone {
+		t.Fatalf("events = %+v", sink.events)
+	}
+}
+
+func TestServicePlainAffirmationDoesNotBulkConfirmOrRedraft(t *testing.T) {
+	handoff := &fakeScheduledHandoff{confirmation: scheduled.ChatConfirmation{
+		Status: scheduled.ChatConfirmationMultiple,
+	}}
+	provider := &scriptedProvider{results: []provider.StreamResult{{Content: testProviderMustNotRun}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID},
+	}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "yes", &capturingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 || len(handoff.requests) != 0 {
+		t.Fatalf("provider calls=%d draft requests=%d", provider.calls, len(handoff.requests))
+	}
+	if last := msgs.added[len(msgs.added)-1]; last.Role != model.MsgRoleAssistant ||
+		!strings.Contains(strings.ToLower(last.Content), "separately") {
+		t.Fatalf("persisted disambiguation = %+v", last)
+	}
+}
+
+func TestServicePlainAffirmationDoesNotConfirmIncompleteDraft(t *testing.T) {
+	handoff := &fakeScheduledHandoff{confirmation: scheduled.ChatConfirmation{
+		Status: scheduled.ChatConfirmationNeedsInput,
+	}}
+	provider := &scriptedProvider{results: []provider.StreamResult{{Content: testProviderMustNotRun}}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID},
+	}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff,
+	})
+
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "yes", &capturingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 || len(handoff.requests) != 0 {
+		t.Fatalf("provider calls=%d draft requests=%d", provider.calls, len(handoff.requests))
+	}
+	if last := msgs.added[len(msgs.added)-1]; last.Role != model.MsgRoleAssistant ||
+		!strings.Contains(strings.ToLower(last.Content), "needs input") {
+		t.Fatalf("persisted incomplete response = %+v", last)
+	}
+}
+
+func TestServiceOnlyInterceptsPlainAffirmationWithPendingDraft(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		text         string
+		confirmation scheduled.ChatConfirmation
+		wantChecks   int
+	}{
+		{name: "no pending draft", text: "yes", confirmation: scheduled.ChatConfirmation{Status: scheduled.ChatConfirmationNone}, wantChecks: 1},
+		{name: "new scheduling instruction", text: "yes, schedule another check"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handoff := &fakeScheduledHandoff{confirmation: test.confirmation}
+			provider := &scriptedProvider{results: []provider.StreamResult{{Content: "Normal answer."}}}
+			convs := &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}}
+			msgs := &fakeMsgs{}
+			svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel}, chat.Deps{
+				Convs: convs, Msgs: msgs, Scheduled: handoff,
+			})
+
+			if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, test.text, &capturingSink{}); err != nil {
+				t.Fatal(err)
+			}
+			if provider.calls != 1 || handoff.confirmationCalls != test.wantChecks {
+				t.Fatalf("provider calls=%d confirmation checks=%d", provider.calls, handoff.confirmationCalls)
+			}
+			if got := msgs.added[len(msgs.added)-1].Content; got != "Normal answer." {
+				t.Fatalf("assistant content = %q", got)
+			}
+		})
 	}
 }
 

@@ -17,6 +17,10 @@ func (scheduledHandoffStub) DraftFromChat(context.Context, scheduled.Actor, sche
 	return scheduled.ChatArtifact{}, nil
 }
 
+func (scheduledHandoffStub) ConfirmSoleChatDraft(context.Context, scheduled.Actor, string) (scheduled.ChatConfirmation, error) {
+	return scheduled.ChatConfirmation{Status: scheduled.ChatConfirmationNone}, nil
+}
+
 func (scheduledHandoffStub) CleanupChatDrafts(context.Context, int64, []string) error { return nil }
 
 func TestScheduledToolDefinitionContract(t *testing.T) {

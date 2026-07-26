@@ -198,6 +198,7 @@ type Service struct {
 // Nil disables the scheduling built-in entirely.
 type ScheduledHandoff interface {
 	DraftFromChat(context.Context, scheduled.Actor, scheduled.HandoffRequest) (scheduled.ChatArtifact, error)
+	ConfirmSoleChatDraft(context.Context, scheduled.Actor, string) (scheduled.ChatConfirmation, error)
 	CleanupChatDrafts(context.Context, int64, []string) error
 }
 
@@ -341,7 +342,99 @@ func (s *Service) Stream(ctx context.Context, userID int64, uc UserContext, conv
 	if err != nil {
 		return s.fail(sink, "could not save message")
 	}
+	if handled, confirmErr := s.tryConfirmScheduledDraft(ctx, userID, uc, conversationID, userMsg, userText, sink); handled || confirmErr != nil {
+		return confirmErr
+	}
 	return s.streamPersistedTurn(ctx, userID, uc, conversationID, userMsg, history, true, sink)
+}
+
+const (
+	multipleScheduledDraftsMessage  = "More than one scheduled task draft is waiting. Confirm each task separately using its card."
+	incompleteScheduledDraftMessage = "Scheduled task draft still needs input. Complete it using its card."
+	resolvedScheduledDraftMessage   = "That scheduled task was already handled."
+)
+
+func (s *Service) tryConfirmScheduledDraft(
+	ctx context.Context, userID int64, uc UserContext, conversationID string,
+	userMsg model.Message, userText string, sink EventSink,
+) (bool, error) {
+	if s.scheduled == nil || !isPlainAffirmation(userText) {
+		return false, nil
+	}
+	result, err := s.scheduled.ConfirmSoleChatDraft(ctx, scheduled.Actor{
+		ID: userID, Username: uc.Username, Timezone: uc.Timezone,
+	}, conversationID)
+	if err != nil {
+		return true, s.fail(sink, "could not confirm scheduled task")
+	}
+	if result.Status == scheduled.ChatConfirmationNone {
+		return false, nil
+	}
+
+	content := resolvedScheduledDraftMessage
+	switch result.Status {
+	case scheduled.ChatConfirmationMultiple:
+		content = multipleScheduledDraftsMessage
+	case scheduled.ChatConfirmationNeedsInput:
+		content = incompleteScheduledDraftMessage
+	case scheduled.ChatConfirmationConfirmed:
+		content = "Scheduled task activated."
+		if result.Artifact == nil {
+			return true, s.fail(sink, "could not confirm scheduled task")
+		}
+		if result.Artifact.Proposal != nil && strings.TrimSpace(result.Artifact.Proposal.Name) != "" {
+			content = "Scheduled task activated: " + strings.TrimSpace(result.Artifact.Proposal.Name) + "."
+		}
+	case scheduled.ChatConfirmationResolved:
+	default:
+		return true, s.fail(sink, "could not confirm scheduled task")
+	}
+
+	if err := sink.Send(ChatEvent{
+		Type: EventMeta, ConversationID: conversationID, UserMessageID: userMsg.ID,
+	}); err != nil {
+		return true, err
+	}
+	if err := sink.Flush(); err != nil {
+		return true, err
+	}
+	if err := sink.Send(ChatEvent{Type: EventToken, Delta: content}); err != nil {
+		return true, err
+	}
+	if err := sink.Flush(); err != nil {
+		return true, err
+	}
+	if result.Artifact != nil {
+		if err := sink.Send(ChatEvent{Type: EventScheduledArtifact, ScheduledArtifact: result.Artifact}); err != nil {
+			return true, err
+		}
+		if err := sink.Flush(); err != nil {
+			return true, err
+		}
+	}
+	assistant, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, userMsg, content, nil, nil)
+	if err != nil {
+		return true, s.fail(sink, "could not save response")
+	}
+	if err := sink.Send(ChatEvent{
+		Type: EventDone, AssistantMessageID: assistant.ID, AssistantContent: &content,
+	}); err != nil {
+		return true, err
+	}
+	return true, sink.Flush()
+}
+
+func isPlainAffirmation(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	normalized = strings.TrimSpace(strings.Trim(normalized, ".!?"))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	switch normalized {
+	case "yes", "yes please", "yes, please", "confirm", "confirmed", "approve", "approved",
+		"go ahead", "ok", "okay", "do it", "please do":
+		return true
+	default:
+		return false
+	}
 }
 
 // Edit rewrites one persisted user prompt, removes the later transcript, and
