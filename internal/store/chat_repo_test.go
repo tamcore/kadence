@@ -389,6 +389,63 @@ func TestMessageRepositoryChatWritesAndRewindsTouchActivity(t *testing.T) {
 	}
 }
 
+func TestMessageRepositoryActivityNeverRegresses(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "navigation-monotonic", Email: "navigation-monotonic@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := conversations.Create(ctx, owner.ID, "monotonic activity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := time.Date(2126, time.July, 1, 10, 0, 0, 123456000, time.UTC)
+	setFutureActivity := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx,
+			`UPDATE conversations SET last_activity_at = $2 WHERE id = $1::uuid`,
+			conversation.ID, future); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertFutureActivity := func(operation string) {
+		t.Helper()
+		var got time.Time
+		if err := pool.QueryRow(ctx,
+			`SELECT last_activity_at FROM conversations WHERE id = $1::uuid`,
+			conversation.ID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if !got.Equal(future) {
+			t.Fatalf("%s regressed activity=%s, want=%s", operation, got, future)
+		}
+	}
+
+	setFutureActivity()
+	userMessage, err := messages.Add(ctx, conversation.ID, model.MsgRoleUser, "older insert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFutureActivity("message insert")
+
+	setFutureActivity()
+	if _, err := messages.EditAndRewind(
+		ctx, conversation.ID, userMessage.ID, owner.ID, "older rewind",
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertFutureActivity("rewind touch")
+}
+
 func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

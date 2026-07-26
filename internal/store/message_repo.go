@@ -426,7 +426,10 @@ func addMessageWithPurpose(
 		     RETURNING id, conversation_id, role, content, tool_calls, created_at
 		 ), touched AS (
 		     UPDATE conversations
-		        SET last_activity_at = (SELECT created_at FROM inserted)
+		        SET last_activity_at = GREATEST(
+		            last_activity_at,
+		            (SELECT created_at FROM inserted)
+		        )
 		      WHERE id = $1::uuid AND kind = $6 AND $5 = $6
 		 )
 		 SELECT id, conversation_id::text, role, content, tool_calls, created_at FROM inserted`,
@@ -779,7 +782,9 @@ func lockOwnedChat(ctx context.Context, tx pgx.Tx, conversationID string, userID
 
 func touchChatConversation(ctx context.Context, tx pgx.Tx, conversationID string) error {
 	if _, err := tx.Exec(ctx,
-		`UPDATE conversations SET last_activity_at = NOW() WHERE id = $1::uuid`, conversationID); err != nil {
+		`UPDATE conversations
+		    SET last_activity_at = GREATEST(last_activity_at, clock_timestamp())
+		  WHERE id = $1::uuid`, conversationID); err != nil {
 		return fmt.Errorf("touch chat conversation activity: %w", err)
 	}
 	return nil

@@ -89,6 +89,42 @@ describe('ActionMenu', () => {
 		expect(document.activeElement).toBe(trigger);
 	});
 
+	it('keeps coming-soon items in arrow, Home, and End focus order without activating them', async () => {
+		const onShare = vi.fn();
+		const onArchive = vi.fn();
+		render(ActionMenu, {
+			props: {
+				label: 'Conversation actions',
+				items: [
+					{ label: 'Share', disabled: true, ariaLabel: 'Share (coming soon)', onSelect: onShare },
+					{ label: 'Rename' },
+					{ label: 'Archive', disabled: true, ariaLabel: 'Archive (coming soon)', onSelect: onArchive }
+				]
+			}
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Conversation actions' }));
+		const menu = screen.getByRole('menu', { hidden: true });
+		const share = screen.getByRole('menuitem', { name: 'Share (coming soon)', hidden: true });
+		const rename = screen.getByRole('menuitem', { name: 'Rename', hidden: true });
+		const archive = screen.getByRole('menuitem', { name: 'Archive (coming soon)', hidden: true });
+
+		expect(share).toHaveAttribute('aria-disabled', 'true');
+		expect(archive).toHaveAttribute('aria-disabled', 'true');
+		expect(document.activeElement).toBe(share);
+		await fireEvent.keyDown(menu, { key: 'ArrowDown' });
+		expect(document.activeElement).toBe(rename);
+		await fireEvent.keyDown(menu, { key: 'End' });
+		expect(document.activeElement).toBe(archive);
+		await fireEvent.keyDown(menu, { key: 'Home' });
+		expect(document.activeElement).toBe(share);
+
+		await fireEvent.click(share);
+		await fireEvent.click(archive);
+		expect(onShare).not.toHaveBeenCalled();
+		expect(onArchive).not.toHaveBeenCalled();
+		expect(screen.getByRole('menu', { hidden: true })).toBeInTheDocument();
+	});
+
 	it('measures after opening and flips placement above a trigger near the viewport bottom', async () => {
 		Object.defineProperty(window, 'innerWidth', { configurable: true, value: 120 });
 		Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });

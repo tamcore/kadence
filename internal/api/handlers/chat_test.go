@@ -274,6 +274,42 @@ func TestListConversationsIncludesNavigationState(t *testing.T) {
 	assertNavigationConversationDTO(t, response.Data[0], "conv-uuid-1", "a", &pinnedAt, lastActivityAt, createdAt)
 }
 
+func TestListConversationsFormatsNavigationTimestampsAsCanonicalPostgresPrecision(t *testing.T) {
+	sourceZone := time.FixedZone("source", 2*60*60)
+	pinnedAt := time.Date(2026, time.July, 26, 14, 0, 0, 123456000, sourceZone)
+	lastActivityAt := time.Date(2026, time.July, 26, 14, 0, 0, 654321000, sourceZone)
+	createdAt := time.Date(2026, time.July, 26, 14, 0, 0, 1_000, sourceZone)
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{
+		ID: "conv-uuid-1", Title: "precise", PinnedAt: &pinnedAt,
+		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
+	}}}, fakeMsgLister{}, nil, nil)
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
+	rec := httptest.NewRecorder()
+
+	h.ListConversations(rec, req)
+
+	var response struct {
+		Data []navigationConversationDTO `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil ||
+		rec.Code != http.StatusOK || len(response.Data) != 1 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := response.Data[0]
+	if got.PinnedAt == nil {
+		t.Fatal("pinnedAt=null, want canonical UTC microseconds")
+	}
+	if *got.PinnedAt != "2026-07-26T12:00:00.123456Z" {
+		t.Fatalf("pinnedAt=%q, want canonical UTC microseconds", *got.PinnedAt)
+	}
+	if got.LastActivityAt != "2026-07-26T12:00:00.654321Z" {
+		t.Fatalf("lastActivityAt=%q, want canonical UTC microseconds", got.LastActivityAt)
+	}
+	if got.CreatedAt != "2026-07-26T12:00:00.000001Z" {
+		t.Fatalf("createdAt=%q, want canonical UTC microseconds", got.CreatedAt)
+	}
+}
+
 func TestMessagesSuccess(t *testing.T) {
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{},
 		fakeMsgLister{msgs: []model.Message{{ID: 1, Role: model.MsgRoleUser, Content: "hi"}}}, nil, nil)

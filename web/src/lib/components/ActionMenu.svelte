@@ -106,7 +106,7 @@ export type ActionMenuItem =
 	}
 
 	function focusItem(direction: 1 | -1, start?: 'first' | 'last'): void {
-		const candidates = Array.from(getMenu()?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+		const candidates = Array.from(getMenu()?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
 		if (!candidates.length) return;
 		if (start === 'first') return candidates[0].focus();
 		if (start === 'last') return candidates.at(-1)?.focus();
@@ -186,7 +186,6 @@ export type ActionMenuItem =
 					type="button"
 					class:danger={item.danger}
 					role="menuitem"
-					disabled={item.disabled}
 					aria-disabled={item.disabled ? 'true' : undefined}
 					aria-label={item.ariaLabel}
 					onclick={() => void select(item)}
@@ -236,6 +235,6 @@ export type ActionMenuItem =
 	}
 	.action-menu :is(button, a):hover, .action-menu :is(button, a):focus-visible { background: var(--bg); }
 	.action-menu :is(button, a).danger { color: var(--danger); }
-	.action-menu button:disabled { color: var(--text-muted); cursor: not-allowed; opacity: 0.6; }
+	.action-menu [aria-disabled='true'] { color: var(--text-muted); cursor: not-allowed; opacity: 0.6; }
 	.action-menu-separator { height: 1px; margin: 4px; background: var(--border); }
 </style>

@@ -210,16 +210,20 @@ type conversationDTO struct {
 	CreatedAt      string  `json:"createdAt"`
 }
 
+func formatConversationTimestamp(value time.Time) string {
+	return value.UTC().Format("2006-01-02T15:04:05.000000Z")
+}
+
 func toConversationDTO(c model.Conversation) conversationDTO {
 	var pinnedAt *string
 	if c.PinnedAt != nil {
-		formatted := c.PinnedAt.Format("2006-01-02T15:04:05Z07:00")
+		formatted := formatConversationTimestamp(*c.PinnedAt)
 		pinnedAt = &formatted
 	}
 	return conversationDTO{
 		ID: c.ID, Title: c.Title, PinnedAt: pinnedAt,
-		LastActivityAt: c.LastActivityAt.Format("2006-01-02T15:04:05Z07:00"),
-		CreatedAt:      c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		LastActivityAt: formatConversationTimestamp(c.LastActivityAt),
+		CreatedAt:      formatConversationTimestamp(c.CreatedAt),
 	}
 }
 

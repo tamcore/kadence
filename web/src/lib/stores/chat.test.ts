@@ -1133,4 +1133,54 @@ describe('chat store', () => {
 			'recent-old'
 		]);
 	});
+
+	it('pinConversation preserves same-second server order from canonical microseconds', async () => {
+		const createdAt = '2026-07-26T08:00:00.000000Z';
+		conversations.set([
+			{
+				id: 'z-pinned-early',
+				title: 'Pinned early',
+				createdAt,
+				lastActivityAt: '2026-07-26T09:00:00.100000Z',
+				pinnedAt: '2026-07-26T10:00:00.100000Z'
+			},
+			{
+				id: 'z-recent-early',
+				title: 'Recent early',
+				createdAt,
+				lastActivityAt: '2026-07-26T11:00:00.100000Z',
+				pinnedAt: null
+			},
+			{
+				id: 'a-target',
+				title: 'Pinned late',
+				createdAt,
+				lastActivityAt: '2026-07-26T09:00:00.900000Z',
+				pinnedAt: null
+			},
+			{
+				id: 'a-recent-late',
+				title: 'Recent late',
+				createdAt,
+				lastActivityAt: '2026-07-26T11:00:00.900000Z',
+				pinnedAt: null
+			}
+		]);
+		pinConversationMock.mockResolvedValueOnce({
+			id: 'a-target',
+			title: 'Pinned late',
+			createdAt,
+			lastActivityAt: '2026-07-26T09:00:00.900000Z',
+			pinnedAt: '2026-07-26T10:00:00.900000Z'
+		});
+
+		await pinConversation('a-target', true);
+
+		expect(get(conversations).map((conversation) => conversation.id)).toEqual([
+			'a-target',
+			'z-pinned-early',
+			'a-recent-late',
+			'z-recent-early'
+		]);
+	});
 });
