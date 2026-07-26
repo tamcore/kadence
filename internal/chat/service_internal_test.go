@@ -611,3 +611,43 @@ func TestBoundHistoryReservesCurrentImageTransportCost(t *testing.T) {
 		t.Fatalf("image history = %+v dropped=%d, want dropped turn", withImage, imageDropped)
 	}
 }
+
+func TestSelectHistoricalAttachmentPayloadIDsBoundsNewestTurns(t *testing.T) {
+	history := make([]model.Message, 10)
+	for i := range history {
+		history[i] = model.Message{
+			ID: int64(i + 1), Role: model.MsgRoleUser,
+			Attachments: []model.MessageAttachment{{
+				Kind: model.AttachmentKindDocument, PayloadBytes: 4,
+			}},
+		}
+	}
+
+	got := selectHistoricalAttachmentPayloadIDs(history, 1_000)
+	want := []int64{3, 4, 5, 6, 7, 8, 9, 10}
+	if !slices.Equal(got, want) {
+		t.Fatalf("selected IDs = %v, want %v", got, want)
+	}
+}
+
+func TestSelectHistoricalAttachmentPayloadIDsHonorsByteBudget(t *testing.T) {
+	history := []model.Message{
+		{
+			ID: 1, Role: model.MsgRoleUser,
+			Attachments: []model.MessageAttachment{{
+				Kind: model.AttachmentKindImage, PayloadBytes: 300,
+			}},
+		},
+		{
+			ID: 2, Role: model.MsgRoleUser,
+			Attachments: []model.MessageAttachment{{
+				Kind: model.AttachmentKindDocument, PayloadBytes: 400,
+			}},
+		},
+	}
+
+	got := selectHistoricalAttachmentPayloadIDs(history, 100)
+	if !slices.Equal(got, []int64{2}) {
+		t.Fatalf("selected IDs = %v, want [2]", got)
+	}
+}

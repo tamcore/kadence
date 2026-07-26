@@ -679,6 +679,42 @@ func TestStreamTurnReportsConfiguredAssistantCannotProcessCurrentImages(t *testi
 	}
 }
 
+func TestStreamTurnReportsConfiguredAssistantCannotProcessHistoricalImages(t *testing.T) {
+	msgs := &fakeMsgs{added: []model.Message{
+		{
+			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
+			Content: "historical image",
+			Attachments: []model.MessageAttachment{{
+				MessageID: 1, Filename: "history.png", MIME: "image/png",
+				Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+			}},
+		},
+		{
+			ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant,
+			Content: "old answer",
+		},
+	}}
+	svc := chat.NewService(
+		visionUnsupportedProvider{},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, "current text only", &capturingSink{},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "configured assistant cannot process attached images") {
+		t.Fatalf("Stream error = %v", err)
+	}
+}
+
 func TestStreamTurnUsesFullExplicitDocumentsWhenTheyFit(t *testing.T) {
 	documents := &turnDocumentStore{documents: []model.Document{
 		{
@@ -1166,7 +1202,7 @@ func TestStreamTurnLoadsPayloadsOnlyForRetainedHistory(t *testing.T) {
 	}
 }
 
-func TestStreamTurnPayloadLoaderFailureOmitsHistoricalPayload(t *testing.T) {
+func TestStreamTurnPayloadLoaderFailureStopsBeforeProvider(t *testing.T) {
 	msgs := &fakeMsgs{
 		added: []model.Message{
 			{
@@ -1196,20 +1232,11 @@ func TestStreamTurnPayloadLoaderFailureOmitsHistoricalPayload(t *testing.T) {
 		context.Background(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "current", &capturingSink{},
 	)
-	if err != nil {
-		t.Fatalf("Stream error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "historical attachment context") {
+		t.Fatalf("Stream error = %v, want historical attachment context failure", err)
 	}
-	var historical provider.Message
-	for _, message := range capturing.gotMessages {
-		if strings.Contains(message.Content, "historical") {
-			historical = message
-			break
-		}
-	}
-	if historical.Content == "" ||
-		!strings.Contains(historical.Content, "omitted") ||
-		len(historical.Images) != 0 {
-		t.Fatalf("historical payload was not safely omitted: %+v", historical)
+	if len(capturing.gotMessages) != 0 {
+		t.Fatalf("provider calls = %d, want 0", len(capturing.gotMessages))
 	}
 }
 

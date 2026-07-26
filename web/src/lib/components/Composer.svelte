@@ -14,6 +14,7 @@
 	interface Props {
 		placeholder?: string;
 		disabled?: boolean;
+		richInput?: boolean;
 		onSubmit: (
 			text: string,
 			files?: File[],
@@ -21,7 +22,12 @@
 		) => void | boolean | Promise<void | boolean>;
 	}
 
-	let { placeholder = 'Ask your coach…', disabled = false, onSubmit }: Props = $props();
+	let {
+		placeholder = 'Ask your coach…',
+		disabled = false,
+		richInput = false,
+		onSubmit
+	}: Props = $props();
 	let text = $state('');
 	let files = $state<File[]>([]);
 	let documentReferences = $state<Document[]>([]);
@@ -34,10 +40,12 @@
 
 	const canSubmit = $derived(
 		!disabled &&
-			(text.trim().length > 0 || files.length > 0 || documentReferences.length > 0)
+			(text.trim().length > 0 ||
+				(richInput && (files.length > 0 || documentReferences.length > 0)))
 	);
 
 	onMount(() => {
+		if (!richInput) return;
 		void getDocumentUploadCapabilities()
 			.then((capabilities) => {
 				maxBytes = capabilities.max_bytes;
@@ -97,7 +105,7 @@
 	}
 
 	function addFiles(incomingFiles: FileList | File[]): void {
-		if (disabled) return;
+		if (!richInput || disabled) return;
 		validationError = '';
 		const incoming = Array.from(incomingFiles);
 		if (incoming.length === 0) return;
@@ -132,6 +140,7 @@
 	}
 
 	function handleDragEnter(event: DragEvent): void {
+		if (!richInput) return;
 		if (!containsFiles(event)) return;
 		event.preventDefault();
 		if (disabled) return;
@@ -140,12 +149,14 @@
 	}
 
 	function handleDragOver(event: DragEvent): void {
+		if (!richInput) return;
 		if (!containsFiles(event)) return;
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
 	}
 
 	function handleDragLeave(event: DragEvent): void {
+		if (!richInput) return;
 		if (!dragActive && dragDepth === 0) return;
 		event.preventDefault();
 		dragDepth = Math.max(0, dragDepth - 1);
@@ -153,6 +164,7 @@
 	}
 
 	function handleDrop(event: DragEvent): void {
+		if (!richInput) return;
 		if (!containsFiles(event)) return;
 		event.preventDefault();
 		dragDepth = 0;
@@ -161,6 +173,7 @@
 	}
 
 	function handlePaste(event: ClipboardEvent): void {
+		if (!richInput) return;
 		const images = Array.from(event.clipboardData?.files ?? []).filter((file) =>
 			file.type.startsWith('image/')
 		);
@@ -177,7 +190,7 @@
 	ondrop={handleDrop}
 />
 
-{#if dragActive}
+{#if richInput && dragActive}
 	<div class="drop-overlay" role="status" aria-label="Chat file drop area">
 		<div class="drop-callout">
 			<span aria-hidden="true">＋</span>
@@ -188,7 +201,7 @@
 {/if}
 
 <div class="composer-shell">
-	{#if files.length > 0 || documentReferences.length > 0}
+	{#if richInput && (files.length > 0 || documentReferences.length > 0)}
 		<div class="evidence-rail" aria-label="Items to send">
 			<ChatAttachmentTray {files} onRemove={removeFile} />
 			{#if documentReferences.length > 0}
@@ -212,27 +225,31 @@
 		</div>
 	{/if}
 
-	{#if validationError}<div class="validation-error" role="alert">{validationError}</div>{/if}
+	{#if richInput && validationError}
+		<div class="validation-error" role="alert">{validationError}</div>
+	{/if}
 
 	<form class="composer" onsubmit={handleFormSubmit}>
-		<div class="composer-tools">
-			<label class="attach-control" title="Attach files">
-				<span aria-hidden="true">＋</span>
-				<span class="sr-only">Attach files</span>
-				<input
-					type="file"
-					multiple
-					{accept}
+		{#if richInput}
+			<div class="composer-tools">
+				<label class="attach-control" title="Attach files">
+					<span aria-hidden="true">＋</span>
+					<span class="sr-only">Attach files</span>
+					<input
+						type="file"
+						multiple
+						{accept}
+						{disabled}
+						onchange={handleFileSelection}
+					/>
+				</label>
+				<DocumentReferencePicker
+					selected={documentReferences}
 					{disabled}
-					onchange={handleFileSelection}
+					onChange={(documents) => (documentReferences = documents)}
 				/>
-			</label>
-			<DocumentReferencePicker
-				selected={documentReferences}
-				{disabled}
-				onChange={(documents) => (documentReferences = documents)}
-			/>
-		</div>
+			</div>
+		{/if}
 		<textarea
 			bind:this={textareaEl}
 			bind:value={text}

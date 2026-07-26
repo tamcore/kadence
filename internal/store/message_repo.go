@@ -500,7 +500,13 @@ func (r *MessageRepository) LoadChatAttachmentPayloads(
 	rows, err := r.pool.Query(ctx,
 		`SELECT a.id, a.message_id, a.filename, a.mime_type, a.kind,
 		        a.size_bytes, a.extraction_complete, a.image_width,
-		        a.image_height, a.ordinal, a.raw_bytes, a.extracted_markdown
+		        a.image_height, a.ordinal,
+		        CASE WHEN a.kind = 'image'
+		             THEN octet_length(a.raw_bytes)
+		             ELSE octet_length(a.extracted_markdown)
+		        END AS payload_bytes,
+		        CASE WHEN a.kind = 'image' THEN a.raw_bytes ELSE ''::bytea END,
+		        CASE WHEN a.kind = 'document' THEN a.extracted_markdown ELSE '' END
 		   FROM messages m
 		   JOIN message_attachments a ON a.message_id = m.id
 		  WHERE m.conversation_id = $1::uuid
@@ -523,6 +529,7 @@ func (r *MessageRepository) LoadChatAttachmentPayloads(
 			&attachment.MIME, &attachment.Kind, &attachment.SizeBytes,
 			&attachment.ExtractionComplete, &attachment.ImageWidth,
 			&attachment.ImageHeight, &attachment.Ordinal,
+			&attachment.PayloadBytes,
 			&attachment.RawBytes, &attachment.ExtractedMarkdown,
 		); err != nil {
 			return nil, fmt.Errorf("scan chat attachment payload: %w", err)
@@ -842,7 +849,11 @@ func hydrateMessageRelations(
 	}
 
 	attachmentQuery := `SELECT id, message_id, filename, mime_type, kind, size_bytes,
-	                           extraction_complete, image_width, image_height, ordinal`
+	                           extraction_complete, image_width, image_height, ordinal,
+	                           CASE WHEN kind = 'image'
+	                                THEN octet_length(raw_bytes)
+	                                ELSE octet_length(extracted_markdown)
+	                           END AS payload_bytes`
 	if includeAttachmentPayload {
 		attachmentQuery += `, raw_bytes, extracted_markdown`
 	}
@@ -860,7 +871,7 @@ func hydrateMessageRelations(
 			&attachment.ID, &attachment.MessageID, &attachment.Filename,
 			&attachment.MIME, &attachment.Kind, &attachment.SizeBytes,
 			&attachment.ExtractionComplete, &attachment.ImageWidth,
-			&attachment.ImageHeight, &attachment.Ordinal,
+			&attachment.ImageHeight, &attachment.Ordinal, &attachment.PayloadBytes,
 		}
 		if includeAttachmentPayload {
 			destinations = append(

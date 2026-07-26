@@ -100,6 +100,7 @@ type ServiceConfig struct {
 
 const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
+const maxHistoricalAttachmentPayloadTurns = 8
 
 var (
 	errRewindAttachmentPayload = errors.New("rewind attachment payload unavailable")
@@ -442,6 +443,15 @@ func estimateProviderMessageTokens(message provider.Message) int {
 	return tokens
 }
 
+func providerMessagesContainImages(messages []provider.Message) bool {
+	for _, message := range messages {
+		if len(message.Images) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func minimumHistoricalMessages(history []model.Message) []model.Message {
 	minimum := append([]model.Message(nil), history...)
 	for i := range minimum {
@@ -454,13 +464,9 @@ func minimumHistoricalMessages(history []model.Message) []model.Message {
 
 func (s *Service) loadHistoricalAttachmentPayloads(
 	ctx context.Context, conversationID string, history []model.Message,
+	availableTokens int,
 ) ([]model.Message, error) {
-	messageIDs := make([]int64, 0)
-	for _, message := range history {
-		if message.Role == model.MsgRoleUser && len(message.Attachments) > 0 {
-			messageIDs = append(messageIDs, message.ID)
-		}
-	}
+	messageIDs := selectHistoricalAttachmentPayloadIDs(history, availableTokens)
 	if len(messageIDs) == 0 {
 		return history, nil
 	}
@@ -486,6 +492,55 @@ func (s *Service) loadHistoricalAttachmentPayloads(
 		hydrated[i].Attachments = attachments
 	}
 	return hydrated, nil
+}
+
+func selectHistoricalAttachmentPayloadIDs(
+	history []model.Message, availableTokens int,
+) []int64 {
+	if availableTokens <= 0 {
+		return nil
+	}
+	remaining := int64(availableTokens)
+	selected := make(map[int64]struct{}, maxHistoricalAttachmentPayloadTurns)
+	for i := len(history) - 1; i >= 0; i-- {
+		message := history[i]
+		if message.Role != model.MsgRoleUser || len(message.Attachments) == 0 {
+			continue
+		}
+		cost := historicalAttachmentPayloadTokenCost(message)
+		if cost > remaining {
+			continue
+		}
+		selected[message.ID] = struct{}{}
+		remaining -= cost
+		if len(selected) == maxHistoricalAttachmentPayloadTurns {
+			break
+		}
+	}
+	messageIDs := make([]int64, 0, len(selected))
+	for _, message := range history {
+		if _, ok := selected[message.ID]; ok {
+			messageIDs = append(messageIDs, message.ID)
+		}
+	}
+	return messageIDs
+}
+
+func historicalAttachmentPayloadTokenCost(message model.Message) int64 {
+	var cost int64
+	for _, attachment := range message.Attachments {
+		payloadBytes := attachment.PayloadBytes
+		if payloadBytes <= 0 {
+			payloadBytes = attachment.SizeBytes
+		}
+		switch attachment.Kind {
+		case model.AttachmentKindImage:
+			cost += (payloadBytes + 2) / 3
+		case model.AttachmentKindDocument:
+			cost += (payloadBytes + estBytesPerToken - 1) / estBytesPerToken
+		}
+	}
+	return cost
 }
 
 func historicalAttachmentPayloadAvailable(message model.Message) bool {
@@ -1349,23 +1404,20 @@ func (s *Service) streamPersistedTurn(
 		slog.Debug("chat history trimmed to fit token budget",
 			"conversation", conversationID, "dropped_messages", droppedCount, "budget_tokens", s.contextBudget)
 	}
-	hydratedHistory, payloadErr := s.loadHistoricalAttachmentPayloads(
-		ctx, conversationID, boundedHistory,
-	)
-	if payloadErr != nil {
-		slog.Warn(
-			"historical attachment payload lookup failed; omitting payload",
-			"err", payloadErr,
-		)
-	} else {
-		boundedHistory = hydratedHistory
-	}
 	historyUsed := estimateTokens(systemPrompt) +
 		currentMessageTokens + reservedTokens
 	for _, message := range boundedHistory {
 		historyUsed += estimateTokens(message.Content)
 	}
 	historyBudget := s.contextBudget - historyUsed
+	hydratedHistory, payloadErr := s.loadHistoricalAttachmentPayloads(
+		ctx, conversationID, boundedHistory, historyBudget,
+	)
+	if payloadErr != nil {
+		slog.Error("historical attachment payload lookup failed", "err", payloadErr)
+		return s.fail(sink, "could not load historical attachment context")
+	}
+	boundedHistory = hydratedHistory
 	req.Messages = append(
 		req.Messages,
 		s.buildHistoricalProviderMessages(ctx, userID, boundedHistory, historyBudget)...,
@@ -1395,7 +1447,7 @@ func (s *Service) streamPersistedTurn(
 		var providerFailure *providerStreamFailure
 		if errors.As(err, &providerFailure) {
 			if providerFailure.content == "" &&
-				len(currentMessage.Images) > 0 &&
+				providerMessagesContainImages(req.Messages) &&
 				errors.Is(providerFailure.err, provider.ErrVisionUnsupported) &&
 				len(turnState.Handoffs) == 0 {
 				return s.fail(sink, "the configured assistant cannot process attached images")
@@ -2247,13 +2299,11 @@ func groupHistoryTurns(history []model.Message) []historyTurn {
 // message (see insertAfterSystem in Stream) — which are treated like the
 // system prompt itself: they are never dropped, so they reduce the token
 // allowance left for history rather than being bounded themselves. Pass 0
-// when no such inserts apply. boundHistory always keeps the first turn (so
-// the conversation's opening user message is never dropped), then walks
-// backward from the newest turn, keeping whole turns while they still fit
-// the budget. The contiguous oldest-middle turns that don't fit are dropped
-// in full — a turn (and so a tool-call/result pair, which live within the
-// same turn) is never split. Returns the bounded message slice and the
-// count of dropped messages (for a debug log; never their content).
+// when no such inserts apply. boundHistory walks backward from the newest
+// turn, keeping a contiguous suffix of whole turns while they still fit.
+// Older turns are dropped in full — a turn (and so a tool-call/result pair,
+// which live within the same turn) is never split. Returns the bounded
+// message slice and dropped-message count (for a debug log; never content).
 func (s *Service) boundHistory(
 	history []model.Message,
 	systemPrompt string,

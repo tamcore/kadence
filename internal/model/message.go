@@ -32,6 +32,7 @@ type MessageAttachment struct {
 	MIME               string `json:"mime"`
 	Kind               string `json:"kind"`
 	SizeBytes          int64  `json:"size_bytes"`
+	PayloadBytes       int64  `json:"-"`
 	RawBytes           []byte `json:"-"`
 	ExtractedMarkdown  string `json:"-"`
 	ExtractionComplete bool   `json:"-"`

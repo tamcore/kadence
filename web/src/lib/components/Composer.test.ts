@@ -50,6 +50,14 @@ beforeEach(() => {
 });
 
 describe('Composer', () => {
+	it('keeps evidence controls disabled unless rich input is explicitly enabled', () => {
+		const { container } = render(Composer, { props: { onSubmit: vi.fn() } });
+
+		expect(container.querySelector('input[type="file"]')).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Reference documents' })).not.toBeInTheDocument();
+		expect(capabilitiesMock).not.toHaveBeenCalled();
+	});
+
 	it('calls onSubmit with trimmed text and clears the textarea on submit', async () => {
 		const onSubmit = vi.fn();
 		render(Composer, { props: { onSubmit } });
@@ -70,7 +78,7 @@ describe('Composer', () => {
 					resolveSubmit = resolve;
 				})
 		);
-		const { container } = render(Composer, { props: { onSubmit } });
+		const { container } = render(Composer, { props: { onSubmit, richInput: true } });
 		const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
 		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
 		const screenshot = new File(['image'], 'retry.png', { type: 'image/png' });
@@ -167,7 +175,7 @@ describe('Composer', () => {
 
 	it('selects multiple files, removes one, and submits the remaining file without text', async () => {
 		const onSubmit = vi.fn();
-		const { container } = render(Composer, { props: { onSubmit } });
+		const { container } = render(Composer, { props: { onSubmit, richInput: true } });
 		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
 		const screenshot = new File(['image'], 'finish.png', { type: 'image/png' });
 		const notes = new File(['notes'], 'week.md', { type: 'text/markdown' });
@@ -188,7 +196,7 @@ describe('Composer', () => {
 
 	it('accepts files dropped anywhere on the chat page', async () => {
 		const onSubmit = vi.fn();
-		render(Composer, { props: { onSubmit } });
+		render(Composer, { props: { onSubmit, richInput: true } });
 		const screenshot = new File(['image'], 'route.png', { type: 'image/png' });
 
 		await fireEvent.dragEnter(window, {
@@ -206,7 +214,7 @@ describe('Composer', () => {
 	});
 
 	it('clears the page-wide drop overlay when dragleave omits transfer types', async () => {
-		render(Composer, { props: { onSubmit: vi.fn() } });
+		render(Composer, { props: { onSubmit: vi.fn(), richInput: true } });
 		const screenshot = new File(['image'], 'route.png', { type: 'image/png' });
 
 		await fireEvent.dragEnter(window, {
@@ -222,7 +230,7 @@ describe('Composer', () => {
 
 	it('adds pasted clipboard images without swallowing ordinary text paste', async () => {
 		const onSubmit = vi.fn();
-		render(Composer, { props: { onSubmit } });
+		render(Composer, { props: { onSubmit, richInput: true } });
 		const textarea = screen.getByRole('textbox');
 		const screenshot = new File(['image'], 'clipboard.png', { type: 'image/png' });
 
@@ -240,7 +248,7 @@ describe('Composer', () => {
 
 	it('enforces five files and the aggregate configured byte limit before send', async () => {
 		const onSubmit = vi.fn();
-		const { container } = render(Composer, { props: { onSubmit } });
+		const { container } = render(Composer, { props: { onSubmit, richInput: true } });
 		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
 		const files = Array.from(
 			{ length: 6 },
@@ -277,7 +285,7 @@ describe('Composer', () => {
 
 	it('searches grouped private and public references and submits a reference-only turn', async () => {
 		const onSubmit = vi.fn();
-		render(Composer, { props: { onSubmit } });
+		render(Composer, { props: { onSubmit, richInput: true } });
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
 		await waitFor(() => expect(screen.getByRole('heading', { name: 'Your documents' })).toBeInTheDocument());
@@ -297,7 +305,7 @@ describe('Composer', () => {
 
 	it('does not submit the enclosing chat form when Enter is pressed in reference search', async () => {
 		const onSubmit = vi.fn();
-		render(Composer, { props: { onSubmit } });
+		render(Composer, { props: { onSubmit, richInput: true } });
 		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
 		const search = await screen.findByRole('searchbox', { name: 'Search documents' });
 		await fireEvent.input(search, { target: { value: 'race' } });
@@ -308,6 +316,20 @@ describe('Composer', () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it('does not mutate document references after the composer becomes disabled', async () => {
+		const onSubmit = vi.fn();
+		const { rerender } = render(Composer, {
+			props: { onSubmit, richInput: true }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
+		const add = await screen.findByRole('button', { name: 'Add public-race-guide.md' });
+
+		await rerender({ onSubmit, richInput: true, disabled: true });
+		await fireEvent.click(add);
+
+		expect(screen.queryByRole('list', { name: 'Documents to reference' })).not.toBeInTheDocument();
+	});
+
 	it('previews queued images and revokes every object URL after removal or unmount', async () => {
 		const createObjectURL = vi.fn((file: File) => `blob:${file.name}`);
 		const revokeObjectURL = vi.fn();
@@ -315,7 +337,9 @@ describe('Composer', () => {
 			static createObjectURL = createObjectURL;
 			static revokeObjectURL = revokeObjectURL;
 		});
-		const { container, unmount } = render(Composer, { props: { onSubmit: vi.fn() } });
+		const { container, unmount } = render(Composer, {
+			props: { onSubmit: vi.fn(), richInput: true }
+		});
 		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
 		const first = new File(['first'], 'first.png', { type: 'image/png' });
 		const second = new File(['second'], 'second.png', { type: 'image/png' });

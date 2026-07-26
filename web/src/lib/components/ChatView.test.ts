@@ -169,6 +169,27 @@ describe('ChatView', () => {
 		await waitFor(() => expect(textarea.value).toBe('retry this'));
 	});
 
+	it('does not restore rejected input into a different active conversation', async () => {
+		let resolveSend: (id: string | null) => void = () => {};
+		sendMessageMock.mockImplementationOnce(
+			() =>
+				new Promise<string | null>((resolve) => {
+					resolveSend = resolve;
+				})
+		);
+		(activeId as unknown as { set: (v: string | null) => void }).set('chat-a');
+		render(ChatView, { props: {} });
+
+		await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'message for A' } });
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+		(activeId as unknown as { set: (v: string | null) => void }).set('chat-b');
+		await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''));
+
+		resolveSend(null);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(screen.getByRole('textbox')).toHaveValue('');
+	});
+
 	it('forwards a file-only composer submission to the chat store', async () => {
 		sendMessageMock.mockResolvedValueOnce('conv-1');
 		const { container } = render(ChatView, { props: {} });

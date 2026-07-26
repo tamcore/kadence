@@ -161,6 +161,19 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 		got[0].Ordinal != 0 {
 		t.Fatalf("second payload = %+v", got)
 	}
+
+	payloads, err = messages.LoadChatAttachmentPayloads(
+		ctx, conversation.ID, []int64{first.ID},
+	)
+	if err != nil {
+		t.Fatalf("load document attachment payload: %v", err)
+	}
+	if got := payloads[first.ID]; len(got) != 1 ||
+		len(got[0].RawBytes) != 0 ||
+		got[0].ExtractedMarkdown != "# First" ||
+		got[0].PayloadBytes != int64(len("# First")) {
+		t.Fatalf("document provider payload = %+v", got)
+	}
 }
 
 func TestMessageRepositoryRejectsCrossConversationAttachmentPayloadID(t *testing.T) {

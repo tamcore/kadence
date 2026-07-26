@@ -37,6 +37,7 @@
 	}
 
 	async function toggleOpen(): Promise<void> {
+		if (disabled) return;
 		open = !open;
 		if (!open || loaded || loading) return;
 		loading = true;
@@ -54,6 +55,7 @@
 	}
 
 	function toggleDocument(document: Document): void {
+		if (disabled) return;
 		if (selectedDocument(document.id)) {
 			onChange(selected.filter((item) => item.id !== document.id));
 			return;
@@ -93,6 +95,7 @@
 					aria-label="Search documents"
 					placeholder="Search by filename"
 					bind:value={query}
+					disabled={disabled}
 					onkeydown={handleSearchKeydown}
 				/>
 			</label>
@@ -115,7 +118,8 @@
 											type="button"
 											class:selected={selectedDocument(document.id)}
 											aria-label={`${selectedDocument(document.id) ? 'Remove' : 'Add'} ${document.filename}`}
-											disabled={!selectedDocument(document.id) && selected.length >= MAX_REFERENCES}
+											disabled={disabled ||
+												(!selectedDocument(document.id) && selected.length >= MAX_REFERENCES)}
 											onclick={() => toggleDocument(document)}
 										>
 											<span>{document.filename}</span>
@@ -138,7 +142,8 @@
 											type="button"
 											class:selected={selectedDocument(document.id)}
 											aria-label={`${selectedDocument(document.id) ? 'Remove' : 'Add'} ${document.filename}`}
-											disabled={!selectedDocument(document.id) && selected.length >= MAX_REFERENCES}
+											disabled={disabled ||
+												(!selectedDocument(document.id) && selected.length >= MAX_REFERENCES)}
 											onclick={() => toggleDocument(document)}
 										>
 											<span>{document.filename}</span>

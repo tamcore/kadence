@@ -199,10 +199,13 @@
 			<button class="stop-btn" type="button" onclick={stopGeneration}>Stop generating</button>
 		{/if}
 		<div class="composer-column" data-testid="chat-composer">
-			<Composer
-				disabled={$sending}
-				onSubmit={(text, files, documents) => submit(text, files, documents)}
-			/>
+			{#key $activeId}
+				<Composer
+					richInput
+					disabled={$sending}
+					onSubmit={(text, files, documents) => submit(text, files, documents)}
+				/>
+			{/key}
 		</div>
 	</div>
 </div>
