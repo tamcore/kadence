@@ -93,8 +93,8 @@ type chatCompletionRequest struct {
 }
 
 type chatCompletionRequestMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
 }
 
 // chatCompletionChunk mirrors the shape the openai-go/v3 stream decoder
@@ -200,13 +200,14 @@ func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
 	var firstUser string
 	userMessages := 0
 	for _, message := range messages {
-		if message.Role == messageRoleSystem && strings.Contains(message.Content, scheduledCompilerPrompt) {
+		content := messageText(message.Content)
+		if message.Role == messageRoleSystem && strings.Contains(content, scheduledCompilerPrompt) {
 			compilerRequest = true
 		}
 		if message.Role == messageRoleUser {
 			userMessages++
 			if firstUser == "" {
-				firstUser = message.Content
+				firstUser = content
 			}
 		}
 	}
@@ -220,6 +221,28 @@ func scheduledReply(messages []chatCompletionRequestMessage) (string, bool) {
 		return scheduledProposalReply, true
 	}
 	return scheduledQuestionReply, true
+}
+
+func messageText(content json.RawMessage) string {
+	var text string
+	if json.Unmarshal(content, &text) == nil {
+		return text
+	}
+
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return ""
+	}
+	var joined strings.Builder
+	for _, part := range parts {
+		if part.Type == "text" {
+			joined.WriteString(part.Text)
+		}
+	}
+	return joined.String()
 }
 
 // writeSSEChunk marshals v and writes it as a single "data: <json>\n\n" SSE

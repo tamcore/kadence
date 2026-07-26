@@ -72,6 +72,29 @@ func TestSecurityHeadersStrictPolicyWithHashes(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersAllowBlobImagePreviews(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		hashes []string
+	}{
+		{name: "dev fallback"},
+		{name: "production hashes", hashes: []string{"sha256-abc"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := SecurityHeaders(true, test.hashes)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+			csp := rec.Header().Get("Content-Security-Policy")
+			if !strings.Contains(csp, "img-src 'self' data: blob:") {
+				t.Fatalf("Content-Security-Policy = %q, want blob image previews allowed", csp)
+			}
+		})
+	}
+}
+
 func TestSecurityHeadersProdWithoutHashesDegradesToDevPolicy(t *testing.T) {
 	// A prod build somehow missing its hashes file must never ship a broken
 	// strict CSP (script-src 'self' with no hash would block the SPA's own

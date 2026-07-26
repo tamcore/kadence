@@ -13,7 +13,7 @@ import (
 // keeps working, rather than shipping a strict script-src with zero hashes
 // that would silently break the SPA's own inline bootstrap script.
 const devCSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; " +
-	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; " +
 	"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 // hstsHeader is the Strict-Transport-Security value applied in production.
@@ -57,6 +57,6 @@ func strictCSP(scriptHashes []string) string {
 	}
 	scriptSrc := "script-src 'self' " + strings.Join(quoted, " ")
 	return "default-src 'self'; " + scriptSrc + "; " +
-		"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
+		"style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; " +
 		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 }

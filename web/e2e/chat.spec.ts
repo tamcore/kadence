@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { login } from './helpers';
 
 const USERNAME = process.env.E2E_ADMIN_USERNAME || 'admin';
 const PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-pw';
+const tinyPng = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+	'base64'
+);
+const samplePdf = readFileSync(new URL('./fixtures/sample.pdf', import.meta.url));
 
 test('sending a chat message shows the stub assistant reply with no error', async ({ page }) => {
 	await login(page, USERNAME, PASSWORD);
@@ -16,6 +22,68 @@ test('sending a chat message shows the stub assistant reply with no error', asyn
 	// "coaching reply." — match on the joined text.
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
 	await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('sends and reloads an attachment-only screenshot turn', async ({ page }) => {
+	await login(page, USERNAME, PASSWORD);
+	await page.goto('/chat');
+
+	await page.locator('input[type="file"]').setInputFiles({
+		name: 'chat-screenshot.png',
+		mimeType: 'image/png',
+		buffer: tinyPng
+	});
+	await expect(page.getByRole('img', { name: 'Preview chat-screenshot.png' })).toBeVisible();
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	await expect(page.getByRole('img', { name: 'chat-screenshot.png' })).toBeVisible();
+	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
+	await page.reload();
+	await expect(page.getByRole('link', { name: 'Open chat-screenshot.png' })).toBeVisible();
+});
+
+test('explicitly references private and public documents and preserves them on reload', async ({
+	page
+}) => {
+	await login(page, USERNAME, PASSWORD);
+
+	await page.goto('/documents');
+	await page.locator('input[type="file"]').setInputFiles({
+		name: 'chat-private-reference.pdf',
+		mimeType: 'application/pdf',
+		buffer: samplePdf
+	});
+	await page.getByRole('button', { name: 'Upload 1 file' }).click();
+	await expect(page.getByRole('row', { name: /chat-private-reference\.pdf/i })).toBeVisible();
+
+	await page.goto('/admin/documents');
+	await page.locator('input[type="file"]').setInputFiles({
+		name: 'chat-public-reference.pdf',
+		mimeType: 'application/pdf',
+		buffer: samplePdf
+	});
+	await page.getByRole('button', { name: 'Upload 1 file' }).click();
+	await expect(page.getByRole('row', { name: /chat-public-reference\.pdf/i })).toBeVisible();
+
+	await page.goto('/chat');
+	await page.getByRole('button', { name: 'Reference documents' }).click();
+	await page.getByRole('button', { name: 'Add chat-private-reference.pdf' }).click();
+	await page.getByRole('button', { name: 'Add chat-public-reference.pdf' }).click();
+	await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Use both plans.');
+	await page.getByRole('button', { name: 'Send' }).click();
+
+	const references = page.getByRole('list', { name: 'Referenced documents' });
+	await expect(references).toContainText('chat-private-reference.pdf');
+	await expect(references).toContainText('Private reference');
+	await expect(references).toContainText('chat-public-reference.pdf');
+	await expect(references).toContainText('Public reference');
+	await page.reload();
+	await expect(page.getByRole('list', { name: 'Referenced documents' })).toContainText(
+		'chat-private-reference.pdf'
+	);
+	await expect(page.getByRole('list', { name: 'Referenced documents' })).toContainText(
+		'chat-public-reference.pdf'
+	);
 });
 
 test('edits and regenerates persisted chat turns', async ({ page }) => {

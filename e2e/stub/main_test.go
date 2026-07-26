@@ -72,6 +72,32 @@ func TestChatCompletionsStreamsSSEChunks(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsAcceptsMultimodalUserContent(t *testing.T) {
+	reqBody := `{
+		"model":"stub",
+		"messages":[{
+			"role":"user",
+			"content":[
+				{"type":"text","text":"What is shown?"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo=","detail":"high"}}
+			]
+		}],
+		"stream":true
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	frames := extractDataFrames(t, rec.Body.String())
+	if len(frames) == 0 || frames[len(frames)-1] != "[DONE]" {
+		t.Fatalf("frames = %v, want terminating [DONE]", frames)
+	}
+}
+
 func TestChatCompletionsRefinesScheduledTasks(t *testing.T) {
 	question := scheduledStubReply(t, []map[string]string{
 		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
