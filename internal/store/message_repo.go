@@ -420,8 +420,17 @@ func addMessageWithPurpose(
 	var m model.Message
 	var tcRaw []byte
 	err := db.QueryRow(ctx,
-		`INSERT INTO messages (conversation_id, role, content, tool_calls, purpose) VALUES ($1::uuid, $2, $3, $4, $5)
-		 RETURNING id, conversation_id::text, role, content, tool_calls, created_at`, conversationID, role, content, raw, purpose).
+		`WITH inserted AS (
+		     INSERT INTO messages (conversation_id, role, content, tool_calls, purpose)
+		     VALUES ($1::uuid, $2, $3, $4, $5)
+		     RETURNING id, conversation_id, role, content, tool_calls, created_at
+		 ), touched AS (
+		     UPDATE conversations
+		        SET last_activity_at = (SELECT created_at FROM inserted)
+		      WHERE id = $1::uuid AND kind = $6 AND $5 = $6
+		 )
+		 SELECT id, conversation_id::text, role, content, tool_calls, created_at FROM inserted`,
+		conversationID, role, content, raw, purpose, messagePurposeChat).
 		Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &tcRaw, &m.CreatedAt)
 	if err != nil {
 		return model.Message{}, fmt.Errorf("insert message: %w", err)
@@ -679,6 +688,9 @@ func (r *MessageRepository) EditAndRewind(
 		conversationID, messageID, content); err != nil {
 		return model.Message{}, fmt.Errorf("update edited message: %w", err)
 	}
+	if err := touchChatConversation(ctx, tx, conversationID); err != nil {
+		return model.Message{}, err
+	}
 	targets := []model.Message{target}
 	if err := hydrateMessageRelations(ctx, tx, targets, true); err != nil {
 		return model.Message{}, err
@@ -735,6 +747,9 @@ func (r *MessageRepository) RegenerateAndRewind(
 		conversationID, messageID); err != nil {
 		return model.Message{}, fmt.Errorf("delete regenerated message suffix: %w", err)
 	}
+	if err := touchChatConversation(ctx, tx, conversationID); err != nil {
+		return model.Message{}, err
+	}
 	prompts := []model.Message{prompt}
 	if err := hydrateMessageRelations(ctx, tx, prompts, true); err != nil {
 		return model.Message{}, err
@@ -758,6 +773,14 @@ func lockOwnedChat(ctx context.Context, tx pgx.Tx, conversationID string, userID
 	}
 	if err != nil {
 		return fmt.Errorf("lock chat conversation: %w", err)
+	}
+	return nil
+}
+
+func touchChatConversation(ctx context.Context, tx pgx.Tx, conversationID string) error {
+	if _, err := tx.Exec(ctx,
+		`UPDATE conversations SET last_activity_at = NOW() WHERE id = $1::uuid`, conversationID); err != nil {
+		return fmt.Errorf("touch chat conversation activity: %w", err)
 	}
 	return nil
 }

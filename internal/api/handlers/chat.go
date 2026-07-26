@@ -51,11 +51,12 @@ type ChatRewriter interface {
 	Regenerate(ctx context.Context, userID int64, uc chat.UserContext, conversationID string, messageID int64, sink chat.EventSink) error
 }
 
-// ConvLister lists/gets/renames/deletes conversations for a user.
+// ConvLister lists/gets/updates/deletes conversations for a user.
 type ConvLister interface {
 	ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error)
 	GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error)
 	UpdateTitle(ctx context.Context, id string, userID int64, title string) (model.Conversation, error)
+	UpdatePinned(ctx context.Context, id string, userID int64, pinned bool) (model.Conversation, error)
 	Delete(ctx context.Context, id string, userID int64) error
 }
 
@@ -202,9 +203,24 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 }
 
 type conversationDTO struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	CreatedAt string `json:"createdAt"`
+	ID             string  `json:"id"`
+	Title          string  `json:"title"`
+	PinnedAt       *string `json:"pinnedAt"`
+	LastActivityAt string  `json:"lastActivityAt"`
+	CreatedAt      string  `json:"createdAt"`
+}
+
+func toConversationDTO(c model.Conversation) conversationDTO {
+	var pinnedAt *string
+	if c.PinnedAt != nil {
+		formatted := c.PinnedAt.Format("2006-01-02T15:04:05Z07:00")
+		pinnedAt = &formatted
+	}
+	return conversationDTO{
+		ID: c.ID, Title: c.Title, PinnedAt: pinnedAt,
+		LastActivityAt: c.LastActivityAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:      c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
 }
 
 // ListConversations handles GET /api/conversations.
@@ -217,7 +233,7 @@ func (h *Chat) ListConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]conversationDTO, 0, len(list))
 	for _, c := range list {
-		out = append(out, conversationDTO{ID: c.ID, Title: c.Title, CreatedAt: c.CreatedAt.Format("2006-01-02T15:04:05Z07:00")})
+		out = append(out, toConversationDTO(c))
 	}
 	RespondJSON(w, http.StatusOK, out)
 }
@@ -405,9 +421,9 @@ func (h *Chat) streamSSE(w http.ResponseWriter, run func(chat.EventSink)) {
 	<-stopped
 }
 
-// PatchConversation handles PATCH /api/conversations/{id}, currently supporting
-// only a title rename. Reuses chat.TitleMaxLen so explicit user renames are
-// bound by the same limit as auto-derived titles.
+// PatchConversation handles PATCH /api/conversations/{id}. Exactly one title
+// or pinned field is required. Title renames use chat.TitleMaxLen, matching
+// auto-derived titles.
 func (h *Chat) PatchConversation(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	id := chi.URLParam(r, "id")
@@ -416,35 +432,46 @@ func (h *Chat) PatchConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title string `json:"title"`
+		Title  *string `json:"title"`
+		Pinned *bool   `json:"pinned"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		RespondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	title := strings.TrimSpace(body.Title)
-	if title == "" {
-		RespondError(w, http.StatusBadRequest, "title is required")
+	if (body.Title == nil) == (body.Pinned == nil) {
+		RespondError(w, http.StatusBadRequest, "exactly one of title or pinned is required")
 		return
 	}
-	if len([]rune(title)) > chat.TitleMaxLen {
-		RespondError(w, http.StatusBadRequest, fmt.Sprintf("title must be %d characters or fewer", chat.TitleMaxLen))
-		return
+	var (
+		updated      model.Conversation
+		err          error
+		errorMessage = "could not rename conversation"
+	)
+	if body.Title != nil {
+		title := strings.TrimSpace(*body.Title)
+		if title == "" {
+			RespondError(w, http.StatusBadRequest, "title is required")
+			return
+		}
+		if len([]rune(title)) > chat.TitleMaxLen {
+			RespondError(w, http.StatusBadRequest, fmt.Sprintf("title must be %d characters or fewer", chat.TitleMaxLen))
+			return
+		}
+		updated, err = h.convs.UpdateTitle(r.Context(), id, u.ID, title)
+	} else {
+		updated, err = h.convs.UpdatePinned(r.Context(), id, u.ID, *body.Pinned)
+		errorMessage = "could not update conversation"
 	}
-
-	updated, err := h.convs.UpdateTitle(r.Context(), id, u.ID, title)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			RespondError(w, http.StatusNotFound, "conversation not found")
 			return
 		}
-		RespondError(w, http.StatusInternalServerError, "could not rename conversation")
+		RespondError(w, http.StatusInternalServerError, errorMessage)
 		return
 	}
-	RespondJSON(w, http.StatusOK, conversationDTO{
-		ID: updated.ID, Title: updated.Title,
-		CreatedAt: updated.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-	})
+	RespondJSON(w, http.StatusOK, toConversationDTO(updated))
 }
 
 // DeleteConversation handles DELETE /api/conversations/{id}.

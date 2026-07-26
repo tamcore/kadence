@@ -61,13 +61,16 @@ func (f *fakeStreamer) Regenerate(
 }
 
 type fakeConvLister struct {
-	list            []model.Conversation
-	getByIDError    error
-	deleteError     error
-	deleteCalls     int
-	updateTitleErr  error
-	updateTitleResp model.Conversation
-	getByIDResp     model.Conversation
+	list             []model.Conversation
+	getByIDError     error
+	deleteError      error
+	deleteCalls      int
+	updateTitleErr   error
+	updateTitleResp  model.Conversation
+	updatePinnedErr  error
+	updatePinned     *bool
+	updatePinnedResp model.Conversation
+	getByIDResp      model.Conversation
 }
 
 func (f fakeConvLister) ListByUser(context.Context, int64) ([]model.Conversation, error) {
@@ -94,6 +97,16 @@ func (f fakeConvLister) UpdateTitle(_ context.Context, id string, userID int64, 
 		return f.updateTitleResp, nil
 	}
 	return model.Conversation{ID: id, UserID: userID, Title: title}, nil
+}
+func (f *fakeConvLister) UpdatePinned(_ context.Context, id string, userID int64, pinned bool) (model.Conversation, error) {
+	f.updatePinned = &pinned
+	if f.updatePinnedErr != nil {
+		return model.Conversation{}, f.updatePinnedErr
+	}
+	if f.updatePinnedResp.ID != "" {
+		return f.updatePinnedResp, nil
+	}
+	return model.Conversation{ID: id, UserID: userID}, nil
 }
 
 type fakeMsgLister struct {
@@ -192,6 +205,19 @@ func TestListConversations(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ListConversations(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"a"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListConversationsIncludesNavigationState(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{
+		ID: "conv-uuid-1", Title: "a",
+	}}}, fakeMsgLister{}, nil, nil)
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
+	rec := httptest.NewRecorder()
+	h.ListConversations(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"pinnedAt":null`) ||
+		!strings.Contains(rec.Body.String(), `"lastActivityAt":`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -515,6 +541,66 @@ func TestPatchConversationSuccess(t *testing.T) {
 	h.PatchConversation(rec, patchReq(t, `{"title":"  New title  "}`))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"New title"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchConversationPins(t *testing.T) {
+	convs := &fakeConvLister{}
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, nil, nil)
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"pinned":true}`))
+	if rec.Code != http.StatusOK || convs.updatePinned == nil || !*convs.updatePinned ||
+		!strings.Contains(rec.Body.String(), `"pinnedAt":`) ||
+		!strings.Contains(rec.Body.String(), `"lastActivityAt":`) {
+		t.Fatalf("status=%d pinned=%v body=%s", rec.Code, convs.updatePinned, rec.Body.String())
+	}
+}
+
+func TestPatchConversationUnpins(t *testing.T) {
+	convs := &fakeConvLister{}
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, nil, nil)
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"pinned":false}`))
+	if rec.Code != http.StatusOK || convs.updatePinned == nil || *convs.updatePinned {
+		t.Fatalf("status=%d pinned=%v body=%s", rec.Code, convs.updatePinned, rec.Body.String())
+	}
+}
+
+func TestPatchConversationRejectsMixedNavigationAndTitleFields(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{"title":"new", "pinned":true}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchConversationRejectsEmptyNavigationBody(t *testing.T) {
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
+	rec := httptest.NewRecorder()
+	h.PatchConversation(rec, patchReq(t, `{}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchConversationPinnedErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{name: "not found", err: store.ErrNotFound, wantStatus: http.StatusNotFound},
+		{name: "repository error", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{updatePinnedErr: tc.err}, fakeMsgLister{}, nil, nil)
+			rec := httptest.NewRecorder()
+			h.PatchConversation(rec, patchReq(t, `{"pinned":true}`))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

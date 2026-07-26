@@ -35,8 +35,8 @@ func insertConversation(
 	var c model.Conversation
 	err := db.QueryRow(ctx,
 		`INSERT INTO conversations (user_id, title, kind) VALUES ($1, $2, $3)
-		 RETURNING id::text, user_id, title, kind, created_at`, userID, title, kind).
-		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt)
+		 RETURNING id::text, user_id, title, kind, pinned_at, last_activity_at, created_at`, userID, title, kind).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.PinnedAt, &c.LastActivityAt, &c.CreatedAt)
 	if err != nil {
 		return model.Conversation{}, fmt.Errorf("insert conversation: %w", err)
 	}
@@ -47,8 +47,8 @@ func insertConversation(
 func (r *ConversationRepository) GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error) {
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
-		`SELECT id::text, user_id, title, kind, created_at FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID).
-		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt)
+		`SELECT id::text, user_id, title, kind, pinned_at, last_activity_at, created_at FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.PinnedAt, &c.LastActivityAt, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Conversation{}, ErrNotFound
 	}
@@ -58,10 +58,15 @@ func (r *ConversationRepository) GetByID(ctx context.Context, id string, userID 
 	return c, nil
 }
 
-// ListByUser returns a user's conversations, newest first.
+// ListByUser returns a user's chat conversations with pinned chats first,
+// followed by most recently active chats.
 func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) ([]model.Conversation, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id::text, user_id, title, kind, created_at FROM conversations WHERE user_id = $1 AND kind = $2 ORDER BY created_at DESC`, userID, model.ConversationKindChat)
+		`SELECT id::text, user_id, title, kind, pinned_at, last_activity_at, created_at
+		   FROM conversations
+		  WHERE user_id = $1 AND kind = $2
+		  ORDER BY pinned_at DESC NULLS LAST, last_activity_at DESC, created_at DESC, id DESC`,
+		userID, model.ConversationKindChat)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
@@ -69,7 +74,7 @@ func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64) (
 	var out []model.Conversation
 	for rows.Next() {
 		var c model.Conversation
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.PinnedAt, &c.LastActivityAt, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan conversation: %w", err)
 		}
 		out = append(out, c)
@@ -83,13 +88,34 @@ func (r *ConversationRepository) UpdateTitle(ctx context.Context, id string, use
 	var c model.Conversation
 	err := r.pool.QueryRow(ctx,
 		`UPDATE conversations SET title = $1 WHERE id = $2::uuid AND user_id = $3
-		 RETURNING id::text, user_id, title, kind, created_at`, title, id, userID).
-		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.CreatedAt)
+		 RETURNING id::text, user_id, title, kind, pinned_at, last_activity_at, created_at`, title, id, userID).
+		Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.PinnedAt, &c.LastActivityAt, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Conversation{}, ErrNotFound
 	}
 	if err != nil {
 		return model.Conversation{}, fmt.Errorf("update conversation title: %w", err)
+	}
+	return c, nil
+}
+
+// UpdatePinned changes the pin state of an owned ordinary chat conversation.
+// Re-pinning preserves the original pin timestamp and repeated unpins remain
+// no-ops, making both operations idempotent.
+func (r *ConversationRepository) UpdatePinned(ctx context.Context, id string, userID int64, pinned bool) (model.Conversation, error) {
+	var c model.Conversation
+	err := r.pool.QueryRow(ctx,
+		`UPDATE conversations
+		    SET pinned_at = CASE WHEN $1 THEN COALESCE(pinned_at, NOW()) ELSE NULL END
+		  WHERE id = $2::uuid AND user_id = $3 AND kind = $4
+		  RETURNING id::text, user_id, title, kind, pinned_at, last_activity_at, created_at`,
+		pinned, id, userID, model.ConversationKindChat,
+	).Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.PinnedAt, &c.LastActivityAt, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Conversation{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Conversation{}, fmt.Errorf("update conversation pin: %w", err)
 	}
 	return c, nil
 }
