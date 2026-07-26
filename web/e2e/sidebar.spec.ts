@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import type { Conversation } from '../src/lib/types';
 
 const session = {
@@ -169,19 +169,22 @@ async function openConversationActions(page: Page, title: string) {
 	return page.getByRole('menu', { name: `${title} actions`, exact: true });
 }
 
-test('keeps header and account footer visible while the crowded conversation region scrolls', async ({ page }, testInfo) => {
-	await page.setViewportSize({ width: 1280, height: 700 });
-	await installSidebarFixture(page, testInfo);
-	await page.goto('/');
-
-	const sidebar = page.locator('.sidebar');
+async function expectSidebarChromeToStayInViewport(
+	sidebar: Locator,
+	viewport: { width: number; height: number }
+): Promise<void> {
 	const header = sidebar.locator('.sidebar-header');
 	const footer = sidebar.locator('.sidebar-footer');
 	const scroll = sidebar.locator('.sidebar-scroll');
-	await expect(page.getByRole('button', { name: 'Pinned', exact: true })).toBeVisible();
-	await expect(scroll).toBeVisible();
+	const before = await Promise.all([sidebar.boundingBox(), header.boundingBox(), footer.boundingBox(), scroll.boundingBox()]);
+	for (const box of before) {
+		expect(box).not.toBeNull();
+		expect(box!.x).toBeGreaterThanOrEqual(0);
+		expect(box!.y).toBeGreaterThanOrEqual(0);
+		expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+		expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+	}
 
-	const before = await Promise.all([header.boundingBox(), footer.boundingBox()]);
 	const metrics = await scroll.evaluate((element) => ({
 		clientHeight: element.clientHeight,
 		scrollHeight: element.scrollHeight,
@@ -194,14 +197,27 @@ test('keeps header and account footer visible while the crowded conversation reg
 	});
 	await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
-	const after = await Promise.all([header.boundingBox(), footer.boundingBox()]);
-	expect(before[0]).not.toBeNull();
-	expect(before[1]).not.toBeNull();
-	expect(after[0]).not.toBeNull();
-	expect(after[1]).not.toBeNull();
-	expect(after[0]!.y).toBeCloseTo(before[0]!.y, 3);
+	const after = await Promise.all([sidebar.boundingBox(), header.boundingBox(), footer.boundingBox(), scroll.boundingBox()]);
+	for (const box of after) {
+		expect(box).not.toBeNull();
+		expect(box!.x).toBeGreaterThanOrEqual(0);
+		expect(box!.y).toBeGreaterThanOrEqual(0);
+		expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+		expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+	}
 	expect(after[1]!.y).toBeCloseTo(before[1]!.y, 3);
+	expect(after[2]!.y).toBeCloseTo(before[2]!.y, 3);
 	expect(await sidebar.evaluate((element) => element.scrollTop)).toBe(0);
+}
+
+test('keeps header and account footer visible while the crowded conversation region scrolls', async ({ page }, testInfo) => {
+	await page.setViewportSize({ width: 1280, height: 700 });
+	await installSidebarFixture(page, testInfo);
+	await page.goto('/');
+
+	const sidebar = page.locator('.sidebar');
+	await expect(page.getByRole('button', { name: 'Pinned', exact: true })).toBeVisible();
+	await expectSidebarChromeToStayInViewport(sidebar, { width: 1280, height: 700 });
 });
 
 test('partitions ordered pinned and recent conversations without duplication', async ({ page }, testInfo) => {
@@ -211,7 +227,7 @@ test('partitions ordered pinned and recent conversations without duplication', a
 	const pinned = page.locator('#sidebar-pinned-conversations');
 	const recents = page.locator('#sidebar-recent-conversations');
 	await expect(pinned.locator('a')).toHaveText(['Pinned today', 'Pinned earlier']);
-	await expect(recents.locator('a').first()).toHaveText('Recent first');
+	await expect(recents.locator('a')).toHaveText(recentConversations.map((item) => item.title));
 	await expect(recents.getByRole('link', { name: 'Pinned today', exact: true })).toHaveCount(0);
 	await expect(pinned.getByRole('link', { name: 'Recent first', exact: true })).toHaveCount(0);
 });
@@ -254,7 +270,7 @@ test('reveals desktop conversation actions on hover and keyboard focus', async (
 	await expect(actions).toHaveCSS('opacity', '1');
 });
 
-test('keeps the overflow action available for touch navigation', async ({ browser }, testInfo) => {
+test('keeps mobile drawer chrome bounded and opens overflow actions for touch navigation', async ({ browser }, testInfo) => {
 	const context = await browser.newContext({
 		viewport: { width: 390, height: 844 },
 		isMobile: true,
@@ -266,11 +282,18 @@ test('keeps the overflow action available for touch navigation', async ({ browse
 		await page.goto('/');
 		await page.getByRole('button', { name: 'Menu', exact: true }).click();
 
+		const sidebar = page.locator('.sidebar');
+		await expect(sidebar).toHaveClass(/open/);
+		await expect.poll(async () => (await sidebar.boundingBox())?.x ?? -1).toBeGreaterThanOrEqual(0);
+		await expectSidebarChromeToStayInViewport(sidebar, { width: 390, height: 844 });
 		const row = conversationRow(page, 'Recent first');
 		const actions = row.locator('.row-actions');
 		await expect(actions).toHaveCSS('opacity', '1');
-		await expect(row.getByRole('button', { name: 'Recent first actions', exact: true })).toBeVisible();
+		const trigger = row.getByRole('button', { name: 'Recent first actions', exact: true });
+		await expect(trigger).toBeVisible();
 		await expect(row.locator('.pin-action')).toHaveCSS('display', 'none');
+		await trigger.tap();
+		await expect(page.getByRole('menu', { name: 'Recent first actions', exact: true })).toBeVisible();
 	} finally {
 		await context.close();
 	}
