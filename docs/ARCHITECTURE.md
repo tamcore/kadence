@@ -61,7 +61,9 @@ Each turn runs:
 2. **Current-turn evidence** — validate up to five ordered files, extract supported
    documents after the guardrail, and resolve up to ten explicit references against
    the user's private documents plus the public corpus. Image bytes become native
-   provider image parts; document text is framed as untrusted context.
+   provider image parts; document text is framed as untrusted context. Native image
+   transport cost is reserved before fitting document text, and a mandatory current
+   turn that cannot fit is rejected without dropping evidence.
 3. **RAG retrieve** — embed the user's message and pull top-ranked chunks from the
    user's private memory plus the admin public corpus. Current attachments and
    explicit references receive context-budget priority over broad retrieval.

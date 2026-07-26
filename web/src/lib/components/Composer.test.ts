@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { capabilitiesMock, referenceOptionsMock } = vi.hoisted(() => ({
@@ -60,6 +60,61 @@ describe('Composer', () => {
 
 		expect(onSubmit).toHaveBeenCalledWith('hello world');
 		expect(textarea.value).toBe('');
+	});
+
+	it('optimistically clears and restores the exact rich input when submission is rejected', async () => {
+		let resolveSubmit: (accepted: boolean) => void = () => {};
+		const onSubmit = vi.fn(
+			() =>
+				new Promise<boolean>((resolve) => {
+					resolveSubmit = resolve;
+				})
+		);
+		const { container } = render(Composer, { props: { onSubmit } });
+		const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const screenshot = new File(['image'], 'retry.png', { type: 'image/png' });
+		Object.defineProperty(input, 'files', { configurable: true, value: [screenshot] });
+
+		await fireEvent.input(textarea, { target: { value: '  retry this exactly  ' } });
+		await fireEvent.change(input);
+		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Add public-race-guide.md' }));
+		expect(
+			within(screen.getByRole('list', { name: 'Documents to reference' })).getByText(
+				'public-race-guide.md'
+			)
+		).toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			'retry this exactly',
+			[screenshot],
+			[publicDocument]
+		);
+		expect(textarea.value).toBe('');
+		expect(screen.queryByText('retry.png')).not.toBeInTheDocument();
+		expect(screen.queryByRole('list', { name: 'Documents to reference' })).not.toBeInTheDocument();
+
+		resolveSubmit(false);
+		await waitFor(() => expect(textarea.value).toBe('  retry this exactly  '));
+		expect(screen.getByText('retry.png')).toBeInTheDocument();
+		expect(
+			within(screen.getByRole('list', { name: 'Documents to reference' })).getByText(
+				'public-race-guide.md'
+			)
+		).toBeInTheDocument();
+	});
+
+	it('restores text when submission throws before acceptance', async () => {
+		const onSubmit = vi.fn().mockRejectedValueOnce(new Error('request rejected'));
+		render(Composer, { props: { onSubmit } });
+		const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+
+		await fireEvent.input(textarea, { target: { value: 'retry after rejection' } });
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		await waitFor(() => expect(textarea.value).toBe('retry after rejection'));
 	});
 
 	it('does not submit when disabled, even via click or Enter', async () => {

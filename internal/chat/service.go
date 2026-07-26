@@ -37,6 +37,7 @@ type MessageStore interface {
 	AddChatAssistantIfLatestUser(ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string) (model.Message, error)
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 	ListChatHistory(ctx context.Context, conversationID string) ([]model.Message, error)
+	LoadChatAttachmentPayloads(ctx context.Context, conversationID string, messageIDs []int64) (map[int64][]model.MessageAttachment, error)
 	EditAndRewind(ctx context.Context, conversationID string, messageID, userID int64, content string) (model.Message, error)
 	RegenerateAndRewind(ctx context.Context, conversationID string, messageID, userID int64) (model.Message, error)
 }
@@ -87,9 +88,9 @@ type ServiceConfig struct {
 	Timeout          time.Duration
 	MCPMaxIterations int
 	MCPMaxTools      int
-	// ContextBudgetTokens bounds how many (estimated) tokens of prior
-	// conversation history are sent with each request, separate from
-	// MaxTokens (the completion cap). <=0 falls back to
+	// ContextBudgetTokens bounds the estimated request context, including
+	// the current message and native images, separate from MaxTokens (the
+	// completion cap). <=0 falls back to
 	// defaultContextBudgetTokens.
 	ContextBudgetTokens int
 	// Now supplies the current time used to stamp the system prompt with
@@ -99,6 +100,11 @@ type ServiceConfig struct {
 
 const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
+
+var (
+	errRewindAttachmentPayload = errors.New("rewind attachment payload unavailable")
+	errRewindReferences        = errors.New("rewind referenced documents unavailable")
+)
 
 // estBytesPerToken approximates 4 bytes per token (a common rough heuristic
 // for English/JSON-ish text), used to bound chat history to a token budget
@@ -444,6 +450,42 @@ func minimumHistoricalMessages(history []model.Message) []model.Message {
 		}
 	}
 	return minimum
+}
+
+func (s *Service) loadHistoricalAttachmentPayloads(
+	ctx context.Context, conversationID string, history []model.Message,
+) ([]model.Message, error) {
+	messageIDs := make([]int64, 0)
+	for _, message := range history {
+		if message.Role == model.MsgRoleUser && len(message.Attachments) > 0 {
+			messageIDs = append(messageIDs, message.ID)
+		}
+	}
+	if len(messageIDs) == 0 {
+		return history, nil
+	}
+	payloads, err := s.msgs.LoadChatAttachmentPayloads(
+		ctx, conversationID, messageIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load historical attachment payloads: %w", err)
+	}
+	hydrated := append([]model.Message(nil), history...)
+	for i := range hydrated {
+		if hydrated[i].Role != model.MsgRoleUser ||
+			len(hydrated[i].Attachments) == 0 {
+			continue
+		}
+		attachments, ok := payloads[hydrated[i].ID]
+		if !ok || len(attachments) != len(hydrated[i].Attachments) {
+			return nil, fmt.Errorf(
+				"load historical attachment payloads: message %d incomplete",
+				hydrated[i].ID,
+			)
+		}
+		hydrated[i].Attachments = attachments
+	}
+	return hydrated, nil
 }
 
 func historicalAttachmentPayloadAvailable(message model.Message) bool {
@@ -990,21 +1032,23 @@ func (s *Service) Edit(
 	streamCtx, cancel := s.turnContext(ctx)
 	defer cancel()
 
-	userMsg, err := s.msgs.EditAndRewind(ctx, conversationID, messageID, userID, userText)
+	preflight, err := s.preflightRewind(
+		ctx, userID, conversationID, messageID, false,
+	)
+	if err != nil {
+		return s.failRewindPreflight(sink, err)
+	}
+	userMsg, err := s.msgs.EditAndRewind(
+		ctx, conversationID, messageID, userID, userText,
+	)
 	if err != nil {
 		return s.fail(sink, "could not edit message")
 	}
-	history, err := s.historyBefore(ctx, conversationID, userMsg.ID)
-	if err != nil {
-		return s.fail(sink, "could not load history")
-	}
-	documents, err := s.loadReferencedDocuments(ctx, userID, userMsg)
-	if err != nil {
-		return s.fail(sink, "selected document is unavailable")
-	}
+	userMsg.Attachments = preflight.prompt.Attachments
+	userMsg.DocumentReferences = preflight.prompt.DocumentReferences
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, history, documents, true, false, sink,
+		userMsg, preflight.history, preflight.documents, true, false, sink,
 	)
 }
 
@@ -1017,37 +1061,101 @@ func (s *Service) Regenerate(
 	streamCtx, cancel := s.turnContext(ctx)
 	defer cancel()
 
+	preflight, err := s.preflightRewind(
+		ctx, userID, conversationID, messageID, true,
+	)
+	if err != nil {
+		return s.failRewindPreflight(sink, err)
+	}
 	userMsg, err := s.msgs.RegenerateAndRewind(ctx, conversationID, messageID, userID)
 	if err != nil {
 		return s.fail(sink, "could not regenerate response")
 	}
-	history, err := s.historyBefore(ctx, conversationID, userMsg.ID)
-	if err != nil {
-		return s.fail(sink, "could not load history")
-	}
-	documents, err := s.loadReferencedDocuments(ctx, userID, userMsg)
-	if err != nil {
-		return s.fail(sink, "selected document is unavailable")
-	}
+	userMsg.Attachments = preflight.prompt.Attachments
+	userMsg.DocumentReferences = preflight.prompt.DocumentReferences
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, history, documents, false, false, sink,
+		userMsg, preflight.history, preflight.documents, false, false, sink,
 	)
 }
 
-func (s *Service) historyBefore(
-	ctx context.Context, conversationID string, messageID int64,
-) ([]model.Message, error) {
+type rewindPreflight struct {
+	prompt    model.Message
+	history   []model.Message
+	documents []model.Document
+}
+
+func (s *Service) preflightRewind(
+	ctx context.Context, userID int64, conversationID string,
+	targetID int64, regenerate bool,
+) (rewindPreflight, error) {
+	if _, err := s.convs.GetByID(ctx, conversationID, userID); err != nil {
+		return rewindPreflight{}, fmt.Errorf("load owned conversation: %w", err)
+	}
 	messages, err := s.msgs.ListChatHistory(ctx, conversationID)
 	if err != nil {
-		return nil, err
+		return rewindPreflight{}, fmt.Errorf("load history: %w", err)
 	}
+	targetIndex := -1
 	for i := range messages {
-		if messages[i].ID == messageID {
-			return messages[:i], nil
+		if messages[i].ID == targetID {
+			targetIndex = i
+			break
 		}
 	}
-	return nil, fmt.Errorf("current user message not found")
+	if targetIndex < 0 {
+		return rewindPreflight{}, fmt.Errorf("rewind target not found")
+	}
+
+	promptIndex := targetIndex
+	if regenerate {
+		promptIndex = -1
+		for i := targetIndex - 1; i >= 0; i-- {
+			if messages[i].Role == model.MsgRoleUser {
+				promptIndex = i
+				break
+			}
+		}
+		if promptIndex < 0 {
+			return rewindPreflight{}, fmt.Errorf("regenerate prompt not found")
+		}
+	}
+	prompt := messages[promptIndex]
+	if len(prompt.Attachments) > 0 {
+		payloads, payloadErr := s.msgs.LoadChatAttachmentPayloads(
+			ctx, conversationID, []int64{prompt.ID},
+		)
+		if payloadErr != nil {
+			return rewindPreflight{}, fmt.Errorf(
+				"%w: %w", errRewindAttachmentPayload, payloadErr,
+			)
+		}
+		attachments, ok := payloads[prompt.ID]
+		if !ok || len(attachments) != len(prompt.Attachments) {
+			return rewindPreflight{}, fmt.Errorf(
+				"%w: incomplete result", errRewindAttachmentPayload,
+			)
+		}
+		prompt.Attachments = attachments
+	}
+	documents, err := s.loadReferencedDocuments(ctx, userID, prompt)
+	if err != nil {
+		return rewindPreflight{}, fmt.Errorf("%w: %w", errRewindReferences, err)
+	}
+	return rewindPreflight{
+		prompt: prompt, history: messages[:promptIndex], documents: documents,
+	}, nil
+}
+
+func (s *Service) failRewindPreflight(sink EventSink, err error) error {
+	switch {
+	case errors.Is(err, errRewindAttachmentPayload):
+		return s.fail(sink, "could not load attachment payload")
+	case errors.Is(err, errRewindReferences):
+		return s.fail(sink, "selected document is unavailable")
+	default:
+		return s.fail(sink, "could not load history")
+	}
 }
 
 func (s *Service) loadReferencedDocuments(
@@ -1198,9 +1306,16 @@ func (s *Service) streamPersistedTurn(
 		streamCtx, conversationID, userID, userText, documentIDs,
 	)
 
+	currentImageTokens := 0
+	for _, attachment := range userMsg.Attachments {
+		if attachment.Kind == model.AttachmentKindImage {
+			currentImageTokens += (len(attachment.RawBytes) + 2) / 3
+		}
+	}
 	explicitBudget := s.contextBudget -
 		estimateTokens(systemPrompt) -
-		estimateTokens(userText)
+		estimateTokens(userText) -
+		currentImageTokens
 	fittedUser, fittedDocuments := fitCurrentTurnContext(
 		userMsg, documents, retrieval.ByDocument, explicitBudget,
 	)
@@ -1210,9 +1325,16 @@ func (s *Service) streamPersistedTurn(
 	if err != nil {
 		return s.fail(sink, "could not assemble attachment context")
 	}
+	currentMessageTokens := estimateProviderMessageTokens(currentMessage)
+	if estimateTokens(systemPrompt)+currentMessageTokens > s.contextBudget {
+		return s.fail(
+			sink,
+			"current message and attachments exceed the configured context budget",
+		)
+	}
 	ragBudget := s.contextBudget -
 		estimateTokens(systemPrompt) -
-		estimateTokens(currentMessage.Content)
+		currentMessageTokens
 	ragInserts := s.buildRAGInserts(retrieval.Broad, ragBudget)
 	ragTurnStorable := storeUserChunk && len(retrieval.Embedding) > 0 && userText != ""
 	reservedTokens := 0
@@ -1221,14 +1343,25 @@ func (s *Service) streamPersistedTurn(
 	}
 	minimumHistory := minimumHistoricalMessages(history)
 	boundedHistory, droppedCount := s.boundHistory(
-		minimumHistory, systemPrompt, currentMessage.Content, reservedTokens,
+		minimumHistory, systemPrompt, currentMessage, reservedTokens,
 	)
 	if droppedCount > 0 {
 		slog.Debug("chat history trimmed to fit token budget",
 			"conversation", conversationID, "dropped_messages", droppedCount, "budget_tokens", s.contextBudget)
 	}
+	hydratedHistory, payloadErr := s.loadHistoricalAttachmentPayloads(
+		ctx, conversationID, boundedHistory,
+	)
+	if payloadErr != nil {
+		slog.Warn(
+			"historical attachment payload lookup failed; omitting payload",
+			"err", payloadErr,
+		)
+	} else {
+		boundedHistory = hydratedHistory
+	}
 	historyUsed := estimateTokens(systemPrompt) +
-		estimateTokens(currentMessage.Content) + reservedTokens
+		currentMessageTokens + reservedTokens
 	for _, message := range boundedHistory {
 		historyUsed += estimateTokens(message.Content)
 	}
@@ -2107,8 +2240,9 @@ func groupHistoryTurns(history []model.Message) []historyTurn {
 
 // boundHistory trims stored conversation history to fit within the
 // service's token budget, estimating cost with the len/4 heuristic against
-// systemPrompt + userText + reservedTokens + the kept history. reservedTokens
-// is the estimated size of any other mandatory additions to the request —
+// systemPrompt + the full current provider message (including native images)
+// + reservedTokens + the kept history. reservedTokens is the estimated size
+// of any other mandatory additions to the request —
 // currently the RAG context and skill bodies inserted after the system
 // message (see insertAfterSystem in Stream) — which are treated like the
 // system prompt itself: they are never dropped, so they reduce the token
@@ -2120,7 +2254,12 @@ func groupHistoryTurns(history []model.Message) []historyTurn {
 // in full — a turn (and so a tool-call/result pair, which live within the
 // same turn) is never split. Returns the bounded message slice and the
 // count of dropped messages (for a debug log; never their content).
-func (s *Service) boundHistory(history []model.Message, systemPrompt, userText string, reservedTokens int) ([]model.Message, int) {
+func (s *Service) boundHistory(
+	history []model.Message,
+	systemPrompt string,
+	currentMessage provider.Message,
+	reservedTokens int,
+) ([]model.Message, int) {
 	if len(history) == 0 {
 		return history, 0
 	}
@@ -2133,7 +2272,9 @@ func (s *Service) boundHistory(history []model.Message, systemPrompt, userText s
 	if budget <= 0 {
 		budget = defaultContextBudgetTokens
 	}
-	used := estimateTokens(systemPrompt) + estimateTokens(userText) + reservedTokens
+	used := estimateTokens(systemPrompt) +
+		estimateProviderMessageTokens(currentMessage) +
+		reservedTokens
 
 	keptFromEnd := 0
 	for i := len(turns) - 1; i >= 0; i-- {

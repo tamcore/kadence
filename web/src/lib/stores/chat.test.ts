@@ -591,11 +591,26 @@ describe('chat store', () => {
 			{ type: 'error', message: 'attachments exceed maximum upload size' }
 		]));
 
-		await sendMessage('', [new File(['image'], 'finish.png', { type: 'image/png' })]);
+		const id = await sendMessage('', [
+			new File(['image'], 'finish.png', { type: 'image/png' })
+		]);
 
+		expect(id).toBeNull();
 		expect(get(messages)).toEqual(original);
 		expect(get(chatError)).toBe('attachments exceed maximum upload size');
 		expect(get(sending)).toBe(false);
+	});
+
+	it('returns the conversation id when generation fails after meta acceptance', async () => {
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'meta', conversationId: 'accepted-conv', userMessageId: 11 },
+			{ type: 'error', message: 'generation failed' }
+		]));
+
+		const id = await sendMessage('accepted turn');
+
+		expect(id).toBe('accepted-conv');
+		expect(get(chatError)).toBe('generation failed');
 	});
 
 	it('does not restore a pre-meta rejection over a newly active conversation', async () => {
@@ -621,7 +636,7 @@ describe('chat store', () => {
 		activeId.set('conv-b');
 		messages.set(conversationB);
 		release();
-		await sendPromise;
+		await expect(sendPromise).resolves.toBeNull();
 
 		expect(get(activeId)).toBe('conv-b');
 		expect(get(messages)).toEqual(conversationB);
@@ -855,7 +870,9 @@ describe('chat store', () => {
 
 		stopGeneration();
 
-		await sendPromise;
+		await expect(sendPromise).resolves.toBe(
+			'66666666-6666-6666-6666-666666666666'
+		);
 
 		expect(get(chatError)).toBeNull();
 		expect(get(sending)).toBe(false);

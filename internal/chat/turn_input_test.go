@@ -7,6 +7,7 @@ import (
 	"errors"
 	"image"
 	"image/png"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,12 +22,18 @@ import (
 type turnDocumentStore struct {
 	documents []model.Document
 	ids       []int64
+	err       error
+	calls     int
 }
 
 func (s *turnDocumentStore) ListVisibleByIDs(
 	_ context.Context, _ int64, ids []int64,
 ) ([]model.Document, error) {
+	s.calls++
 	s.ids = append([]int64(nil), ids...)
+	if s.err != nil {
+		return nil, s.err
+	}
 	return append([]model.Document(nil), s.documents...), nil
 }
 
@@ -383,11 +390,12 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 		HistoryWindow: 6,
 	})
 	msgs := &fakeMsgs{}
+	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	mainProvider := &capturingProvider{reply: "replacement"}
 	svc := chat.NewService(mainProvider,
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
 		chat.Deps{
-			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Convs: convs,
 			Msgs:  msgs, Guardrail: guard,
 			Attachments: chat.NewAttachmentProcessor([]ingest.Extractor{extractor}),
 		},
@@ -404,6 +412,9 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 	}
 	if extractor.calls != 0 {
 		t.Fatalf("refused turn extractor calls = %d, want 0", extractor.calls)
+	}
+	convs.byID[testNewConvID] = model.Conversation{
+		ID: testNewConvID, UserID: testUserID,
 	}
 
 	if err := svc.Edit(
@@ -732,7 +743,7 @@ func TestStreamTurnUsesOrderedRelevantSectionsAndMarksEveryOversizedDocument(t *
 	svc := chat.NewService(capturing,
 		chat.ServiceConfig{
 			Model: testModel, MaxTokens: testMaxTokens,
-			SystemPrompt: "coach", ContextBudgetTokens: 700,
+			SystemPrompt: "coach", ContextBudgetTokens: 650,
 		},
 		chat.Deps{
 			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
@@ -1006,7 +1017,240 @@ func TestEditAndRegenerateReuseStoredCurrentPayload(t *testing.T) {
 			if len(documents.ids) != 1 || documents.ids[0] != documentID {
 				t.Fatalf("secure reload ids = %v", documents.ids)
 			}
+			if !reflect.DeepEqual(msgs.payloadRequests, [][]int64{{1}}) {
+				t.Fatalf("preflight payload requests = %v, want [[1]]", msgs.payloadRequests)
+			}
 		})
+	}
+}
+
+func TestEditPreflightFailurePreservesTranscript(t *testing.T) {
+	original := []model.Message{
+		{
+			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "original",
+			DocumentReferences: []model.MessageDocumentReference{{
+				DocumentID: nil, Filename: "deleted.md",
+				Scope: model.ScopePrivate, Available: false,
+			}},
+		},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "later"},
+	}
+	msgs := &fakeMsgs{added: append([]model.Message(nil), original...)}
+	provider := &capturingProvider{reply: "must not run"}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs, Documents: &turnDocumentStore{},
+		},
+	)
+
+	err := svc.Edit(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 1, "edited", &capturingSink{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "selected document is unavailable") {
+		t.Fatalf("Edit error = %v", err)
+	}
+	if msgs.editCalls != 0 {
+		t.Fatalf("EditAndRewind calls = %d, want 0", msgs.editCalls)
+	}
+	if len(provider.gotMessages) != 0 {
+		t.Fatalf("provider calls = %d, want 0", len(provider.gotMessages))
+	}
+	if !reflect.DeepEqual(msgs.added, original) {
+		t.Fatalf("failed edit changed transcript: got %+v want %+v", msgs.added, original)
+	}
+}
+
+func TestRegeneratePreflightDocumentStoreFailurePreservesTranscript(t *testing.T) {
+	documentID := int64(72)
+	original := []model.Message{
+		{
+			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "original",
+			DocumentReferences: []model.MessageDocumentReference{{
+				DocumentID: &documentID, Filename: "selected.md",
+				Scope: model.ScopePrivate, Available: true,
+			}},
+		},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "later"},
+	}
+	msgs := &fakeMsgs{added: append([]model.Message(nil), original...)}
+	documents := &turnDocumentStore{err: errors.New("document database unavailable")}
+	provider := &capturingProvider{reply: "must not run"}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs, Documents: documents,
+		},
+	)
+
+	err := svc.Regenerate(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 2, &capturingSink{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "selected document is unavailable") {
+		t.Fatalf("Regenerate error = %v", err)
+	}
+	if documents.calls != 1 {
+		t.Fatalf("document-store calls = %d, want 1", documents.calls)
+	}
+	if msgs.regenerateCalls != 0 {
+		t.Fatalf("RegenerateAndRewind calls = %d, want 0", msgs.regenerateCalls)
+	}
+	if len(provider.gotMessages) != 0 {
+		t.Fatalf("provider calls = %d, want 0", len(provider.gotMessages))
+	}
+	if !reflect.DeepEqual(msgs.added, original) {
+		t.Fatalf("failed regenerate changed transcript: got %+v want %+v", msgs.added, original)
+	}
+}
+
+func TestStreamTurnLoadsPayloadsOnlyForRetainedHistory(t *testing.T) {
+	msgs := &fakeMsgs{added: []model.Message{
+		{
+			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
+			Content: strings.Repeat("old user ", 100),
+			Attachments: []model.MessageAttachment{{
+				MessageID: 1, Filename: "old.png", MIME: "image/png",
+				Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+			}},
+		},
+		{
+			ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant,
+			Content: strings.Repeat("old answer ", 100),
+		},
+		{
+			ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser,
+			Content: "recent user",
+			Attachments: []model.MessageAttachment{{
+				MessageID: 3, Filename: "recent.png", MIME: "image/png",
+				Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+			}},
+		},
+		{
+			ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant,
+			Content: "recent answer",
+		},
+	}}
+	capturing := &capturingProvider{reply: "ok"}
+	svc := chat.NewService(capturing,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			SystemPrompt: "coach", ContextBudgetTokens: 700,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	if err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, "current", &capturingSink{},
+	); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(msgs.payloadRequests) != 1 ||
+		!reflect.DeepEqual(msgs.payloadRequests[0], []int64{3}) {
+		t.Fatalf("payload requests = %v, want [[3]]", msgs.payloadRequests)
+	}
+}
+
+func TestStreamTurnPayloadLoaderFailureOmitsHistoricalPayload(t *testing.T) {
+	msgs := &fakeMsgs{
+		added: []model.Message{
+			{
+				ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
+				Content: "historical",
+				Attachments: []model.MessageAttachment{{
+					MessageID: 1, Filename: "history.png", MIME: "image/png",
+					Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+				}},
+			},
+			{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		},
+		payloadErr: errors.New("attachment database unavailable"),
+	}
+	capturing := &capturingProvider{reply: "ok"}
+	svc := chat.NewService(capturing,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, "current", &capturingSink{},
+	)
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	var historical provider.Message
+	for _, message := range capturing.gotMessages {
+		if strings.Contains(message.Content, "historical") {
+			historical = message
+			break
+		}
+	}
+	if historical.Content == "" ||
+		!strings.Contains(historical.Content, "omitted") ||
+		len(historical.Images) != 0 {
+		t.Fatalf("historical payload was not safely omitted: %+v", historical)
+	}
+}
+
+func TestRegenerateRejectsCurrentImageThatExceedsContextBudget(t *testing.T) {
+	msgs := &fakeMsgs{added: []model.Message{
+		{
+			ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "coach this",
+			Attachments: []model.MessageAttachment{{
+				MessageID: 1, Filename: "large.png", MIME: "image/png",
+				Kind: model.AttachmentKindImage, RawBytes: make([]byte, 900),
+			}},
+		},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old answer"},
+	}}
+	provider := &capturingProvider{reply: "must not run"}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			SystemPrompt: "coach", ContextBudgetTokens: 200,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	err := svc.Regenerate(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 2, &capturingSink{},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "current message and attachments exceed the configured context budget") {
+		t.Fatalf("Regenerate error = %v", err)
+	}
+	if len(provider.gotMessages) != 0 {
+		t.Fatalf("provider calls = %d, want 0", len(provider.gotMessages))
+	}
+	if len(msgs.added) != 1 || msgs.added[0].ID != 1 {
+		t.Fatalf("current evidence was not preserved after accepted rewind: %+v", msgs.added)
 	}
 }
 

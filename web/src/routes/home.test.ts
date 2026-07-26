@@ -98,6 +98,18 @@ describe('home page', () => {
 		resolveSend('66666666-6666-6666-6666-666666666666');
 	});
 
+	it('restores the home composer when the send is rejected before meta', async () => {
+		sendMessageMock.mockResolvedValueOnce(null);
+		render(Home);
+		const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+
+		await fireEvent.input(textarea, { target: { value: 'retry from home' } });
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		await vi.waitFor(() => expect(textarea.value).toBe('retry from home'));
+		expect(gotoMock).not.toHaveBeenCalled();
+	});
+
 	it('forwards home-composer file-only turns without waiting for the stream', async () => {
 		sendMessageMock.mockReturnValueOnce(new Promise(() => {}));
 		const { container } = render(Home);

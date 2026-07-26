@@ -361,7 +361,10 @@ func TestBoundHistorySmallConversationUntouched(t *testing.T) {
 		history = append(history, turnMsgs(i, 10, 10)...)
 	}
 
-	got, dropped := s.boundHistory(history, "system prompt", "new user text", 0)
+	got, dropped := s.boundHistory(
+		history, "system prompt",
+		provider.Message{Role: model.MsgRoleUser, Content: "new user text"}, 0,
+	)
 	if dropped != 0 {
 		t.Fatalf("dropped = %d, want 0", dropped)
 	}
@@ -380,7 +383,10 @@ func TestBoundHistoryCanDropEveryHistoricalTurn(t *testing.T) {
 		history = append(history, turnMsgs(i, 200, 200)...)
 	}
 
-	got, dropped := s.boundHistory(history, "system prompt", "new user text", 0)
+	got, dropped := s.boundHistory(
+		history, "system prompt",
+		provider.Message{Role: model.MsgRoleUser, Content: "new user text"}, 0,
+	)
 	if len(got) != 0 {
 		t.Fatalf("history = %+v, want all historical turns dropped", got)
 	}
@@ -507,7 +513,9 @@ func TestBoundHistoryRespectsBudgetAndKeepsNewestTurns(t *testing.T) {
 	// Budget has room for exactly two turns, not all three.
 	s := &Service{contextBudget: 110}
 
-	got, dropped := s.boundHistory(history, "", "", 0)
+	got, dropped := s.boundHistory(
+		history, "", provider.Message{Role: model.MsgRoleUser}, 0,
+	)
 	if dropped != 2 {
 		t.Fatalf("dropped = %d, want 2 (the whole oldest turn)", dropped)
 	}
@@ -540,7 +548,9 @@ func TestBoundHistoryNeverSplitsATurn(t *testing.T) {
 	}
 
 	s := &Service{contextBudget: 200}
-	got, _ := s.boundHistory(history, "", "", 0)
+	got, _ := s.boundHistory(
+		history, "", provider.Message{Role: model.MsgRoleUser}, 0,
+	)
 
 	if len(got)%2 != 0 {
 		t.Fatalf("len(got) = %d, want even (whole turns only)", len(got))
@@ -557,5 +567,47 @@ func TestBoundHistoryNeverSplitsATurn(t *testing.T) {
 	// intact if the first turn happens to be the one with tool calls.
 	if got[1].ToolCalls != nil && len(got[1].ToolCalls) != 1 {
 		t.Fatalf("first turn ToolCalls corrupted: %+v", got[1].ToolCalls)
+	}
+}
+
+func TestEstimateProviderMessageTokensIncludesImageTransportCost(t *testing.T) {
+	message := provider.Message{
+		Content: "12345678",
+		Images: []provider.ImageContent{{
+			Data: make([]byte, 7),
+		}},
+	}
+
+	if got, want := estimateProviderMessageTokens(message), 5; got != want {
+		t.Fatalf("estimateProviderMessageTokens = %d, want %d", got, want)
+	}
+}
+
+func TestBoundHistoryReservesCurrentImageTransportCost(t *testing.T) {
+	history := []model.Message{
+		{Role: model.MsgRoleUser, Content: strings.Repeat("u", 100)},
+		{Role: model.MsgRoleAssistant, Content: strings.Repeat("a", 100)},
+	}
+	s := &Service{contextBudget: 60}
+
+	textOnly, textDropped := s.boundHistory(
+		history, "", provider.Message{Role: model.MsgRoleUser}, 0,
+	)
+	withImage, imageDropped := s.boundHistory(
+		history, "",
+		provider.Message{
+			Role: model.MsgRoleUser,
+			Images: []provider.ImageContent{{
+				Data: make([]byte, 31),
+			}},
+		},
+		0,
+	)
+
+	if textDropped != 0 || len(textOnly) != 2 {
+		t.Fatalf("text-only history = %+v dropped=%d, want retained", textOnly, textDropped)
+	}
+	if imageDropped != 2 || len(withImage) != 0 {
+		t.Fatalf("image history = %+v dropped=%d, want dropped turn", withImage, imageDropped)
 	}
 }

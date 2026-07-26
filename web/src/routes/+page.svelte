@@ -15,17 +15,21 @@
 		text: string,
 		files: File[] = [],
 		documentReferences: Document[] = []
-	): void {
-		if (files.length > 0 || documentReferences.length > 0) {
-			void sendMessage(text, files, documentReferences);
-		} else {
-			void sendMessage(text);
-		}
-		const unsubscribe = activeId.subscribe((id) => {
+	): Promise<boolean> {
+		let unsubscribe = () => {};
+		unsubscribe = activeId.subscribe((id) => {
 			if (id != null) {
 				void goto(`/chat/${id}`);
 				queueMicrotask(() => unsubscribe());
 			}
+		});
+		const pending =
+			files.length > 0 || documentReferences.length > 0
+				? sendMessage(text, files, documentReferences)
+				: sendMessage(text);
+		return pending.then((id) => {
+			if (id == null) unsubscribe();
+			return id != null;
 		});
 	}
 </script>

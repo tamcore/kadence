@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
@@ -120,6 +122,51 @@ func TestAttachmentProcessorPrepareRejectsAnimatedAndTruncatedGIFWithoutDecodeAl
 	}
 }
 
+func TestAttachmentProcessorPrepareRejectsOversizedImageDimensions(t *testing.T) {
+	processor := NewAttachmentProcessor(nil)
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "axis", data: pngHeaderOnly(8193, 1)},
+		{name: "pixels", data: pngHeaderOnly(4097, 2048)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := processor.Prepare([]FileInput{{
+				Filename: tt.name + ".png", MIME: "image/png", Data: tt.data,
+			}})
+			if !errors.Is(err, ErrUnsupportedAttachment) {
+				t.Fatalf("Prepare error = %v, want ErrUnsupportedAttachment", err)
+			}
+		})
+	}
+}
+
+func TestAttachmentProcessorPrepareFullyDecodesConfigValidImageBodies(t *testing.T) {
+	jpegBody := encodedJPEG(t, 3, 2)
+	tests := []FileInput{
+		{
+			Filename: "header-only.png", MIME: "image/png",
+			Data: pngHeaderOnly(3, 2),
+		},
+		{
+			Filename: "truncated.jpg", MIME: "image/jpeg",
+			Data: jpegBody[:len(jpegBody)-2],
+		},
+	}
+	processor := NewAttachmentProcessor(nil)
+
+	for _, file := range tests {
+		t.Run(file.Filename, func(t *testing.T) {
+			if _, err := processor.Prepare([]FileInput{file}); !errors.Is(err, ErrInvalidAttachment) {
+				t.Fatalf("Prepare error = %v, want ErrInvalidAttachment", err)
+			}
+		})
+	}
+}
+
 func TestAttachmentProcessorExtractDocumentsUsesFirstEffectiveExtractorOnce(t *testing.T) {
 	first := &recordingAttachmentExtractor{
 		mime: "text/markdown",
@@ -225,4 +272,17 @@ func mustBase64(t *testing.T, value string) []byte {
 		t.Fatalf("decode fixture: %v", err)
 	}
 	return decoded
+}
+
+func pngHeaderOnly(width, height uint32) []byte {
+	out := make([]byte, 33)
+	copy(out, "\x89PNG\r\n\x1a\n")
+	binary.BigEndian.PutUint32(out[8:12], 13)
+	copy(out[12:16], "IHDR")
+	binary.BigEndian.PutUint32(out[16:20], width)
+	binary.BigEndian.PutUint32(out[20:24], height)
+	out[24] = 8
+	out[25] = 6
+	binary.BigEndian.PutUint32(out[29:33], crc32.ChecksumIEEE(out[12:29]))
+	return out
 }

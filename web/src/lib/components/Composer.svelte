@@ -14,7 +14,11 @@
 	interface Props {
 		placeholder?: string;
 		disabled?: boolean;
-		onSubmit: (text: string, files?: File[], documentReferences?: Document[]) => void;
+		onSubmit: (
+			text: string,
+			files?: File[],
+			documentReferences?: Document[]
+		) => void | boolean | Promise<void | boolean>;
 	}
 
 	let { placeholder = 'Ask your coach…', disabled = false, onSubmit }: Props = $props();
@@ -55,7 +59,8 @@
 		textareaEl.style.height = `${Math.min(textareaEl.scrollHeight, TEXTAREA_MAX_HEIGHT_PX)}px`;
 	}
 
-	function submit(): void {
+	async function submit(): Promise<void> {
+		const submittedText = text;
 		const trimmed = text.trim();
 		if (!canSubmit) return;
 		const submittedFiles = files;
@@ -65,22 +70,30 @@
 		documentReferences = [];
 		validationError = '';
 		void tick().then(autosize);
-		if (submittedFiles.length === 0 && submittedReferences.length === 0) {
-			onSubmit(trimmed);
-		} else {
-			onSubmit(trimmed, submittedFiles, submittedReferences);
+		try {
+			const accepted =
+				submittedFiles.length === 0 && submittedReferences.length === 0
+					? await onSubmit(trimmed)
+					: await onSubmit(trimmed, submittedFiles, submittedReferences);
+			if (accepted !== false) return;
+		} catch {
+			// A rejected request has not persisted the turn and remains retryable.
 		}
+		text = submittedText;
+		files = submittedFiles;
+		documentReferences = submittedReferences;
+		void tick().then(autosize);
 	}
 
 	function handleFormSubmit(e: Event): void {
 		e.preventDefault();
-		submit();
+		void submit();
 	}
 
 	function handleKeydown(e: KeyboardEvent): void {
 		if (e.key !== 'Enter' || e.shiftKey) return;
 		e.preventDefault();
-		submit();
+		void submit();
 	}
 
 	function addFiles(incomingFiles: FileList | File[]): void {

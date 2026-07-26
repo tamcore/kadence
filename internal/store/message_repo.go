@@ -452,9 +452,8 @@ func (r *MessageRepository) ListByConversation(ctx context.Context, conversation
 	return messages, nil
 }
 
-// ListChatHistory returns provider-facing chat history with attachment payloads.
-// API list/get operations intentionally use ListByConversation instead so raw
-// bytes and extracted content never bloat or leak through message DTO reads.
+// ListChatHistory returns provider-facing chat history metadata. Attachment
+// payloads are loaded separately after the service has bounded retained turns.
 func (r *MessageRepository) ListChatHistory(
 	ctx context.Context, conversationID string,
 ) ([]model.Message, error) {
@@ -470,10 +469,75 @@ func (r *MessageRepository) ListChatHistory(
 	if err != nil {
 		return nil, err
 	}
-	if err := hydrateMessageRelations(ctx, r.pool, messages, true); err != nil {
+	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
 		return nil, err
 	}
 	return messages, nil
+}
+
+// LoadChatAttachmentPayloads loads ordered attachment payloads for selected
+// ordinary user messages in one conversation. Every requested message must
+// match the conversation and have at least one attachment.
+func (r *MessageRepository) LoadChatAttachmentPayloads(
+	ctx context.Context, conversationID string, messageIDs []int64,
+) (map[int64][]model.MessageAttachment, error) {
+	if len(messageIDs) == 0 {
+		return map[int64][]model.MessageAttachment{}, nil
+	}
+	requested := make(map[int64]struct{}, len(messageIDs))
+	uniqueIDs := make([]int64, 0, len(messageIDs))
+	for _, messageID := range messageIDs {
+		if messageID <= 0 {
+			return nil, ErrNotFound
+		}
+		if _, exists := requested[messageID]; exists {
+			continue
+		}
+		requested[messageID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, messageID)
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT a.id, a.message_id, a.filename, a.mime_type, a.kind,
+		        a.size_bytes, a.extraction_complete, a.image_width,
+		        a.image_height, a.ordinal, a.raw_bytes, a.extracted_markdown
+		   FROM messages m
+		   JOIN message_attachments a ON a.message_id = m.id
+		  WHERE m.conversation_id = $1::uuid
+		    AND m.purpose = $2
+		    AND m.role = $3
+		    AND m.id = ANY($4::bigint[])
+		  ORDER BY m.id, a.ordinal`,
+		conversationID, messagePurposeChat, model.MsgRoleUser, uniqueIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load chat attachment payloads: %w", err)
+	}
+	defer rows.Close()
+
+	payloads := make(map[int64][]model.MessageAttachment, len(uniqueIDs))
+	for rows.Next() {
+		var attachment model.MessageAttachment
+		if err := rows.Scan(
+			&attachment.ID, &attachment.MessageID, &attachment.Filename,
+			&attachment.MIME, &attachment.Kind, &attachment.SizeBytes,
+			&attachment.ExtractionComplete, &attachment.ImageWidth,
+			&attachment.ImageHeight, &attachment.Ordinal,
+			&attachment.RawBytes, &attachment.ExtractedMarkdown,
+		); err != nil {
+			return nil, fmt.Errorf("scan chat attachment payload: %w", err)
+		}
+		payloads[attachment.MessageID] = append(
+			payloads[attachment.MessageID], attachment,
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load chat attachment payloads: %w", err)
+	}
+	if len(payloads) != len(uniqueIDs) {
+		return nil, ErrNotFound
+	}
+	return payloads, nil
 }
 
 // GetByID returns one message scoped to its conversation.

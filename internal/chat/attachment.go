@@ -27,6 +27,11 @@ var ErrUnsupportedAttachment = errors.New("unsupported attachment")
 // declared attachment type.
 var ErrInvalidAttachment = errors.New("invalid attachment")
 
+const (
+	maxNativeImageAxis   = 8192
+	maxNativeImagePixels = 8 << 20
+)
+
 // FileInput is one raw file supplied for the current chat turn.
 type FileInput struct {
 	Filename string
@@ -169,7 +174,42 @@ func validateNativeImage(mediaType string, data []byte) (int, int, error) {
 	if config.Width <= 0 || config.Height <= 0 {
 		return 0, 0, fmt.Errorf("%w: image has invalid dimensions", ErrInvalidAttachment)
 	}
+	if config.Width > maxNativeImageAxis || config.Height > maxNativeImageAxis {
+		return 0, 0, fmt.Errorf(
+			"%w: image axis exceeds %d pixels",
+			ErrUnsupportedAttachment, maxNativeImageAxis,
+		)
+	}
+	if config.Width > maxNativeImagePixels/config.Height {
+		return 0, 0, fmt.Errorf(
+			"%w: image exceeds %d pixels",
+			ErrUnsupportedAttachment, maxNativeImagePixels,
+		)
+	}
+	if err := decodeNativeImage(mediaType, data); err != nil {
+		return 0, 0, fmt.Errorf("%w: %w", ErrInvalidAttachment, err)
+	}
 	return config.Width, config.Height, nil
+}
+
+func decodeNativeImage(mediaType string, data []byte) error {
+	reader := bytes.NewReader(data)
+	switch mediaType {
+	case "image/png":
+		_, err := png.Decode(reader)
+		return err
+	case "image/jpeg":
+		_, err := jpeg.Decode(reader)
+		return err
+	case "image/webp":
+		_, err := webp.Decode(reader)
+		return err
+	case "image/gif":
+		_, err := gif.Decode(reader)
+		return err
+	default:
+		return fmt.Errorf("unsupported native image MIME %q", mediaType)
+	}
 }
 
 // validateStaticGIF walks the GIF block stream without decoding pixel data.

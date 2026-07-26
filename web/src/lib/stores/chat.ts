@@ -481,7 +481,7 @@ async function consumeStream(
 				chatError.set('The chat stream was interrupted');
 				credentialRequest.set(null);
 			}
-			return null;
+			return streamIsActive() ? convId : null;
 		}
 	} catch {
 		// Intentional aborts should not surface as errors to the user; mark the
@@ -506,7 +506,7 @@ async function consumeStream(
 			});
 			credentialRequest.set(null);
 		}
-		return null;
+		return receivedMeta && streamIsActive() ? convId : null;
 	} finally {
 		// Only reset shared state if this send is still the active one
 		if (abort === localAbort) {
@@ -514,5 +514,5 @@ async function consumeStream(
 			abort = null;
 		}
 	}
-	return streamIsActive() ? convId : null;
+	return receivedMeta && streamIsActive() ? convId : null;
 }

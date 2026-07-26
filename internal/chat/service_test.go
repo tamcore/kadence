@@ -136,6 +136,11 @@ type fakeMsgs struct {
 	createdConversation        *model.Conversation
 	rejectAssistant            bool
 	lastInput                  model.ChatUserInput
+	historyErr                 error
+	payloadErr                 error
+	payloadRequests            [][]int64
+	editCalls                  int
+	regenerateCalls            int
 	assistantSaveContextErrors []error
 	assistantSaveHadDeadlines  []bool
 	assistantHandoffIDs        []string
@@ -277,9 +282,50 @@ func (f *fakeMsgs) ListByConversation(_ context.Context, _ string) ([]model.Mess
 	return f.added, nil
 }
 func (f *fakeMsgs) ListChatHistory(_ context.Context, _ string) ([]model.Message, error) {
-	return f.added, nil
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
+	history := append([]model.Message(nil), f.added...)
+	for i := range history {
+		history[i].Attachments = append(
+			[]model.MessageAttachment(nil), history[i].Attachments...,
+		)
+		for j := range history[i].Attachments {
+			history[i].Attachments[j].RawBytes = nil
+			history[i].Attachments[j].ExtractedMarkdown = ""
+		}
+		history[i].DocumentReferences = append(
+			[]model.MessageDocumentReference(nil), history[i].DocumentReferences...,
+		)
+	}
+	return history, nil
+}
+func (f *fakeMsgs) LoadChatAttachmentPayloads(
+	_ context.Context, _ string, messageIDs []int64,
+) (map[int64][]model.MessageAttachment, error) {
+	f.payloadRequests = append(
+		f.payloadRequests, append([]int64(nil), messageIDs...),
+	)
+	if f.payloadErr != nil {
+		return nil, f.payloadErr
+	}
+	requested := make(map[int64]bool, len(messageIDs))
+	for _, messageID := range messageIDs {
+		requested[messageID] = true
+	}
+	payloads := make(map[int64][]model.MessageAttachment, len(messageIDs))
+	for _, message := range f.added {
+		if !requested[message.ID] {
+			continue
+		}
+		payloads[message.ID] = append(
+			[]model.MessageAttachment(nil), message.Attachments...,
+		)
+	}
+	return payloads, nil
 }
 func (f *fakeMsgs) EditAndRewind(_ context.Context, _ string, messageID, _ int64, content string) (model.Message, error) {
+	f.editCalls++
 	for i := range f.added {
 		if f.added[i].ID != messageID {
 			continue
@@ -294,6 +340,7 @@ func (f *fakeMsgs) EditAndRewind(_ context.Context, _ string, messageID, _ int64
 	return model.Message{}, errFakeNotFound
 }
 func (f *fakeMsgs) RegenerateAndRewind(_ context.Context, _ string, messageID, _ int64) (model.Message, error) {
+	f.regenerateCalls++
 	for i := range f.added {
 		if f.added[i].ID != messageID {
 			continue

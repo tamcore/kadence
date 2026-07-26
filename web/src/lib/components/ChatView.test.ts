@@ -158,6 +158,17 @@ describe('ChatView', () => {
 		await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith('hello'));
 	});
 
+	it('restores composer input when the store rejects before meta', async () => {
+		sendMessageMock.mockResolvedValueOnce(null);
+		render(ChatView, { props: {} });
+		const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+
+		await fireEvent.input(textarea, { target: { value: 'retry this' } });
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		await waitFor(() => expect(textarea.value).toBe('retry this'));
+	});
+
 	it('forwards a file-only composer submission to the chat store', async () => {
 		sendMessageMock.mockResolvedValueOnce('conv-1');
 		const { container } = render(ChatView, { props: {} });

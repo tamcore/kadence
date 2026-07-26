@@ -89,7 +89,7 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 		t.Fatalf("provider history messages = %d, want 1", len(history))
 	}
 	assertAttachmentMetadata(t, history[0].Attachments)
-	assertAttachmentPayloads(t, history[0].Attachments)
+	assertAttachmentPayloadsOmitted(t, history[0].Attachments)
 	assertReferenceMetadata(
 		t, history[0].DocumentReferences, publicDocument.ID, privateDocument.ID,
 	)
@@ -101,6 +101,110 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 	assertAttachmentMetadata(t, got.Attachments)
 	assertAttachmentPayloadsOmitted(t, got.Attachments)
 	assertReferenceMetadata(t, got.DocumentReferences, publicDocument.ID, privateDocument.ID)
+}
+
+func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "attachment-payload-owner", Email: "attachment-payload-owner@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := conversations.Create(ctx, owner.ID, "payloads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
+		Content: "first",
+		Attachments: []model.MessageAttachment{{
+			Filename: "first.md", MIME: "text/markdown",
+			Kind: model.AttachmentKindDocument, RawBytes: []byte("first raw"),
+			ExtractedMarkdown: "# First", ExtractionComplete: true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
+		Content: "second",
+		Attachments: []model.MessageAttachment{{
+			Filename: "second.png", MIME: "image/png",
+			Kind: model.AttachmentKindImage, RawBytes: []byte{1, 2, 3},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payloads, err := messages.LoadChatAttachmentPayloads(
+		ctx, conversation.ID, []int64{second.ID},
+	)
+	if err != nil {
+		t.Fatalf("load attachment payloads: %v", err)
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("payload message count = %d, want 1", len(payloads))
+	}
+	if _, ok := payloads[first.ID]; ok {
+		t.Fatalf("unrequested first payload was loaded: %+v", payloads[first.ID])
+	}
+	if got := payloads[second.ID]; len(got) != 1 ||
+		!bytes.Equal(got[0].RawBytes, []byte{1, 2, 3}) ||
+		got[0].Ordinal != 0 {
+		t.Fatalf("second payload = %+v", got)
+	}
+}
+
+func TestMessageRepositoryRejectsCrossConversationAttachmentPayloadID(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "attachment-payload-scope", Email: "attachment-payload-scope@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstConversation, err := conversations.Create(ctx, owner.ID, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondConversation, err := conversations.Create(ctx, owner.ID, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := messages.AddChatUserInput(
+		ctx, secondConversation.ID, owner.ID, store.ChatUserInput{
+			Content: "foreign",
+			Attachments: []model.MessageAttachment{{
+				Filename: "foreign.png", MIME: "image/png",
+				Kind: model.AttachmentKindImage, RawBytes: []byte{9},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = messages.LoadChatAttachmentPayloads(
+		ctx, firstConversation.ID, []int64{foreign.ID},
+	)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-conversation payload error = %v, want ErrNotFound", err)
+	}
 }
 
 func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {

@@ -49,14 +49,15 @@
 		text: string,
 		files: File[] = [],
 		documentReferences: Document[] = []
-	) {
-		if ($sending) return;
+	): Promise<boolean> {
+		if ($sending) return false;
 		const wasNew = $activeId === null;
 		const id =
 			files.length > 0 || documentReferences.length > 0
 				? await sendMessage(text, files, documentReferences)
 				: await sendMessage(text);
 		if (wasNew && id != null && onNewConversation) onNewConversation(id);
+		return id != null;
 	}
 
 	function toolLabel(name: string): string {

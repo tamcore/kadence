@@ -60,7 +60,7 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_LLM_TEMPERATURE` | `0.3` | Sampling temperature. |
 | `KADENCE_LLM_TIMEOUT` | `300s` | Per-request timeout (Go duration). |
 | `KADENCE_SYSTEM_PROMPT` | — | Overrides the built-in chat system prompt. |
-| `KADENCE_LLM_CONTEXT_BUDGET` | `32000` | Token budget (estimated via a `len/4` heuristic, not a real tokenizer) for the prior-conversation history sent with each request, separate from `KADENCE_LLM_MAX_TOKENS` (the completion cap). When history would exceed the budget, whole oldest-middle turns (a user message plus its assistant reply) are dropped — never split mid-turn — always keeping the conversation's first user message and as many of the newest turns as fit. |
+| `KADENCE_LLM_CONTEXT_BUDGET` | `32000` | Estimated request-context budget, separate from `KADENCE_LLM_MAX_TOKENS` (the completion cap). Text uses a `len/4` heuristic and native images reserve `ceil(raw bytes/3)` for encoded transport. The current message and its evidence are mandatory; if they exceed the budget the request is rejected. Optional history is retained newest-first in whole turns and attachment payloads are loaded only for retained user turns. |
 
 ## Guardrail (topic classifier)
 

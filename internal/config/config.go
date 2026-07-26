@@ -56,13 +56,11 @@ type Config struct {
 	LLMTimeout     time.Duration
 	// SystemPrompt overrides the default chat system prompt.
 	SystemPrompt string
-	// LLMContextBudgetTokens bounds how many (estimated) tokens of prior
-	// conversation history are sent with each chat request
-	// (KADENCE_LLM_CONTEXT_BUDGET), separate from LLMMaxTokens (the
-	// completion cap). When history would exceed the budget, whole
-	// oldest-middle turns are dropped (never splitting a tool-call/result
-	// pair), always keeping the first user message and the newest turns
-	// that fit.
+	// LLMContextBudgetTokens (KADENCE_LLM_CONTEXT_BUDGET) bounds the
+	// estimated request context, including the current message and native
+	// images, separate from LLMMaxTokens (the
+	// completion cap). When optional history would exceed the remaining
+	// budget, whole oldest turns are dropped without splitting a turn.
 	LLMContextBudgetTokens int
 
 	// Guardrail (opt-in topic classifier). Model/base/key fall back to the LLM* values.
