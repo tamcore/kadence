@@ -37,7 +37,7 @@ Values shown are the built-in defaults; `—` means unset/empty.
 |---|---|---|
 | `KADENCE_RATE_LIMIT_GLOBAL` | `300` | Per-IP requests/minute across all `/api` routes (`/api/healthz` and the static frontend are exempt). `0` disables. |
 | `KADENCE_RATE_LIMIT_AUTH` | `10` | Per-IP requests/minute on auth-sensitive endpoints: `POST /api/session`, `POST /api/webauthn/login/begin`, `POST /api/webauthn/login/finish`, `POST /api/credentials/{requestId}`. `0` disables. |
-| `KADENCE_MAX_BODY_BYTES` | `1048576` (1 MiB) | Max request body size across `/api` routes in general. Document uploads (`POST /api/documents`, `POST /api/admin/documents`) are exempt from this cap and governed solely by `KADENCE_UPLOAD_MAX_BYTES` instead. Oversized bodies fail with `400`. |
+| `KADENCE_MAX_BODY_BYTES` | `1048576` (1 MiB) | Max request body size across `/api` routes in general. Document uploads and multipart `POST /api/chat` turns are exempt from this cap and governed by `KADENCE_UPLOAD_MAX_BYTES`; JSON chat remains under the general cap. |
 
 Both limiters key on the request's resolved client IP (in-memory sliding window,
 via `go-chi/httprate`), which chi's `RealIP` middleware derives from
@@ -148,7 +148,7 @@ linked conversation and immutable run audit records.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `KADENCE_UPLOAD_MAX_BYTES` | `10485760` (10 MB) | Max upload size. |
+| `KADENCE_UPLOAD_MAX_BYTES` | `10485760` (10 MB) | Max size of each knowledge-document upload and aggregate file bytes in one chat turn. Chat accepts at most five files; explicit references do not count toward this byte limit. |
 | `KADENCE_INGEST_CHUNK_CHARS` | `1000` | Chunk size (characters) for RAG splitting. |
 | `KADENCE_MARKITDOWN_URL` | — | `markitdown-mcp` service URL. Empty falls back to the pure-Go PDF path. |
 | `KADENCE_MARKITDOWN_AUTH_USER` | — | markitdown basic-auth username. |

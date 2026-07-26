@@ -58,16 +58,25 @@ Each turn runs:
    `ON_TOPIC` / `OFF_TOPIC` using the last N text-bearing turns; off-topic returns a
    configurable refusal. It **fails open** (proceeds on classifier error) and can use
    a separate model/endpoint from the main provider.
-2. **RAG retrieve** — embed the user's message and pull the top-K chunks from the
-   user's private memory plus the admin public corpus.
-3. **Assemble + stream** — build the context (system prompt stamped with the current
-   date and the user's unit preference) and stream from the provider, running an
+2. **Current-turn evidence** — validate up to five ordered files, extract supported
+   documents after the guardrail, and resolve up to ten explicit references against
+   the user's private documents plus the public corpus. Image bytes become native
+   provider image parts; document text is framed as untrusted context.
+3. **RAG retrieve** — embed the user's message and pull top-ranked chunks from the
+   user's private memory plus the admin public corpus. Current attachments and
+   explicit references receive context-budget priority over broad retrieval.
+4. **Assemble + stream** — build the context (system prompt stamped with the current
+   date and the user's unit preference) and stream from the provider, running a
    **tool loop**: the model requests a remote MCP or narrow Kadence-native tool → the
    app dispatches it → the result is fed back → repeat, up to a configured iteration
    cap.
-4. **Persist + embed** — the turn is stored and embedded back into RAG.
+5. **Persist + embed** — the turn, safe file metadata, raw attachment payloads, and
+   reference snapshots are stored transactionally; text is embedded back into RAG.
 
-Responses stream to the browser as Server-Sent Events (`ChatEvent` JSON).
+Text-only turns retain the JSON request contract. Rich turns use bounded multipart
+requests and are fully parsed before SSE begins, so a rejected upload cannot create a
+partial turn. Responses stream to the browser as Server-Sent Events (`ChatEvent`
+JSON); attachment payloads never appear in message JSON.
 
 ## Scheduled pipeline (`scheduled/`)
 
@@ -200,6 +209,10 @@ servers' effective prefixes.
 - **Ingestion** normalizes each input to markdown, then chunks → embeds → stores.
   Text-layer PDFs use a pure-Go fast path; richer extraction (scanned PDFs, images,
   screenshots) goes through a `markitdown-mcp` service when configured.
+- **Explicit chat references** bypass broad-retrieval uncertainty: a referenced
+  document is included whole when it fits, otherwise its ranked sections are
+  included with a truncation marker. Visibility is checked again for every turn,
+  edit, and regeneration.
 - Chunks are tagged with the embedding model. Changing the embedding model triggers a
   background **re-index** so vectors migrate without wiping stored knowledge.
 

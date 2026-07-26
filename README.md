@@ -15,7 +15,10 @@ configurable — the default is endurance running.
 - **Per-user RAG memory** — past conversations and uploaded documents are embedded
   and retrieved in future chats (private to each user).
 - **Shared corpus** — admins publish material (plans, coaching docs) visible to all.
-- **Document ingestion** — PDFs and images/screenshots → markdown → RAG.
+- **Document ingestion** — select multiple files or drop them anywhere on Documents
+  and Public Docs; supported PDFs and richer formats become searchable RAG context.
+- **Chat evidence** — attach screenshots or documents to a turn, or explicitly
+  reference private/shared documents when they must be included.
 - **Topic guardrail** — a configurable classifier keeps chat on-domain.
 - **Scheduled coaching** — refine reminders, data checks, and monitors in a
   chat-like flow, confirm the final instruction, then run them safely in the

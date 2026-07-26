@@ -191,7 +191,8 @@ run audit records remain in PostgreSQL.
 
 The chart renders an nginx `Ingress` with cert-manager annotations (e.g.
 `letsencrypt-prod`), proxy timeouts tuned for SSE streaming, and a body-size limit
-above the upload cap. Set your host and issuer in `ingress:`.
+above the upload cap. This covers both knowledge-document uploads and atomic
+multipart chat turns. Set your host and issuer in `ingress:`.
 
 ## Hardening defaults
 
