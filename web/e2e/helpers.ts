@@ -23,3 +23,9 @@ export async function login(page: Page, username: string, password: string): Pro
 
 	await expect(page).not.toHaveURL(/\/login/);
 }
+
+export async function logout(page: Page): Promise<void> {
+	await page.getByRole('button', { name: 'Account actions' }).click();
+	await page.getByRole('menuitem', { name: 'Log out' }).click();
+	await expect(page).toHaveURL(/\/login/);
+}

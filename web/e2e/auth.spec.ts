@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { login } from './helpers';
+import { login, logout } from './helpers';
 
 const USERNAME = process.env.E2E_ADMIN_USERNAME || 'admin';
 const PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-pw';
@@ -37,8 +37,7 @@ test('login navigates away from /login, and logout returns to it', async ({ page
 	await login(page, USERNAME, PASSWORD);
 	await expect(page).not.toHaveURL(/\/login/);
 
-	await page.getByRole('button', { name: /log out/i }).click();
-	await expect(page).toHaveURL(/\/login/);
+	await logout(page);
 });
 
 test('serves install identity and shows branding on login, desktop, and mobile', async ({
@@ -101,8 +100,8 @@ test('reloads the cached shell offline without serving cached API data', async (
 	try {
 		await page.reload({ waitUntil: 'domcontentloaded' });
 
-		await expect(page.getByRole('status')).toContainText('You’re offline');
-		await expect(page.locator('.sidebar .who')).toHaveText(USERNAME);
+		await expect(page.getByRole('status').filter({ hasText: 'You’re offline' })).toBeVisible();
+		await expect(page.locator('.sidebar .account-name')).toHaveText(USERNAME);
 		expect(
 			await page.evaluate(async () => {
 				try {

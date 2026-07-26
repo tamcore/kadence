@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { login } from './helpers';
+import { login, logout } from './helpers';
 
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-pw';
@@ -29,8 +29,7 @@ async function createThrowawayUser(
 
 	// Log the admin session back out of this page/context so it doesn't
 	// interfere with the throwaway user's own session list.
-	await page.getByRole('button', { name: /log out/i }).click();
-	await expect(page).toHaveURL(/\/login/);
+	await logout(page);
 
 	return { username, password };
 }
@@ -49,8 +48,7 @@ test('user can change their own password from the profile page', async ({ page }
 	await expect(page.getByRole('alert')).toHaveCount(0);
 
 	// The new password now works, and the old one no longer does.
-	await page.getByRole('button', { name: /log out/i }).click();
-	await expect(page).toHaveURL(/\/login/);
+	await logout(page);
 	await login(page, username, 'e2e-profile-pw-67890');
 	await expect(page).not.toHaveURL(/\/login/);
 });
