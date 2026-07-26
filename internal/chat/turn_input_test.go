@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"reflect"
@@ -1149,6 +1150,99 @@ func TestRegeneratePreflightDocumentStoreFailurePreservesTranscript(t *testing.T
 	}
 }
 
+func TestEditPreflightsHistoricalPayloadsBeforeRewind(t *testing.T) {
+	msgs := &fakeMsgs{
+		added: []model.Message{
+			{
+				ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
+				Content: "historical",
+				Attachments: []model.MessageAttachment{{
+					MessageID: 1, Filename: "history.png", MIME: "image/png",
+					Kind: model.AttachmentKindImage, SizeBytes: 3, PayloadBytes: 3,
+					RawBytes: []byte{1, 2, 3},
+				}},
+			},
+			{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old answer"},
+			{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "target"},
+			{ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		},
+		payloadErr: errors.New("attachment database unavailable"),
+	}
+	original := append([]model.Message(nil), msgs.added...)
+	provider := &capturingProvider{reply: "must not run"}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	err := svc.Edit(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 3, "edited", &capturingSink{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "attachment payload") {
+		t.Fatalf("Edit error = %v, want attachment payload failure", err)
+	}
+	if msgs.editCalls != 0 || len(provider.gotMessages) != 0 {
+		t.Fatalf("edit calls = %d provider calls = %d, want 0/0", msgs.editCalls, len(provider.gotMessages))
+	}
+	if !reflect.DeepEqual(msgs.added, original) {
+		t.Fatalf("failed edit changed transcript: got %+v want %+v", msgs.added, original)
+	}
+}
+
+func TestRegeneratePreflightsHistoricalPayloadsBeforeRewind(t *testing.T) {
+	msgs := &fakeMsgs{
+		added: []model.Message{
+			{
+				ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser,
+				Content: "historical",
+				Attachments: []model.MessageAttachment{{
+					MessageID: 1, Filename: "history.png", MIME: "image/png",
+					Kind: model.AttachmentKindImage, SizeBytes: 3, PayloadBytes: 3,
+					RawBytes: []byte{1, 2, 3},
+				}},
+			},
+			{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old answer"},
+			{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "target"},
+			{ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		},
+		payloadErr: errors.New("attachment database unavailable"),
+	}
+	original := append([]model.Message(nil), msgs.added...)
+	provider := &capturingProvider{reply: "must not run"}
+	svc := chat.NewService(provider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	err := svc.Regenerate(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, 4, &capturingSink{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "attachment payload") {
+		t.Fatalf("Regenerate error = %v, want attachment payload failure", err)
+	}
+	if msgs.regenerateCalls != 0 || len(provider.gotMessages) != 0 {
+		t.Fatalf(
+			"regenerate calls = %d provider calls = %d, want 0/0",
+			msgs.regenerateCalls, len(provider.gotMessages),
+		)
+	}
+	if !reflect.DeepEqual(msgs.added, original) {
+		t.Fatalf("failed regenerate changed transcript: got %+v want %+v", msgs.added, original)
+	}
+}
+
 func TestStreamTurnLoadsPayloadsOnlyForRetainedHistory(t *testing.T) {
 	msgs := &fakeMsgs{added: []model.Message{
 		{
@@ -1199,6 +1293,55 @@ func TestStreamTurnLoadsPayloadsOnlyForRetainedHistory(t *testing.T) {
 	if len(msgs.payloadRequests) != 1 ||
 		!reflect.DeepEqual(msgs.payloadRequests[0], []int64{3}) {
 		t.Fatalf("payload requests = %v, want [[3]]", msgs.payloadRequests)
+	}
+}
+
+func TestStreamTurnOmitsAttachmentTurnsOutsideHydrationCap(t *testing.T) {
+	msgs := &fakeMsgs{}
+	for i := 1; i <= 9; i++ {
+		image := testPNG(t, 1, 1)
+		msgs.added = append(msgs.added, model.Message{
+			ID: int64(i), ConversationID: testConvID, Role: model.MsgRoleUser,
+			Content: fmt.Sprintf("historical turn %d", i),
+			Attachments: []model.MessageAttachment{{
+				MessageID: int64(i), Filename: fmt.Sprintf("history-%d.png", i),
+				MIME: "image/png", Kind: model.AttachmentKindImage,
+				SizeBytes: int64(len(image)), PayloadBytes: int64(len(image)),
+				RawBytes: image,
+			}},
+		})
+	}
+	capturing := &capturingProvider{reply: "ok"}
+	svc := chat.NewService(capturing,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{
+				testConvID: {ID: testConvID, UserID: testUserID},
+			}},
+			Msgs: msgs,
+		},
+	)
+
+	if err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		testConvID, "current", &capturingSink{},
+	); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	wantIDs := []int64{2, 3, 4, 5, 6, 7, 8, 9}
+	if len(msgs.payloadRequests) != 1 ||
+		!reflect.DeepEqual(msgs.payloadRequests[0], wantIDs) {
+		t.Fatalf("payload requests = %v, want [%v]", msgs.payloadRequests, wantIDs)
+	}
+	var oldest provider.Message
+	for _, message := range capturing.gotMessages {
+		if strings.Contains(message.Content, "historical turn 1") {
+			oldest = message
+			break
+		}
+	}
+	if !strings.Contains(oldest.Content, "omitted") || len(oldest.Images) != 0 {
+		t.Fatalf("oldest capped turn = %+v, want text omission marker", oldest)
 	}
 }
 

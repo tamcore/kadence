@@ -303,6 +303,23 @@ describe('Composer', () => {
 		expect(onSubmit).toHaveBeenCalledWith('', [], [publicDocument]);
 	});
 
+	it('closes the document reference picker after an accepted submission', async () => {
+		const onSubmit = vi.fn();
+		render(Composer, { props: { onSubmit, richInput: true } });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Reference documents' }));
+		await fireEvent.click(
+			await screen.findByRole('button', { name: 'Add public-race-guide.md' })
+		);
+		await fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('searchbox', { name: 'Search documents' })
+			).not.toBeInTheDocument()
+		);
+	});
+
 	it('does not submit the enclosing chat form when Enter is pressed in reference search', async () => {
 		const onSubmit = vi.fn();
 		render(Composer, { props: { onSubmit, richInput: true } });

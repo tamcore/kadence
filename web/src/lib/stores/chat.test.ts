@@ -643,6 +643,44 @@ describe('chat store', () => {
 		expect(get(chatError)).toBeNull();
 	});
 
+	it('ignores late events from an aborted unsaved chat after another unsaved chat starts', async () => {
+		let releaseA!: () => void;
+		let releaseB!: () => void;
+		streamChatMock
+			.mockImplementationOnce(async function* () {
+				await new Promise<void>((resolve) => {
+					releaseA = resolve;
+				});
+				yield { type: 'meta', conversationId: 'chat-a', userMessageId: 1 };
+				yield { type: 'error', message: 'late A failure' };
+			})
+			.mockImplementationOnce(async function* () {
+				await new Promise<void>((resolve) => {
+					releaseB = resolve;
+				});
+				yield { type: 'meta', conversationId: 'chat-b', userMessageId: 2 };
+				yield { type: 'done', assistantMessageId: 3, assistantContent: 'answer B' };
+			});
+
+		const sendA = sendMessage('message A');
+		await Promise.resolve();
+		newChat();
+		const sendB = sendMessage('message B');
+		await Promise.resolve();
+
+		releaseA();
+		await expect(sendA).resolves.toBeNull();
+		releaseB();
+		await expect(sendB).resolves.toBe('chat-b');
+
+		expect(get(activeId)).toBe('chat-b');
+		expect(get(messages)).toEqual([
+			{ id: 2, role: 'user', content: 'message B' },
+			{ id: 3, role: 'assistant', content: 'answer B', parts: [] }
+		]);
+		expect(get(chatError)).toBeNull();
+	});
+
 	it('does not surface a thrown stale-stream error in a newly active conversation', async () => {
 		activeId.set('conv-a');
 		messages.set([

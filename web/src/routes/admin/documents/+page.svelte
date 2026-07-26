@@ -33,18 +33,21 @@
 	async function initialize() {
 		loading = true;
 		error = '';
-		try {
-			const [loadedDocuments, loadedCapabilities] = await Promise.all([
-				listDocuments({ admin: true }),
-				getDocumentUploadCapabilities()
-			]);
-			documents = loadedDocuments;
-			capabilities = loadedCapabilities;
-		} catch {
+		const [documentResult, capabilityResult] = await Promise.allSettled([
+			listDocuments({ admin: true }),
+			getDocumentUploadCapabilities()
+		]);
+		if (documentResult.status === 'fulfilled') {
+			documents = documentResult.value;
+		} else {
 			error = 'Could not load documents';
-		} finally {
-			loading = false;
 		}
+		if (capabilityResult.status === 'fulfilled') {
+			capabilities = capabilityResult.value;
+		} else if (!error) {
+			error = 'Could not load upload capabilities';
+		}
+		loading = false;
 	}
 
 	async function handleDelete(id: number) {

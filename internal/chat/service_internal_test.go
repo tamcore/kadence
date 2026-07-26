@@ -651,3 +651,21 @@ func TestSelectHistoricalAttachmentPayloadIDsHonorsByteBudget(t *testing.T) {
 		t.Fatalf("selected IDs = %v, want [2]", got)
 	}
 }
+
+func TestSelectHistoricalAttachmentPayloadIDsBoundsReferenceTurns(t *testing.T) {
+	history := make([]model.Message, 10)
+	for i := range history {
+		history[i] = model.Message{
+			ID: int64(i + 1), Role: model.MsgRoleUser,
+			DocumentReferences: []model.MessageDocumentReference{{
+				DocumentID: new(int64), Available: true, PayloadBytes: 4,
+			}},
+		}
+	}
+
+	got := selectHistoricalAttachmentPayloadIDs(history, 1_000)
+	want := []int64{3, 4, 5, 6, 7, 8, 9, 10}
+	if !slices.Equal(got, want) {
+		t.Fatalf("selected reference IDs = %v, want %v", got, want)
+	}
+}

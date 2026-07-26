@@ -54,13 +54,14 @@ type ChatUserInput struct {
 // chat message. DocumentID becomes nil and Available false when the source
 // document is later deleted; the filename and scope snapshots remain visible.
 type MessageDocumentReference struct {
-	ID         int64  `json:"id"`
-	MessageID  int64  `json:"message_id"`
-	DocumentID *int64 `json:"document_id,omitempty"`
-	Filename   string `json:"filename"`
-	Scope      string `json:"scope"`
-	Ordinal    int    `json:"ordinal"`
-	Available  bool   `json:"available"`
+	ID           int64  `json:"id"`
+	MessageID    int64  `json:"message_id"`
+	DocumentID   *int64 `json:"document_id,omitempty"`
+	Filename     string `json:"filename"`
+	Scope        string `json:"scope"`
+	Ordinal      int    `json:"ordinal"`
+	Available    bool   `json:"available"`
+	PayloadBytes int64  `json:"-"`
 }
 
 // Message is a single chat message within a conversation. ToolCalls,

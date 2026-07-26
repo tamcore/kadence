@@ -75,6 +75,28 @@ describe('/admin/documents', () => {
 		expect(spy).toHaveBeenCalledWith({ admin: true });
 	});
 
+	it('keeps loaded public documents visible when upload capabilities fail', async () => {
+		isAdminStore.set(true);
+		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([
+			{
+				id: 2,
+				filename: 'shared.pdf',
+				mime: 'application/pdf',
+				source_type: 'pdf',
+				scope: 'public',
+				created_at: '2026-07-19T10:00:00Z'
+			}
+		]);
+		vi.mocked(documentsApi.getDocumentUploadCapabilities).mockRejectedValue(
+			new Error('capabilities unavailable')
+		);
+
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('shared.pdf')).toBeInTheDocument());
+		expect(screen.getByRole('alert')).toHaveTextContent('Could not load upload capabilities');
+	});
+
 	it('uses the same rich upload capability profile as the private page', async () => {
 		isAdminStore.set(true);
 		vi.mocked(documentsApi.getDocumentUploadCapabilities).mockResolvedValue({

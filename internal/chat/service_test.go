@@ -303,6 +303,16 @@ func (f *fakeMsgs) ListChatHistory(_ context.Context, _ string) ([]model.Message
 func (f *fakeMsgs) LoadChatAttachmentPayloads(
 	_ context.Context, _ string, messageIDs []int64,
 ) (map[int64][]model.MessageAttachment, error) {
+	return f.loadChatAttachmentPayloads(messageIDs)
+}
+func (f *fakeMsgs) LoadChatAttachmentProviderPayloads(
+	_ context.Context, _ string, messageIDs []int64,
+) (map[int64][]model.MessageAttachment, error) {
+	return f.loadChatAttachmentPayloads(messageIDs)
+}
+func (f *fakeMsgs) loadChatAttachmentPayloads(
+	messageIDs []int64,
+) (map[int64][]model.MessageAttachment, error) {
 	f.payloadRequests = append(
 		f.payloadRequests, append([]int64(nil), messageIDs...),
 	)

@@ -36,6 +36,7 @@
 	let validationError = $state('');
 	let dragDepth = $state(0);
 	let dragActive = $state(false);
+	let referencePickerVersion = $state(0);
 	let textareaEl: HTMLTextAreaElement | undefined;
 
 	const canSubmit = $derived(
@@ -76,6 +77,7 @@
 		text = '';
 		files = [];
 		documentReferences = [];
+		referencePickerVersion += 1;
 		validationError = '';
 		void tick().then(autosize);
 		try {
@@ -243,11 +245,13 @@
 						onchange={handleFileSelection}
 					/>
 				</label>
-				<DocumentReferencePicker
-					selected={documentReferences}
-					{disabled}
-					onChange={(documents) => (documentReferences = documents)}
-				/>
+				{#key referencePickerVersion}
+					<DocumentReferencePicker
+						selected={documentReferences}
+						{disabled}
+						onChange={(documents) => (documentReferences = documents)}
+					/>
+				{/key}
 			</div>
 		{/if}
 		<textarea

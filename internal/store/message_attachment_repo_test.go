@@ -169,6 +169,19 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 		t.Fatalf("load document attachment payload: %v", err)
 	}
 	if got := payloads[first.ID]; len(got) != 1 ||
+		!bytes.Equal(got[0].RawBytes, []byte("first raw")) ||
+		got[0].ExtractedMarkdown != "# First" ||
+		got[0].PayloadBytes != int64(len("# First")) {
+		t.Fatalf("full document payload = %+v", got)
+	}
+
+	payloads, err = messages.LoadChatAttachmentProviderPayloads(
+		ctx, conversation.ID, []int64{first.ID},
+	)
+	if err != nil {
+		t.Fatalf("load document provider payload: %v", err)
+	}
+	if got := payloads[first.ID]; len(got) != 1 ||
 		len(got[0].RawBytes) != 0 ||
 		got[0].ExtractedMarkdown != "# First" ||
 		got[0].PayloadBytes != int64(len("# First")) {

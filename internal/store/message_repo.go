@@ -481,6 +481,21 @@ func (r *MessageRepository) ListChatHistory(
 func (r *MessageRepository) LoadChatAttachmentPayloads(
 	ctx context.Context, conversationID string, messageIDs []int64,
 ) (map[int64][]model.MessageAttachment, error) {
+	return r.loadChatAttachmentPayloads(ctx, conversationID, messageIDs, false)
+}
+
+// LoadChatAttachmentProviderPayloads loads only provider-facing payload
+// columns: image bytes or extracted document markdown.
+func (r *MessageRepository) LoadChatAttachmentProviderPayloads(
+	ctx context.Context, conversationID string, messageIDs []int64,
+) (map[int64][]model.MessageAttachment, error) {
+	return r.loadChatAttachmentPayloads(ctx, conversationID, messageIDs, true)
+}
+
+func (r *MessageRepository) loadChatAttachmentPayloads(
+	ctx context.Context, conversationID string, messageIDs []int64,
+	providerOnly bool,
+) (map[int64][]model.MessageAttachment, error) {
 	if len(messageIDs) == 0 {
 		return map[int64][]model.MessageAttachment{}, nil
 	}
@@ -497,6 +512,11 @@ func (r *MessageRepository) LoadChatAttachmentPayloads(
 		uniqueIDs = append(uniqueIDs, messageID)
 	}
 
+	payloadColumns := `a.raw_bytes, a.extracted_markdown`
+	if providerOnly {
+		payloadColumns = `CASE WHEN a.kind = 'image' THEN a.raw_bytes ELSE ''::bytea END,
+		                  CASE WHEN a.kind = 'document' THEN a.extracted_markdown ELSE '' END`
+	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT a.id, a.message_id, a.filename, a.mime_type, a.kind,
 		        a.size_bytes, a.extraction_complete, a.image_width,
@@ -505,8 +525,7 @@ func (r *MessageRepository) LoadChatAttachmentPayloads(
 		             THEN octet_length(a.raw_bytes)
 		             ELSE octet_length(a.extracted_markdown)
 		        END AS payload_bytes,
-		        CASE WHEN a.kind = 'image' THEN a.raw_bytes ELSE ''::bytea END,
-		        CASE WHEN a.kind = 'document' THEN a.extracted_markdown ELSE '' END
+		        `+payloadColumns+`
 		   FROM messages m
 		   JOIN message_attachments a ON a.message_id = m.id
 		  WHERE m.conversation_id = $1::uuid
@@ -896,10 +915,13 @@ func hydrateMessageRelations(
 	attachmentRows.Close()
 
 	referenceRows, err := db.Query(ctx,
-		`SELECT id, message_id, document_id, filename_snapshot, scope_snapshot, ordinal
-		   FROM message_document_references
-		  WHERE message_id = ANY($1::bigint[])
-		  ORDER BY message_id, ordinal`,
+		`SELECT r.id, r.message_id, r.document_id, r.filename_snapshot,
+		        r.scope_snapshot, r.ordinal,
+		        COALESCE(octet_length(d.extracted_markdown), 0)
+		   FROM message_document_references r
+		   LEFT JOIN documents d ON d.id = r.document_id
+		  WHERE r.message_id = ANY($1::bigint[])
+		  ORDER BY r.message_id, r.ordinal`,
 		messageIDs,
 	)
 	if err != nil {
@@ -910,6 +932,7 @@ func hydrateMessageRelations(
 		if err := referenceRows.Scan(
 			&reference.ID, &reference.MessageID, &reference.DocumentID,
 			&reference.Filename, &reference.Scope, &reference.Ordinal,
+			&reference.PayloadBytes,
 		); err != nil {
 			referenceRows.Close()
 			return fmt.Errorf("scan message document reference: %w", err)

@@ -38,6 +38,7 @@ type MessageStore interface {
 	ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error)
 	ListChatHistory(ctx context.Context, conversationID string) ([]model.Message, error)
 	LoadChatAttachmentPayloads(ctx context.Context, conversationID string, messageIDs []int64) (map[int64][]model.MessageAttachment, error)
+	LoadChatAttachmentProviderPayloads(ctx context.Context, conversationID string, messageIDs []int64) (map[int64][]model.MessageAttachment, error)
 	EditAndRewind(ctx context.Context, conversationID string, messageID, userID int64, content string) (model.Message, error)
 	RegenerateAndRewind(ctx context.Context, conversationID string, messageID, userID int64) (model.Message, error)
 }
@@ -462,40 +463,77 @@ func minimumHistoricalMessages(history []model.Message) []model.Message {
 	return minimum
 }
 
-func (s *Service) loadHistoricalAttachmentPayloads(
-	ctx context.Context, conversationID string, history []model.Message,
-	availableTokens int,
-) ([]model.Message, error) {
+type historicalPayloadCache struct {
+	selected           map[int64]struct{}
+	documents          map[int64][]model.Document
+	documentsAvailable map[int64]bool
+}
+
+func (s *Service) loadHistoricalPayloads(
+	ctx context.Context, userID int64, conversationID string,
+	history []model.Message, availableTokens int,
+) ([]model.Message, *historicalPayloadCache, error) {
 	messageIDs := selectHistoricalAttachmentPayloadIDs(history, availableTokens)
+	cache := &historicalPayloadCache{
+		selected:           make(map[int64]struct{}, len(messageIDs)),
+		documents:          make(map[int64][]model.Document, len(messageIDs)),
+		documentsAvailable: make(map[int64]bool, len(messageIDs)),
+	}
+	for _, messageID := range messageIDs {
+		cache.selected[messageID] = struct{}{}
+	}
 	if len(messageIDs) == 0 {
-		return history, nil
+		return history, cache, nil
 	}
-	payloads, err := s.msgs.LoadChatAttachmentPayloads(
-		ctx, conversationID, messageIDs,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("load historical attachment payloads: %w", err)
+
+	attachmentIDs := make([]int64, 0, len(messageIDs))
+	for _, message := range history {
+		if _, selected := cache.selected[message.ID]; selected &&
+			len(message.Attachments) > 0 {
+			attachmentIDs = append(attachmentIDs, message.ID)
+		}
 	}
+	payloads := map[int64][]model.MessageAttachment{}
+	if len(attachmentIDs) > 0 {
+		var err error
+		payloads, err = s.msgs.LoadChatAttachmentProviderPayloads(
+			ctx, conversationID, attachmentIDs,
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load historical attachment payloads: %w", err)
+		}
+	}
+
 	hydrated := append([]model.Message(nil), history...)
 	for i := range hydrated {
-		if hydrated[i].Role != model.MsgRoleUser ||
-			len(hydrated[i].Attachments) == 0 {
+		if _, selected := cache.selected[hydrated[i].ID]; !selected {
 			continue
 		}
-		attachments, ok := payloads[hydrated[i].ID]
-		if !ok || len(attachments) != len(hydrated[i].Attachments) {
-			return nil, fmt.Errorf(
-				"load historical attachment payloads: message %d incomplete",
-				hydrated[i].ID,
-			)
+		if len(hydrated[i].Attachments) > 0 {
+			attachments, ok := payloads[hydrated[i].ID]
+			if !ok || len(attachments) != len(hydrated[i].Attachments) {
+				return nil, nil, fmt.Errorf(
+					"load historical attachment payloads: message %d incomplete",
+					hydrated[i].ID,
+				)
+			}
+			hydrated[i].Attachments = attachments
 		}
-		hydrated[i].Attachments = attachments
+		documents, available := s.loadHistoricalDocuments(ctx, userID, hydrated[i])
+		cache.documents[hydrated[i].ID] = documents
+		cache.documentsAvailable[hydrated[i].ID] = available
 	}
-	return hydrated, nil
+	return hydrated, cache, nil
 }
 
 func selectHistoricalAttachmentPayloadIDs(
 	history []model.Message, availableTokens int,
+) []int64 {
+	return selectHistoricalPayloadIDsEligible(history, availableTokens, nil)
+}
+
+func selectHistoricalPayloadIDsEligible(
+	history []model.Message, availableTokens int, eligible map[int64]struct{},
 ) []int64 {
 	if availableTokens <= 0 {
 		return nil
@@ -504,10 +542,15 @@ func selectHistoricalAttachmentPayloadIDs(
 	selected := make(map[int64]struct{}, maxHistoricalAttachmentPayloadTurns)
 	for i := len(history) - 1; i >= 0; i-- {
 		message := history[i]
-		if message.Role != model.MsgRoleUser || len(message.Attachments) == 0 {
+		if message.Role != model.MsgRoleUser || !hasHistoricalPayload(message) {
 			continue
 		}
-		cost := historicalAttachmentPayloadTokenCost(message)
+		if eligible != nil {
+			if _, ok := eligible[message.ID]; !ok {
+				continue
+			}
+		}
+		cost := historicalPayloadTokenCost(message)
 		if cost > remaining {
 			continue
 		}
@@ -526,7 +569,7 @@ func selectHistoricalAttachmentPayloadIDs(
 	return messageIDs
 }
 
-func historicalAttachmentPayloadTokenCost(message model.Message) int64 {
+func historicalPayloadTokenCost(message model.Message) int64 {
 	var cost int64
 	for _, attachment := range message.Attachments {
 		payloadBytes := attachment.PayloadBytes
@@ -540,7 +583,30 @@ func historicalAttachmentPayloadTokenCost(message model.Message) int64 {
 			cost += (payloadBytes + estBytesPerToken - 1) / estBytesPerToken
 		}
 	}
+	for _, reference := range message.DocumentReferences {
+		cost += (reference.PayloadBytes + estBytesPerToken - 1) /
+			estBytesPerToken
+	}
 	return cost
+}
+
+func restrictHistoricalPayloadCache(
+	history []model.Message, availableTokens int, cache *historicalPayloadCache,
+) *historicalPayloadCache {
+	if cache == nil {
+		return nil
+	}
+	ids := selectHistoricalPayloadIDsEligible(
+		history, availableTokens, cache.selected,
+	)
+	selected := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		selected[id] = struct{}{}
+	}
+	return &historicalPayloadCache{
+		selected: selected, documents: cache.documents,
+		documentsAvailable: cache.documentsAvailable,
+	}
 }
 
 func historicalAttachmentPayloadAvailable(message model.Message) bool {
@@ -587,8 +653,8 @@ func (s *Service) loadHistoricalDocuments(
 	return documents, true
 }
 
-func (s *Service) buildHistoricalProviderMessages(
-	ctx context.Context, userID int64, history []model.Message, availableTokens int,
+func buildHistoricalProviderMessages(
+	history []model.Message, availableTokens int, cache *historicalPayloadCache,
 ) []provider.Message {
 	out := make([]provider.Message, len(history))
 	for i, message := range history {
@@ -605,15 +671,22 @@ func (s *Service) buildHistoricalProviderMessages(
 		if message.Role != model.MsgRoleUser || !hasHistoricalPayload(message) {
 			continue
 		}
+		if cache == nil {
+			continue
+		}
+		if _, selected := cache.selected[message.ID]; !selected {
+			continue
+		}
 		if !historicalAttachmentPayloadAvailable(message) {
 			continue
 		}
-		documents, available := s.loadHistoricalDocuments(ctx, userID, message)
-		if !available {
+		if !cache.documentsAvailable[message.ID] {
 			continue
 		}
 		message.Content = historicalTextWithoutOmissionMarker(message.Content)
-		full, err := currentTurnProviderMessage(message, documents)
+		full, err := currentTurnProviderMessage(
+			message, cache.documents[message.ID],
+		)
 		if err != nil {
 			continue
 		}
@@ -990,7 +1063,7 @@ func (s *Service) StreamTurn(
 	}
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, history, documents, true, true, sink,
+		userMsg, history, documents, nil, true, true, sink,
 	)
 }
 
@@ -1103,7 +1176,8 @@ func (s *Service) Edit(
 	userMsg.DocumentReferences = preflight.prompt.DocumentReferences
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, preflight.history, preflight.documents, true, false, sink,
+		userMsg, preflight.history, preflight.documents,
+		preflight.historicalPayloads, true, false, sink,
 	)
 }
 
@@ -1130,14 +1204,16 @@ func (s *Service) Regenerate(
 	userMsg.DocumentReferences = preflight.prompt.DocumentReferences
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, preflight.history, preflight.documents, false, false, sink,
+		userMsg, preflight.history, preflight.documents,
+		preflight.historicalPayloads, false, false, sink,
 	)
 }
 
 type rewindPreflight struct {
-	prompt    model.Message
-	history   []model.Message
-	documents []model.Document
+	prompt             model.Message
+	history            []model.Message
+	documents          []model.Document
+	historicalPayloads *historicalPayloadCache
 }
 
 func (s *Service) preflightRewind(
@@ -1197,8 +1273,17 @@ func (s *Service) preflightRewind(
 	if err != nil {
 		return rewindPreflight{}, fmt.Errorf("%w: %w", errRewindReferences, err)
 	}
+	history, historicalPayloads, err := s.loadHistoricalPayloads(
+		ctx, userID, conversationID, messages[:promptIndex], s.contextBudget,
+	)
+	if err != nil {
+		return rewindPreflight{}, fmt.Errorf(
+			"%w: %w", errRewindAttachmentPayload, err,
+		)
+	}
 	return rewindPreflight{
-		prompt: prompt, history: messages[:promptIndex], documents: documents,
+		prompt: prompt, history: history, documents: documents,
+		historicalPayloads: historicalPayloads,
 	}, nil
 }
 
@@ -1303,6 +1388,7 @@ func (s *Service) streamPersistedTurn(
 	ctx, streamCtx context.Context,
 	userID int64, uc UserContext, conversationID string,
 	userMsg model.Message, history []model.Message, documents []model.Document,
+	preloadedHistoricalPayloads *historicalPayloadCache,
 	storeUserChunk, guardrailChecked bool, sink EventSink,
 ) error {
 	userText := userMsg.Content
@@ -1410,17 +1496,26 @@ func (s *Service) streamPersistedTurn(
 		historyUsed += estimateTokens(message.Content)
 	}
 	historyBudget := s.contextBudget - historyUsed
-	hydratedHistory, payloadErr := s.loadHistoricalAttachmentPayloads(
-		ctx, conversationID, boundedHistory, historyBudget,
-	)
-	if payloadErr != nil {
-		slog.Error("historical attachment payload lookup failed", "err", payloadErr)
-		return s.fail(sink, "could not load historical attachment context")
+	var historicalPayloads *historicalPayloadCache
+	if preloadedHistoricalPayloads == nil {
+		var payloadErr error
+		boundedHistory, historicalPayloads, payloadErr = s.loadHistoricalPayloads(
+			ctx, userID, conversationID, boundedHistory, historyBudget,
+		)
+		if payloadErr != nil {
+			slog.Error("historical attachment payload lookup failed", "err", payloadErr)
+			return s.fail(sink, "could not load historical attachment context")
+		}
+	} else {
+		historicalPayloads = restrictHistoricalPayloadCache(
+			boundedHistory, historyBudget, preloadedHistoricalPayloads,
+		)
 	}
-	boundedHistory = hydratedHistory
 	req.Messages = append(
 		req.Messages,
-		s.buildHistoricalProviderMessages(ctx, userID, boundedHistory, historyBudget)...,
+		buildHistoricalProviderMessages(
+			boundedHistory, historyBudget, historicalPayloads,
+		)...,
 	)
 	req.Messages = append(req.Messages, currentMessage)
 

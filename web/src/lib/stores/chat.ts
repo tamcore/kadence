@@ -347,15 +347,17 @@ async function consumeStream(
 	let convId = initialConversationId;
 	let receivedMeta = false;
 	function streamIsActive(): boolean {
+		if (abort !== localAbort) return false;
 		const streamConversationId = receivedMeta ? convId : initialConversationId;
 		return get(activeId) === streamConversationId;
 	}
 	let receivedTerminal = false;
+	let ownedStreamAtCleanup = false;
 	function restoreRejectedRewrite(): void {
 		if (
 			!receivedMeta &&
 			restoreBeforeMeta &&
-			get(activeId) === initialConversationId
+			streamIsActive()
 		) {
 			messages.set(restoreBeforeMeta);
 		}
@@ -368,10 +370,10 @@ async function consumeStream(
 			initialConversationId === null
 		)
 			return;
-		if (get(activeId) !== initialConversationId) return;
+		if (!streamIsActive()) return;
 		try {
 			const canonical = await chatApi.getMessages(initialConversationId);
-			if (get(activeId) === initialConversationId) messages.set(canonical.map(hydrateMessage));
+			if (streamIsActive()) messages.set(canonical.map(hydrateMessage));
 		} catch {
 			// Keep the locally streamed rewrite when its canonical reload is unavailable.
 		}
@@ -496,7 +498,7 @@ async function consumeStream(
 			// Navigation/new-chat already replaced this conversation state.
 			// Only restore an unaccepted rewrite when the same conversation
 			// remains active (for example, Stop was pressed before meta).
-			if (get(activeId) === initialConversationId) messages.set(restoreBeforeMeta);
+			if (streamIsActive()) messages.set(restoreBeforeMeta);
 		} else if (streamIsActive()) {
 			messages.update((m) => {
 				const copy = [...m];
@@ -509,10 +511,11 @@ async function consumeStream(
 		return receivedMeta && streamIsActive() ? convId : null;
 	} finally {
 		// Only reset shared state if this send is still the active one
-		if (abort === localAbort) {
+		ownedStreamAtCleanup = abort === localAbort;
+		if (ownedStreamAtCleanup) {
 			sending.set(false);
 			abort = null;
 		}
 	}
-	return receivedMeta && streamIsActive() ? convId : null;
+	return receivedMeta && ownedStreamAtCleanup && get(activeId) === convId ? convId : null;
 }

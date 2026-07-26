@@ -27,6 +27,20 @@ describe('/documents', () => {
 		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'));
 	});
 
+	it('keeps loaded documents visible when upload capabilities fail', async () => {
+		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([
+			{ id: 1, filename: 'plan.pdf', mime: 'application/pdf', source_type: 'pdf', scope: 'private', created_at: '2026-07-19T10:00:00Z' }
+		]);
+		vi.mocked(documentsApi.getDocumentUploadCapabilities).mockRejectedValue(
+			new Error('capabilities unavailable')
+		);
+
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('plan.pdf')).toBeInTheDocument());
+		expect(screen.getByRole('alert')).toHaveTextContent('capabilities unavailable');
+	});
+
 	it('asks for confirmation before deleting, and cancel keeps the document', async () => {
 		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([
 			{ id: 1, filename: 'plan.pdf', mime: 'application/pdf', source_type: 'pdf', scope: 'private', created_at: '2026-07-19T10:00:00Z' }
