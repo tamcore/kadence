@@ -106,4 +106,22 @@ describe('ActionMenu', () => {
 		expect(screen.getByRole('menu', { hidden: true })).toHaveStyle('--action-menu-left: 8px');
 		expect(screen.getByRole('menu', { hidden: true })).toHaveStyle('--action-menu-top: 574px');
 	});
+
+	it('gives an oversized menu a viewport-bounded height and a scrollable menu body', async () => {
+		Object.defineProperty(window, 'innerWidth', { configurable: true, value: 500 });
+		Object.defineProperty(window, 'innerHeight', { configurable: true, value: 400 });
+		vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+			if (this.hasAttribute('data-action-menu-trigger')) {
+				return { top: 200, bottom: 220, right: 220 } as DOMRect;
+			}
+			return { width: 224, height: 1000 } as DOMRect;
+		});
+		render(ActionMenu, {
+			props: { label: 'Long actions', items: Array.from({ length: 40 }, (_, index) => ({ label: `Action ${index}` })) }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Long actions' }));
+
+		expect(screen.getByRole('menu', { hidden: true })).toHaveStyle('max-height: 384px; overflow-y: auto');
+	});
 });

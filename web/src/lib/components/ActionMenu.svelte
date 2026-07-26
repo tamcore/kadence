@@ -61,8 +61,11 @@ export type ActionMenuItem =
 		const below = rect.bottom + gap;
 		const above = rect.top - height - gap;
 		const top = Math.max(edge, Math.min(below + height > window.innerHeight - edge ? above : below, window.innerHeight - height - edge));
+		const maxHeight = Math.max(0, window.innerHeight - top - edge);
 		menu.style.setProperty('--action-menu-left', `${left}px`);
 		menu.style.setProperty('--action-menu-top', `${top}px`);
+		menu.style.setProperty('max-height', `${maxHeight}px`);
+		menu.style.setProperty('overflow-y', 'auto');
 	}
 
 	function openMenu(event?: Event): void {
@@ -209,6 +212,8 @@ export type ActionMenuItem =
 		position: fixed;
 		inset: var(--action-menu-top) auto auto var(--action-menu-left);
 		width: min(224px, calc(100vw - 16px));
+		max-height: calc(100vh - 16px);
+		overflow-y: auto;
 		margin: 0;
 		padding: 4px;
 		border: 1px solid var(--border);
