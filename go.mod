@@ -3,6 +3,7 @@ module github.com/tamcore/kadence
 go 1.26.5
 
 require (
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/httprate v0.16.0
 	github.com/go-webauthn/webauthn v0.17.4
