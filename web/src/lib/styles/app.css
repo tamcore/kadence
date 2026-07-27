@@ -21,6 +21,11 @@ body {
 	height: 100%;
 	overflow: hidden;
 	overscroll-behavior: none;
+	/* Stop mobile browsers auto-inflating font size on wide, horizontally
+	   scrollable content (e.g. nowrap markdown tables) — the boost hits only
+	   some cells and mismatches sizes within the same table. */
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
 }
 
 body {

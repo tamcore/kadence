@@ -20,6 +20,12 @@ describe('app mobile scroll containment', () => {
 		);
 	});
 
+	it('disables mobile font boosting so wide scrolling tables keep a consistent size', () => {
+		expect(styles).toMatch(
+			/html,\s*body\s*\{[\s\S]*?text-size-adjust:\s*100%;/
+		);
+	});
+
 	it('keeps the mobile brand link visually neutral', () => {
 		expect(styles).toMatch(
 			/\.brand-sm\s*\{[\s\S]*?color:\s*inherit;[\s\S]*?text-decoration:\s*none;/
