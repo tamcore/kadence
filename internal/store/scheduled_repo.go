@@ -954,10 +954,12 @@ func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success mod
 		nextRunAt = nil
 	}
 	if visible {
-		if _, err := tx.Exec(ctx,
+		var deliveryMessageID int64
+		if err := tx.QueryRow(ctx,
 			`INSERT INTO messages (conversation_id, role, content, purpose)
-			 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')`,
-			deliveryConversationID, model.MsgRoleAssistant, success.Content); err != nil {
+			 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')
+			 RETURNING id`,
+			deliveryConversationID, model.MsgRoleAssistant, success.Content).Scan(&deliveryMessageID); err != nil {
 			return fmt.Errorf("insert scheduled delivery: %w", err)
 		}
 		if _, err := tx.Exec(ctx,
@@ -965,6 +967,11 @@ func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success mod
 			 WHERE id = $1::uuid AND kind = $2`,
 			deliveryConversationID, model.ConversationKindChat); err != nil {
 			return fmt.Errorf("bump delivery conversation activity: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE scheduled_task_runs SET delivery_message_id = $1 WHERE id = $2`,
+			deliveryMessageID, success.RunID); err != nil {
+			return fmt.Errorf("record delivery message id: %w", err)
 		}
 	}
 	if _, err := tx.Exec(ctx,

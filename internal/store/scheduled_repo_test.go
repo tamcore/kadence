@@ -1087,6 +1087,55 @@ func TestScheduledTaskRepositoryFinishSuccessDeliversToChatConversationAndBumpsA
 	}
 }
 
+func TestScheduledTaskRepositoryFinishSuccessRecordsDeliveryMessageID(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "delivery-id-owner", "delivery-id-owner@example.com")
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Name: "Records delivery id", Kind: model.ScheduledTaskKindData,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "records-delivery-id", ScheduledFor: time.Now().UTC(), State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.FinishSuccess(ctx, model.ScheduledExecutionSuccess{
+		RunID: run.ID, UserID: owner.ID, ConversationID: conversation.ID,
+		RunState: model.ScheduledTaskRunStateDelivered, TaskState: model.ScheduledTaskStateActive,
+		Content: scheduledSafeResult, Unread: true, MonitoringState: json.RawMessage(`{}`), NextRunAt: nil,
+	}); err != nil {
+		t.Fatalf("FinishSuccess: %v", err)
+	}
+
+	var msgID *int64
+	if err := pool.QueryRow(ctx,
+		`SELECT delivery_message_id FROM scheduled_task_runs WHERE id = $1`, run.ID).Scan(&msgID); err != nil {
+		t.Fatalf("read run: %v", err)
+	}
+	if msgID == nil {
+		t.Fatal("expected delivery_message_id to be set")
+	}
+	var content string
+	if err := pool.QueryRow(ctx,
+		`SELECT content FROM messages WHERE id = $1`, *msgID).Scan(&content); err != nil {
+		t.Fatalf("delivery message must exist: %v", err)
+	}
+	if content != scheduledSafeResult {
+		t.Fatalf("delivery message content = %q, want %q", content, scheduledSafeResult)
+	}
+}
+
 func TestConfirmProposalPromotesDirectConversationToChat(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
