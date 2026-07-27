@@ -19,6 +19,12 @@ vi.mock('$lib/stores/chat', async () => {
 	};
 });
 vi.mock('$app/navigation', () => ({ goto: (...a: unknown[]) => gotoMock(...a) }));
+vi.mock('$app/stores', async () => {
+	const { writable } = await import('svelte/store');
+	return {
+		page: writable({ params: {}, url: { hash: '' } })
+	};
+});
 
 import ChatPage from './+page.svelte';
 import { activeId } from '$lib/stores/chat';

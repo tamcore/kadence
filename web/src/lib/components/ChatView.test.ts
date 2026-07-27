@@ -28,6 +28,13 @@ vi.mock('$lib/stores/chat', async () => {
 	};
 });
 
+vi.mock('$app/stores', async () => {
+	const { writable } = await import('svelte/store');
+	return {
+		page: writable({ params: {}, url: { hash: '' } })
+	};
+});
+
 import ChatView from './ChatView.svelte';
 import { activeId, messages, sending } from '$lib/stores/chat';
 

@@ -19,11 +19,14 @@
 	import MessageEditor from '$lib/components/MessageEditor.svelte';
 	import MessageResources from '$lib/components/MessageResources.svelte';
 	import ScheduledArtifactCard from '$lib/components/scheduled/ScheduledArtifactCard.svelte';
+	import { page } from '$app/stores';
+	import { parseMsgAnchor } from './chatview-scroll';
 
 	let { onNewConversation }: { onNewConversation?: (id: string) => void } = $props();
 
 	let threadEl: HTMLDivElement | null = null;
 	let editingMessageId = $state<number | null>(null);
+	let anchorId = $state<number | null>(null);
 	let pendingAction = $state<
 		| { kind: 'edit'; messageId: number; text: string }
 		| { kind: 'regenerate'; messageId: number }
@@ -38,11 +41,23 @@
 	}
 
 	$effect(() => {
+		anchorId = parseMsgAnchor($page.url.hash);
+	});
+
+	$effect(() => {
 		const lastMessage = $messages[$messages.length - 1];
 		void $messages.length;
 		void lastMessage?.content.length;
 		void lastMessage?.scheduledArtifacts;
+		if (anchorId !== null) return; // deep-link: don't fight the anchor scroll
 		if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
+	});
+
+	$effect(() => {
+		if (anchorId === null || !threadEl) return;
+		void $messages.length; // re-run as messages load
+		const el = threadEl.querySelector(`#msg-${anchorId}`);
+		if (el) el.scrollIntoView({ block: 'center' });
 	});
 
 	async function submit(
@@ -120,6 +135,7 @@
 				<div class="message-block {m.role}">
 					<div
 						class="msg {m.role}"
+						id={m.id !== undefined ? `msg-${m.id}` : undefined}
 						class:editing={m.role === 'user' && m.id === editingMessageId}
 						data-testid={`chat-message-${m.role}`}
 					>

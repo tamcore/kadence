@@ -20,7 +20,10 @@ vi.mock('$lib/stores/chat', async () => {
 vi.mock('$app/stores', async () => {
 	const { writable } = await import('svelte/store');
 	return {
-		page: writable({ params: { id: '11111111-1111-1111-1111-111111111111' } })
+		page: writable({
+			params: { id: '11111111-1111-1111-1111-111111111111' },
+			url: { hash: '' }
+		})
 	};
 });
 
@@ -31,7 +34,8 @@ afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
 	(page as unknown as { set: (v: unknown) => void }).set({
-		params: { id: '11111111-1111-1111-1111-111111111111' }
+		params: { id: '11111111-1111-1111-1111-111111111111' },
+		url: { hash: '' }
 	});
 });
 
@@ -47,7 +51,8 @@ describe('chat/[id]/+page.svelte', () => {
 		expect(loadConversationMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
 
 		(page as unknown as { set: (v: unknown) => void }).set({
-			params: { id: '22222222-2222-2222-2222-222222222222' }
+			params: { id: '22222222-2222-2222-2222-222222222222' },
+			url: { hash: '' }
 		});
 		await Promise.resolve();
 
@@ -55,7 +60,10 @@ describe('chat/[id]/+page.svelte', () => {
 	});
 
 	it('does not load when the id is missing', () => {
-		(page as unknown as { set: (v: unknown) => void }).set({ params: { id: undefined } });
+		(page as unknown as { set: (v: unknown) => void }).set({
+			params: { id: undefined },
+			url: { hash: '' }
+		});
 		render(ChatIdPage);
 		expect(loadConversationMock).not.toHaveBeenCalled();
 	});
