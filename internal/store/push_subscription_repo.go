@@ -98,3 +98,36 @@ func (r *PushSubscriptionRepository) MarkSuccess(ctx context.Context, id string)
 	}
 	return nil
 }
+
+// ClaimUndispatchedDeliveries atomically stamps push_dispatched_at = NOW() on
+// up to limit delivered-but-undispatched scheduled runs and returns them.
+// FOR UPDATE SKIP LOCKED guarantees concurrent callers never claim the same run.
+func (r *PushSubscriptionRepository) ClaimUndispatchedDeliveries(ctx context.Context, limit int) ([]model.PendingPushDelivery, error) {
+	rows, err := r.pool.Query(ctx,
+		`UPDATE scheduled_task_runs r
+		    SET push_dispatched_at = NOW()
+		   FROM scheduled_tasks t
+		  WHERE r.task_id = t.id
+		    AND r.id IN (
+		        SELECT id FROM scheduled_task_runs
+		         WHERE state = 'delivered' AND push_dispatched_at IS NULL
+		         ORDER BY id
+		         FOR UPDATE SKIP LOCKED
+		         LIMIT $1)
+		  RETURNING r.id, t.user_id, t.id::text, COALESCE(t.name, ''),
+		            COALESCE(t.delivery_conversation_id, t.conversation_id)::text,
+		            r.delivery_message_id, COALESCE(r.result, '')`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim undispatched deliveries: %w", err)
+	}
+	defer rows.Close()
+	var out []model.PendingPushDelivery
+	for rows.Next() {
+		var d model.PendingPushDelivery
+		if err := rows.Scan(&d.RunID, &d.UserID, &d.TaskID, &d.TaskTitle, &d.ConversationID, &d.MessageID, &d.Result); err != nil {
+			return nil, fmt.Errorf("scan pending push delivery: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}

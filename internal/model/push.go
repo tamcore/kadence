@@ -14,3 +14,14 @@ type PushSubscription struct {
 	LastSuccessAt *time.Time
 	FailureCount  int
 }
+
+// PendingPushDelivery is a delivered scheduled run awaiting a push notification.
+type PendingPushDelivery struct {
+	RunID          int64
+	UserID         int64
+	TaskID         string
+	TaskTitle      string
+	ConversationID string
+	MessageID      *int64
+	Result         string
+}
