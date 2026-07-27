@@ -191,6 +191,10 @@
 			</div>
 		</section>
 
+		{#if detail.task.deliveryConversationId}
+			<a class="view-in-chat" href={`/chat/${detail.task.deliveryConversationId}`}>View in chat →</a>
+		{/if}
+
 		<section class="history">
 			<h2>Run history</h2>
 			{#if detail.runs.length === 0}
@@ -240,6 +244,8 @@
 	.overview div { display: grid; gap: 5px; padding: 16px; background: var(--surface); }
 	.overview span { color: var(--text-muted); font-size: 0.8rem; }
 	.overview strong { font: 600 0.84rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
+	.view-in-chat { display: inline-block; margin-bottom: 24px; color: var(--accent); text-decoration: none; font-weight: 600; }
+	.view-in-chat:hover { text-decoration: underline; }
 	.history h2 { font-size: 1rem; margin: 0 0 10px; }
 	ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
 	li { padding: 17px 4px; border-bottom: 1px solid var(--border); }

@@ -54,6 +54,7 @@ export interface ScheduledProposal {
 export interface ScheduledTask {
 	id: string;
 	conversationId: string;
+	deliveryConversationId?: string;
 	version: number;
 	name: string;
 	kind: 'reminder' | 'data' | 'monitoring';

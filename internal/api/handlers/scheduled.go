@@ -50,30 +50,31 @@ const (
 )
 
 type scheduledTaskDTO struct {
-	ID               string           `json:"id"`
-	ConversationID   string           `json:"conversationId"`
-	Version          int              `json:"version"`
-	Name             string           `json:"name"`
-	Kind             string           `json:"kind"`
-	State            string           `json:"state"`
-	CompiledPrompt   string           `json:"compiledPrompt"`
-	OneOffAt         *string          `json:"oneOffAt,omitempty"`
-	DTStart          *string          `json:"dtStart,omitempty"`
-	RRULE            string           `json:"rrule,omitempty"`
-	Timezone         string           `json:"timezone"`
-	ExecutionMode    string           `json:"executionMode"`
-	AuthorizedTools  []string         `json:"authorizedTools"`
-	DeliveryPolicy   string           `json:"deliveryPolicy"`
-	InitialRun       string           `json:"initialRun"`
-	StopCondition    string           `json:"stopCondition,omitempty"`
-	StaticMessage    string           `json:"staticMessage,omitempty"`
-	NextRunAt        *string          `json:"nextRunAt,omitempty"`
-	LastRunAt        *string          `json:"lastRunAt,omitempty"`
-	ConsecutiveFails int              `json:"consecutiveFailures"`
-	UnreadCount      int              `json:"unreadCount"`
-	RecentRun        *scheduledRunDTO `json:"recentRun,omitempty"`
-	CreatedAt        string           `json:"createdAt"`
-	UpdatedAt        string           `json:"updatedAt"`
+	ID                     string           `json:"id"`
+	ConversationID         string           `json:"conversationId"`
+	DeliveryConversationID string           `json:"deliveryConversationId,omitempty"`
+	Version                int              `json:"version"`
+	Name                   string           `json:"name"`
+	Kind                   string           `json:"kind"`
+	State                  string           `json:"state"`
+	CompiledPrompt         string           `json:"compiledPrompt"`
+	OneOffAt               *string          `json:"oneOffAt,omitempty"`
+	DTStart                *string          `json:"dtStart,omitempty"`
+	RRULE                  string           `json:"rrule,omitempty"`
+	Timezone               string           `json:"timezone"`
+	ExecutionMode          string           `json:"executionMode"`
+	AuthorizedTools        []string         `json:"authorizedTools"`
+	DeliveryPolicy         string           `json:"deliveryPolicy"`
+	InitialRun             string           `json:"initialRun"`
+	StopCondition          string           `json:"stopCondition,omitempty"`
+	StaticMessage          string           `json:"staticMessage,omitempty"`
+	NextRunAt              *string          `json:"nextRunAt,omitempty"`
+	LastRunAt              *string          `json:"lastRunAt,omitempty"`
+	ConsecutiveFails       int              `json:"consecutiveFailures"`
+	UnreadCount            int              `json:"unreadCount"`
+	RecentRun              *scheduledRunDTO `json:"recentRun,omitempty"`
+	CreatedAt              string           `json:"createdAt"`
+	UpdatedAt              string           `json:"updatedAt"`
 }
 
 type scheduledRunDTO struct {
@@ -96,7 +97,11 @@ type scheduledDefinitionMessageDTO struct {
 }
 
 func taskDTO(task model.ScheduledTask) scheduledTaskDTO {
-	return scheduledTaskDTO{ID: task.ID, ConversationID: task.ConversationID, Version: task.Version, Name: task.Name,
+	delivery := ""
+	if task.DeliveryConversationID != nil {
+		delivery = *task.DeliveryConversationID
+	}
+	return scheduledTaskDTO{ID: task.ID, ConversationID: task.ConversationID, DeliveryConversationID: delivery, Version: task.Version, Name: task.Name,
 		Kind: task.Kind, State: task.State, CompiledPrompt: task.CompiledPrompt, OneOffAt: timeString(task.OneOffAt),
 		DTStart: timeString(task.DTStart), RRULE: task.RRULE, Timezone: task.Timezone, ExecutionMode: task.ExecutionMode,
 		AuthorizedTools: append([]string{}, task.AuthorizedTools...), DeliveryPolicy: task.DeliveryPolicy, InitialRun: task.InitialRun,

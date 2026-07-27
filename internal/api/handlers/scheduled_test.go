@@ -422,6 +422,38 @@ func TestScheduledAllHandlersRejectMissingDependencyWithoutPanic(t *testing.T) {
 	}
 }
 
+func TestDetailExposesDeliveryConversationID(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	delivery := scheduledTestConv1
+	task := model.ScheduledTask{
+		ID: scheduledTestTask1, ConversationID: scheduledTestConv1, DeliveryConversationID: &delivery,
+		Version: 2, Name: "Morning", Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		CompiledPrompt: "prompt", Timezone: scheduledTimezoneUTC, ExecutionMode: "static", AuthorizedTools: []string{},
+		DeliveryPolicy: "always", InitialRun: "wait", CreatedAt: now, UpdatedAt: now,
+	}
+	fake := &fakeScheduledLifecycle{detailResult: scheduled.Detail{Task: task}}
+	h := handlers.NewScheduled(fake)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/"+scheduledTestTask1, nil), 7), "id", scheduledTestTask1)
+	rec := httptest.NewRecorder()
+	h.Detail(rec, req)
+
+	var envelope map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, rec.Body.String())
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data field missing or wrong type: %v", envelope)
+	}
+	taskField, ok := data["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task field missing or wrong type: %v", data)
+	}
+	if taskField["deliveryConversationId"] == "" || taskField["deliveryConversationId"] == nil {
+		t.Fatalf("deliveryConversationId missing: %v", taskField)
+	}
+}
+
 func TestScheduledDetailMapsOwnerMissToNotFound(t *testing.T) {
 	h := handlers.NewScheduled(&fakeScheduledLifecycle{detailErr: store.ErrNotFound})
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/x", nil), 7), "id", "x")
