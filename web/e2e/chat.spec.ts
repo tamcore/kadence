@@ -139,7 +139,7 @@ test('keeps the desktop chat thread and composer in a shared 1200px column', asy
 	await expect(composer).toHaveJSProperty('clientWidth', 1200);
 });
 
-test('uses content-fit assistant and user bubbles on opposite sides', async ({ page }, testInfo) => {
+test('spans the assistant full-width and keeps the user bubble content-fit right', async ({ page }, testInfo) => {
 	await page.setViewportSize({ width: 1600, height: 1000 });
 	const baseURL = testInfo.project.use.baseURL;
 	if (!baseURL) throw new Error('Playwright baseURL is required for scoped API fixtures');
@@ -209,7 +209,7 @@ test('uses content-fit assistant and user bubbles on opposite sides', async ({ p
 	expect(threadBox).not.toBeNull();
 	expect(assistantBox).not.toBeNull();
 	expect(userBox).not.toBeNull();
-	expect(assistantBox!.width).toBeLessThan(threadBox!.width * 0.8);
+	expect(assistantBox!.width).toBeCloseTo(threadBox!.width, 0);
 	expect(assistantBox!.x).toBeCloseTo(threadBox!.x, 0);
 	expect(userBox!.width).toBeLessThanOrEqual(threadBox!.width * 0.8 + 1);
 	expect(userBox!.x + userBox!.width).toBeCloseTo(threadBox!.x + threadBox!.width, 0);

@@ -249,7 +249,7 @@
 		flex-direction: column;
 	}
 	.message-block.user { align-self: flex-end; align-items: flex-end; }
-	.message-block.assistant { align-self: flex-start; align-items: flex-start; }
+	.message-block.assistant { align-self: stretch; align-items: stretch; max-width: 100%; }
 	.msg.user { background: var(--accent); color: #fff; }
 	.msg.user.editing {
 		width: 100%;
