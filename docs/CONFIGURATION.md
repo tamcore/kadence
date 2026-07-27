@@ -107,6 +107,17 @@ catch-up run, then the task advances to the next future occurrence. A task may
 deliver after every run or only when monitoring data changes. Initial behavior can
 wait, deliver a preview, or establish a quiet monitoring baseline.
 
+## Web Push (notifications)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_PUSH_VAPID_PUBLIC_KEY` | — | VAPID public key (base64url). Exposed to the browser. Enables push when set with the others. |
+| `KADENCE_PUSH_VAPID_PRIVATE_KEY` | — | VAPID private key (base64url). Secret — never logged or sent to clients. |
+| `KADENCE_PUSH_VAPID_SUBJECT` | — | VAPID subject: a `mailto:` or `https` URL identifying the sender. |
+
+Generate a keypair with any web-push VAPID tool. All three must be set together;
+setting only some fails startup.
+
 Task states are `draft`, `active`, `paused`, `completed`, `failed`, and `deleted`.
 Runs are immutable records in `pending`, `running`, `no_change`, `delivered`,
 `completed`, or `failed`. Once an occurrence starts, Kadence never replays it
@@ -270,6 +281,8 @@ complete, unchanged file successfully.
 7. At least one FIT route is configured and `KADENCE_FIT_MAX_BYTES` is not positive.
 8. Scheduled is enabled without a primary `KADENCE_LLM_API_KEY`, or any Scheduled
    worker budget/concurrency/active-task limit is not positive.
+9. Only some of `KADENCE_PUSH_VAPID_PUBLIC_KEY`, `KADENCE_PUSH_VAPID_PRIVATE_KEY`,
+   `KADENCE_PUSH_VAPID_SUBJECT` are set (all three or none are required).
 
 Passkeys additionally require `KADENCE_WEBAUTHN_RP_ID` **and** `KADENCE_TRUSTED_ORIGINS`
 **and** a valid 32-byte `KADENCE_ENCRYPTION_KEY`; if the RP ID is set without the
@@ -283,6 +296,7 @@ others, startup fails with a message naming what's missing.
 | RAG memory | `KADENCE_EMBED_API_KEY` set |
 | Guardrail | `KADENCE_GUARDRAIL_ENABLED=true` |
 | Scheduled tasks | `KADENCE_SCHEDULED_ENABLED=true` + `KADENCE_LLM_API_KEY` |
+| Web push | `KADENCE_PUSH_VAPID_PUBLIC_KEY` + `KADENCE_PUSH_VAPID_PRIVATE_KEY` + `KADENCE_PUSH_VAPID_SUBJECT` |
 | Passkeys | `KADENCE_WEBAUTHN_RP_ID` + `KADENCE_TRUSTED_ORIGINS` + 32-byte `KADENCE_ENCRYPTION_KEY` |
 | User-defined MCP | `KADENCE_USER_MCP_ALLOWED_HOSTS` + 32-byte `KADENCE_ENCRYPTION_KEY` |
 | Rich ingestion | `KADENCE_MARKITDOWN_URL` set (else PDF text fast-path only) |

@@ -88,6 +88,12 @@ type Config struct {
 	ScheduledWorkerConcurrency   int
 	ScheduledMaxActivePerUser    int
 
+	// Web push (browser notifications). Enabled iff all three VAPID values
+	// are set; validatePush fails fast on a partial configuration.
+	PushVAPIDPublicKey  string
+	PushVAPIDPrivateKey string
+	PushVAPIDSubject    string
+
 	// Embeddings / RAG. RAG is enabled iff EmbedAPIKey != "".
 	EmbedBaseURL string
 	EmbedAPIKey  string
@@ -249,6 +255,10 @@ func Load() Config {
 	cfg.ScheduledWorkerConcurrency = envIntOr("KADENCE_SCHEDULED_WORKER_CONCURRENCY", 1)
 	cfg.ScheduledMaxActivePerUser = envIntOr("KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER", 10)
 
+	cfg.PushVAPIDPublicKey = os.Getenv("KADENCE_PUSH_VAPID_PUBLIC_KEY")
+	cfg.PushVAPIDPrivateKey = os.Getenv("KADENCE_PUSH_VAPID_PRIVATE_KEY")
+	cfg.PushVAPIDSubject = os.Getenv("KADENCE_PUSH_VAPID_SUBJECT")
+
 	cfg.EmbedBaseURL = envOr("KADENCE_EMBED_BASE_URL", "https://api.openai.com/v1")
 	cfg.EmbedAPIKey = os.Getenv("KADENCE_EMBED_API_KEY")
 	cfg.EmbedModel = envOr("KADENCE_EMBED_MODEL", "text-embedding-3-small")
@@ -382,6 +392,11 @@ func (c Config) UserMCPEnabled() bool {
 	return len(c.EncryptionKey) == encryptionKeyLen && len(c.UserMCPAllowedHosts) > 0
 }
 
+// PushEnabled reports whether web push is configured (all VAPID values set).
+func (c Config) PushEnabled() bool {
+	return c.PushVAPIDPublicKey != "" && c.PushVAPIDPrivateKey != "" && c.PushVAPIDSubject != ""
+}
+
 // ResolvedMaxBodyBytes returns the configured global request-body cap,
 // falling back to defaultMaxBodyBytes when MaxBodyBytes is unset (e.g. a
 // Config{} literal built directly in tests rather than via Load()).
@@ -469,6 +484,9 @@ func (c Config) Validate() error {
 	if err := c.validateScheduled(); err != nil {
 		return err
 	}
+	if err := c.validatePush(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -518,6 +536,22 @@ func (c Config) validateScheduled() error {
 	}
 	if c.ScheduledMaxActivePerUser <= 0 {
 		return errors.New("KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER must be a positive integer when Scheduled is enabled")
+	}
+	return nil
+}
+
+// validatePush requires all three VAPID values to be set together: a partial
+// configuration (e.g. a typo dropping one env var) is a startup error rather
+// than a silently half-disabled feature.
+func (c Config) validatePush() error {
+	set := 0
+	for _, v := range []string{c.PushVAPIDPublicKey, c.PushVAPIDPrivateKey, c.PushVAPIDSubject} {
+		if strings.TrimSpace(v) != "" {
+			set++
+		}
+	}
+	if set != 0 && set != 3 {
+		return errors.New("all of KADENCE_PUSH_VAPID_PUBLIC_KEY, KADENCE_PUSH_VAPID_PRIVATE_KEY, KADENCE_PUSH_VAPID_SUBJECT are required when any is set")
 	}
 	return nil
 }

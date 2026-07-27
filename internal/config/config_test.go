@@ -22,6 +22,13 @@ const (
 // WebAuthn-related tests.
 const testWebAuthnRPID = "kadence.example.com"
 
+// Placeholder VAPID values used across the web-push config tests.
+const (
+	testVAPIDPublicKey  = "pub"
+	testVAPIDPrivateKey = "priv"
+	testVAPIDSubject    = "mailto:a@b.c"
+)
+
 // validConfig returns a Config that passes Validate() outright: every field
 // Validate() range-checks is set to a sane positive value (mirroring Load()'s
 // defaults), so tests that exercise exactly one Validate() rule can start
@@ -446,6 +453,33 @@ func TestValidateScheduledRequiresPrimaryCompilerConfiguration(t *testing.T) {
 	cfg.LLMAPIKey = "primary-key"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() with primary compiler key: %v", err)
+	}
+}
+
+func TestPushEnabledRequiresAllThree(t *testing.T) {
+	base := Config{PushVAPIDPublicKey: testVAPIDPublicKey, PushVAPIDPrivateKey: testVAPIDPrivateKey, PushVAPIDSubject: testVAPIDSubject}
+	if !base.PushEnabled() {
+		t.Fatal("expected PushEnabled with all three set")
+	}
+	if (Config{PushVAPIDPublicKey: testVAPIDPublicKey}).PushEnabled() {
+		t.Fatal("expected not enabled with only public key")
+	}
+}
+
+func TestValidatePushPartialConfigFails(t *testing.T) {
+	// only public key set -> partial config must fail fast
+	c := Config{PushVAPIDPublicKey: testVAPIDPublicKey}
+	if err := c.validatePush(); err == nil {
+		t.Fatal("expected error for partial VAPID config")
+	}
+	// none set -> ok (feature simply disabled)
+	if err := (Config{}).validatePush(); err != nil {
+		t.Fatalf("expected no error when none set, got %v", err)
+	}
+	// all set -> ok
+	full := Config{PushVAPIDPublicKey: testVAPIDPublicKey, PushVAPIDPrivateKey: testVAPIDPrivateKey, PushVAPIDSubject: testVAPIDSubject}
+	if err := full.validatePush(); err != nil {
+		t.Fatalf("expected no error when all set, got %v", err)
 	}
 }
 
