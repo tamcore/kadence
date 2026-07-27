@@ -27,7 +27,7 @@
 	let threadEl: HTMLDivElement | null = null;
 	let editingMessageId = $state<number | null>(null);
 	let anchorId = $state<number | null>(null);
-	let anchorConsumed = $state(false);
+	let anchorConsumed = false;
 	let pendingAction = $state<
 		| { kind: 'edit'; messageId: number; text: string }
 		| { kind: 'regenerate'; messageId: number }
