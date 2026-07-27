@@ -5,6 +5,7 @@
 
 import { build, files, version } from '$service-worker';
 import { classifyRequest } from '$lib/pwa/cache-policy';
+import { resolveClientToFocus } from '$lib/push/notification-target';
 
 const worker = globalThis as unknown as ServiceWorkerGlobalScope;
 const CACHE_PREFIX = 'kadence-shell-';
@@ -40,6 +41,51 @@ worker.addEventListener('message', (event) => {
 	if (event.data?.type === 'SKIP_WAITING') {
 		void worker.skipWaiting();
 	}
+});
+
+interface PushPayload {
+	title?: string;
+	body?: string;
+	url?: string;
+	tag?: string;
+}
+
+worker.addEventListener('push', (event: PushEvent) => {
+	if (!event.data) return;
+	let payload: PushPayload;
+	try {
+		payload = event.data.json();
+	} catch {
+		payload = { title: 'Kadence', body: event.data.text() };
+	}
+	event.waitUntil(
+		worker.registration.showNotification(payload.title ?? 'Kadence', {
+			body: payload.body ?? '',
+			icon: '/icons/icon-192.png',
+			badge: '/icons/icon-192.png',
+			tag: payload.tag,
+			data: { url: payload.url ?? '/' }
+		})
+	);
+});
+
+worker.addEventListener('notificationclick', (event: NotificationEvent) => {
+	event.notification.close();
+	const targetURL: string = event.notification.data?.url ?? '/';
+	event.waitUntil(
+		(async () => {
+			const all = await worker.clients.matchAll({ type: 'window', includeUncontrolled: true });
+			const targetPath = targetURL.split('#')[0];
+			const matchIndex = resolveClientToFocus(all, targetPath);
+			if (matchIndex !== -1) {
+				const client = all[matchIndex] as WindowClient;
+				await client.focus();
+				client.postMessage({ type: 'NAVIGATE', url: targetURL });
+				return;
+			}
+			await worker.clients.openWindow(targetURL);
+		})()
+	);
 });
 
 worker.addEventListener('fetch', (event) => {

@@ -99,6 +99,12 @@
 		});
 		void pwaLifecycle.start();
 
+		navigator.serviceWorker?.addEventListener('message', (e) => {
+			if (e.data?.type === 'NAVIGATE' && typeof e.data.url === 'string') {
+				void goto(e.data.url);
+			}
+		});
+
 		const path = window.location.pathname;
 		try {
 			const session = await bootstrapSession(api.getCurrentUser, { setAuth, clearAuth });
