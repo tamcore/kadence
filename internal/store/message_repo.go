@@ -470,9 +470,16 @@ func (r *MessageRepository) ListChatHistory(
 	ctx context.Context, conversationID string,
 ) ([]model.Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id::text, role, content, tool_calls, created_at FROM messages
-		 WHERE conversation_id = $1::uuid AND purpose = $2 ORDER BY id`,
-		conversationID, messagePurposeChat,
+		`SELECT m.id, m.conversation_id::text, m.role, m.content, m.tool_calls, m.created_at
+		   FROM messages AS m
+		   JOIN conversations AS c ON c.id = m.conversation_id
+		  WHERE m.conversation_id = $1::uuid
+		    AND (
+		        m.purpose = $2
+		        OR (c.kind = $3 AND m.purpose IN ('scheduled_delivery', 'scheduled_definition'))
+		    )
+		  ORDER BY m.id`,
+		conversationID, messagePurposeChat, model.ConversationKindChat,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list chat history: %w", err)
