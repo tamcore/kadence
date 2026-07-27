@@ -15,6 +15,14 @@
 	import Input from '$lib/components/Input.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { enablePush, disablePush } from '$lib/push/subscribe';
+	import {
+		pushSupported,
+		pushPermission,
+		pushSubscribed,
+		pushServerEnabled,
+		refreshPushState
+	} from '$lib/stores/push';
 
 	const MAX_LOCATION_LEN = 120;
 	const MAX_ABOUT_ME_LEN = 1000;
@@ -191,9 +199,29 @@
 		if (p) await deletePk(p.publicId);
 	}
 
+	async function togglePush(): Promise<void> {
+		err = null;
+		msg = null;
+		try {
+			if ($pushSubscribed) {
+				await disablePush();
+				msg = 'Notifications disabled on this device';
+			} else {
+				const result = await enablePush();
+				if (result === 'subscribed') msg = 'Notifications enabled on this device';
+				else if (result === 'denied') err = 'Notification permission was denied in the browser';
+				else if (result === 'unsupported') err = 'This browser does not support notifications';
+				else if (result === 'disabled') err = 'Push notifications are not configured on this server';
+			}
+		} catch (e) {
+			err = e instanceof Error ? e.message : 'Could not update notifications';
+		}
+	}
+
 	onMount(() => {
 		void loadSessions();
 		void loadPasskeys();
+		void refreshPushState();
 	});
 </script>
 
@@ -330,6 +358,22 @@
 					<li class="muted">No passkeys yet.</li>
 				{/if}
 			</ul>
+		</section>
+	{/if}
+
+	{#if $pushServerEnabled && pushSupported}
+		<section class="push-section">
+			<h2>Notifications</h2>
+			<p class="muted">Get a push notification when a scheduled task delivers a result.</p>
+			{#if $pushPermission === 'denied'}
+				<p class="error" role="alert">
+					Notifications are blocked in your browser settings. Re-enable them there first.
+				</p>
+			{:else}
+				<Button variant="ghost" onclick={togglePush} data-testid="toggle-push">
+					{$pushSubscribed ? 'Disable notifications on this device' : 'Enable notifications on this device'}
+				</Button>
+			{/if}
 		</section>
 	{/if}
 </div>

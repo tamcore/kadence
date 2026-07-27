@@ -6,7 +6,8 @@
 		disabled = false,
 		fullWidth = false,
 		children,
-		onclick
+		onclick,
+		...rest
 	}: {
 		variant?: 'primary' | 'danger' | 'ghost';
 		type?: 'button' | 'submit';
@@ -15,10 +16,18 @@
 		fullWidth?: boolean;
 		children: import('svelte').Snippet;
 		onclick?: () => void;
+		[key: string]: unknown;
 	} = $props();
 </script>
 
-<button {type} class="btn {variant}" class:full-width={fullWidth} disabled={disabled || loading} {onclick}>
+<button
+	{type}
+	class="btn {variant}"
+	class:full-width={fullWidth}
+	disabled={disabled || loading}
+	{onclick}
+	{...rest}
+>
 	{@render children()}
 </button>
 
