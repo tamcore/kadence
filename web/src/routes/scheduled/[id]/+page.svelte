@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { onDestroy, onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import {
 		deleteScheduledTask,
 		getScheduledTask,
@@ -202,7 +203,7 @@
 								<span class={`run-state ${run.state}`}>{label(run.state)}</span>
 								<time datetime={run.scheduledFor}>{formatTaskTime(run.scheduledFor)}</time>
 							</div>
-							{#if run.result}<p>{run.result}</p>{/if}
+							{#if run.result}<div class="run-body"><MarkdownMessage content={run.result} /></div>{/if}
 							{#if run.error}<p class="run-error">{label(run.error)}</p>{/if}
 							{#if run.state === 'no_change'}<p class="muted">Nothing changed.</p>{/if}
 						</li>
@@ -246,6 +247,7 @@
 	.run-head { display: flex; justify-content: space-between; gap: 16px; }
 	time { color: var(--text-muted); font: 0.76rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 	li p { margin: 10px 0 0; white-space: pre-wrap; }
+	.run-body { margin-top: 10px; }
 	.run-error, .error { color: #8a4c18; }
 	.error { margin-bottom: 16px; border-left: 3px solid #b66a2c; background: #fff8f1; padding: 9px 12px; }
 	.muted, .empty, .loading { color: var(--text-muted); }

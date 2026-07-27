@@ -79,6 +79,18 @@ describe('/scheduled/[id]', () => {
 		await waitFor(() => expect(readMock).toHaveBeenCalledWith('task-1'));
 	});
 
+	it('renders delivered result markdown as formatted HTML', async () => {
+		const withMarkdown = structuredClone(detail);
+		withMarkdown.runs[0].result = 'Run scheduled: **W03D01 - Easy Run** — 13.0 km.';
+		getMock.mockResolvedValue(withMarkdown);
+		readMock.mockResolvedValue({ ok: true });
+		render(Page);
+
+		await screen.findByRole('heading', { name: 'Post-run review' });
+		const bold = await screen.findByText('W03D01 - Easy Run', { selector: 'strong' });
+		expect(bold).toBeInTheDocument();
+	});
+
 	it('retries transient polling failures and stops polling after unmount', async () => {
 		vi.useFakeTimers();
 		const pending = structuredClone(detail);
