@@ -403,6 +403,57 @@ func TestMessagesExposeScheduledDeliveryPurpose(t *testing.T) {
 	}
 }
 
+func TestMessagesStripsAuditMarkersFromScheduledDefinitionOnly(t *testing.T) {
+	const (
+		questionProse   = `I can set that daily reminder, but I need the timezone for 9:00 AM.`
+		definitionQ     = questionProse + "\n\nScheduled question audit: " + `{"id":"timezone"}`
+		proposalProse   = `Done — I'll send the reminder every morning.`
+		definitionP     = proposalProse + "\n\nScheduled proposal audit: " + `{"version":2}`
+		deliveryContent = "delivered result"
+		chatContent     = "just chatting"
+	)
+	messages := fakeMsgLister{msgs: []model.Message{
+		{ID: 1, Role: model.MsgRoleAssistant, Content: definitionQ, Purpose: model.MessagePurposeScheduledDefinition},
+		{ID: 2, Role: model.MsgRoleAssistant, Content: definitionP, Purpose: model.MessagePurposeScheduledDefinition},
+		{ID: 3, Role: model.MsgRoleAssistant, Content: deliveryContent, Purpose: model.MessagePurposeScheduledDelivery},
+		{ID: 4, Role: model.MsgRoleAssistant, Content: chatContent, Purpose: model.MessagePurposeChat},
+	}}
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, messages, nil, nil)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/chat-conv-1/messages", nil), 7), "id", chatTestConversationID)
+	rec := httptest.NewRecorder()
+
+	h.Messages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			ID      int64  `json:"id"`
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	got := response.Data
+	if len(got) != 4 {
+		t.Fatalf("messages = %+v", got)
+	}
+	if got[0].Content != questionProse {
+		t.Fatalf("definition question content = %q, want %q (marker must be stripped)", got[0].Content, questionProse)
+	}
+	if got[1].Content != proposalProse {
+		t.Fatalf("definition proposal content = %q, want %q (marker must be stripped)", got[1].Content, proposalProse)
+	}
+	if got[2].Content != deliveryContent {
+		t.Fatalf("delivery content = %q, want unchanged %q", got[2].Content, deliveryContent)
+	}
+	if got[3].Content != chatContent {
+		t.Fatalf("chat content = %q, want unchanged %q", got[3].Content, chatContent)
+	}
+}
+
 func TestChatMessagesReturnsSafeErrorWhenArtifactHydrationFails(t *testing.T) {
 	hydrator := &fakeChatArtifactHydrator{err: errors.New("database unavailable")}
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{msgs: []model.Message{{ID: 9, Role: model.MsgRoleAssistant, Content: "reply"}}}, nil, hydrator)

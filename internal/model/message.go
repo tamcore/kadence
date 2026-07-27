@@ -9,6 +9,14 @@ const (
 	MsgRoleAssistant = "assistant"
 )
 
+// Message purposes distinguish ordinary chat turns from scheduled-task rows.
+// See Message.Purpose.
+const (
+	MessagePurposeChat                = "chat"
+	MessagePurposeScheduledDefinition = "scheduled_definition"
+	MessagePurposeScheduledDelivery   = "scheduled_delivery"
+)
+
 // Message attachment kinds.
 const (
 	AttachmentKindImage    = "image"

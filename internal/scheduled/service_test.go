@@ -387,6 +387,31 @@ func TestServiceDefinitionMessageAuditVariants(t *testing.T) {
 	}
 }
 
+func TestVisibleContentStripsAuditMarkers(t *testing.T) {
+	const (
+		withQuestionMarker = `I can set that daily reminder, but I need the timezone.` +
+			"\n\nScheduled question audit: " + `{"id":"timezone"}`
+		withProposalMarker = `Done — I'll send the reminder.` +
+			"\n\nScheduled proposal audit: " + `{"version":2}`
+		plain = `Just a normal chat reply.`
+	)
+
+	for name, tc := range map[string]struct {
+		content string
+		want    string
+	}{
+		"question marker stripped": {content: withQuestionMarker, want: "I can set that daily reminder, but I need the timezone."},
+		"proposal marker stripped": {content: withProposalMarker, want: "Done — I'll send the reminder."},
+		"no marker unchanged":      {content: plain, want: plain},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := scheduled.VisibleContent(tc.content); got != tc.want {
+				t.Fatalf("VisibleContent(%q) = %q, want %q", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestServiceLifecycleControlsAreOwnerScopedAtStoreBoundary(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	tasks := &serviceTasks{task: model.ScheduledTask{

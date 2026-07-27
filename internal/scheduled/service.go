@@ -504,6 +504,14 @@ func definitionMessages(history []model.Message) []DefinitionMessage {
 	return out
 }
 
+// VisibleContent strips the machine audit markers appended to scheduled
+// definition messages, returning the human-facing prose. Content without a
+// marker is returned unchanged.
+func VisibleContent(content string) string {
+	text, _ := definitionMessageContent(content)
+	return text
+}
+
 func definitionMessageContent(content string) (string, *QuestionCard) {
 	if before, encoded, ok := strings.Cut(content, questionAuditMarker); ok {
 		var question QuestionCard

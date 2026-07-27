@@ -29,8 +29,8 @@ var ErrWrongMessageRole = errors.New("wrong message role")
 var ErrStaleChatTurn = errors.New("store: chat turn is stale")
 
 const (
-	messagePurposeChat                = "chat"
-	messagePurposeScheduledDefinition = "scheduled_definition"
+	messagePurposeChat                = model.MessagePurposeChat
+	messagePurposeScheduledDefinition = model.MessagePurposeScheduledDefinition
 )
 
 // NewMessageRepository returns a MessageRepository.

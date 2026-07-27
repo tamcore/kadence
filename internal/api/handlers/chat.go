@@ -316,6 +316,9 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		artifacts := append([]scheduled.ChatArtifact(nil), artifactsByMessage[m.ID]...)
 		sort.SliceStable(artifacts, func(i, j int) bool { return artifacts[i].Ordinal < artifacts[j].Ordinal })
 		dto := toMessageDTO(m)
+		if m.Purpose == model.MessagePurposeScheduledDefinition {
+			dto.Content = scheduled.VisibleContent(m.Content)
+		}
 		dto.ScheduledArtifacts = artifacts
 		out = append(out, dto)
 	}
