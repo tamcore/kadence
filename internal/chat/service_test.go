@@ -178,7 +178,7 @@ func (f *fakeMsgs) AddChatUserInput(
 	for ordinal, documentID := range input.DocumentIDs {
 		id := documentID
 		m.DocumentReferences = append(m.DocumentReferences, model.MessageDocumentReference{
-			DocumentID: &id, Filename: "selected.md", Scope: model.ScopePrivate,
+			DocumentID: &id, Filename: testSelectedDocFilename, Scope: model.ScopePrivate,
 			Ordinal: ordinal, Available: true,
 		})
 	}
@@ -438,6 +438,9 @@ const (
 	testScheduledArtifactReady = "ready"
 	testScheduledCallID        = "call"
 	testScheduledArguments     = `{"instruction":"check recovery"}`
+	testSelectedDocFilename    = "selected.md"
+	testAssistantAnswer        = "answer"
+	testUserLater              = "later"
 )
 
 func TestStreamNewConversation(t *testing.T) {
@@ -819,10 +822,10 @@ func TestEditRewindsAndGeneratesFromEditedPromptWithoutDuplicate(t *testing.T) {
 	}}
 	msgs := &fakeMsgs{added: []model.Message{
 		{ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "first"},
-		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: testAssistantAnswer},
 		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "old prompt"},
 		{ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old response"},
-		{ID: 5, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "later"},
+		{ID: 5, ConversationID: testConvID, Role: model.MsgRoleUser, Content: testUserLater},
 	}}
 	provider := &requestCapturingProvider{reply: replacementReply}
 	svc := chat.NewService(provider,
@@ -855,10 +858,10 @@ func TestRegenerateRewindsAndReusesPromptWithoutDuplicate(t *testing.T) {
 	}}
 	msgs := &fakeMsgs{added: []model.Message{
 		{ID: 1, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "first"},
-		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "answer"},
+		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: testAssistantAnswer},
 		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "retry me"},
 		{ID: 4, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: "old response"},
-		{ID: 5, ConversationID: testConvID, Role: model.MsgRoleUser, Content: "later"},
+		{ID: 5, ConversationID: testConvID, Role: model.MsgRoleUser, Content: testUserLater},
 	}}
 	provider := &requestCapturingProvider{reply: replacementReply}
 	svc := chat.NewService(provider,

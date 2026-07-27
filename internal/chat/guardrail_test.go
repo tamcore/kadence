@@ -17,6 +17,7 @@ const (
 	testAllowedTopics   = "training"
 	testRefusalMessage  = "off you go"
 	testHistoryWindow   = 6
+	testVerdictOnTopic  = "ON_TOPIC"
 )
 
 // verdictProvider returns a canned classifier verdict and records the request.
@@ -55,7 +56,7 @@ func TestGuardrailOffTopic(t *testing.T) {
 }
 
 func TestGuardrailOnTopic(t *testing.T) {
-	off, err := newGuardrail(&verdictProvider{verdict: "ON_TOPIC"}).Classify(context.Background(),
+	off, err := newGuardrail(&verdictProvider{verdict: testVerdictOnTopic}).Classify(context.Background(),
 		[]provider.Message{{Role: model.MsgRoleUser, Content: "how many rest days?"}})
 	if err != nil || off {
 		t.Fatalf("off=%v err=%v, want false/nil", off, err)
@@ -80,7 +81,7 @@ func TestRecentWindowLimit(t *testing.T) {
 	for i := range 10 {
 		msgs = append(msgs, provider.Message{Role: model.MsgRoleUser, Content: string(rune('a' + i))})
 	}
-	v := &verdictProvider{verdict: "ON_TOPIC"}
+	v := &verdictProvider{verdict: testVerdictOnTopic}
 	_, _ = newGuardrail(v).Classify(context.Background(), msgs)
 	expectedMessages := 1 + testHistoryWindow // 1 system + testHistoryWindow recent
 	if len(v.gotReq.Messages) != expectedMessages {

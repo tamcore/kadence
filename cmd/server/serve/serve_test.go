@@ -20,6 +20,11 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
+const (
+	testMarkitdownURL       = "https://markitdown.example.test/mcp"
+	testMarkitdownTransport = "streamable-http"
+)
+
 func TestScheduledChatWiringUsesSharedServiceOnlyWhenEnabled(t *testing.T) {
 	service := &scheduled.Service{}
 	tasks := &store.ScheduledTaskRepository{}
@@ -60,8 +65,8 @@ func TestBuildIngestExtractorsMarkitdownDisabled(t *testing.T) {
 
 func TestBuildIngestExtractorsMarkitdownEnabled(t *testing.T) {
 	cfg := config.Config{
-		MarkitdownURL:       "https://markitdown.example.test/mcp",
-		MarkitdownTransport: "streamable-http",
+		MarkitdownURL:       testMarkitdownURL,
+		MarkitdownTransport: testMarkitdownTransport,
 	}
 
 	extractors := buildIngestExtractors(cfg)
@@ -86,7 +91,7 @@ func TestBuildIngestExtractorsMarkitdownEnabled(t *testing.T) {
 
 func TestBuildIngestExtractorsFallsBackWhenCAFileUnreadable(t *testing.T) {
 	cfg := config.Config{
-		MarkitdownURL: "https://markitdown.example.test/mcp",
+		MarkitdownURL: testMarkitdownURL,
 		MCPCAFile:     "/nonexistent/path/to/ca.pem",
 	}
 
@@ -107,7 +112,7 @@ func TestBuildIngestExtractorsFallsBackWhenRichExtractorConfigInvalid(t *testing
 		transport string
 	}{
 		{name: "transport", url: "https://extractor.example.test/mcp", transport: "stdio"},
-		{name: "URL", url: "ftp://extractor.example.test/mcp", transport: "streamable-http"},
+		{name: "URL", url: "ftp://extractor.example.test/mcp", transport: testMarkitdownTransport},
 	}
 
 	for _, tt := range tests {
@@ -134,8 +139,8 @@ func TestBuildIngestExtractorsFallsBackWhenRichExtractorConfigInvalid(t *testing
 
 func TestBuildChatContentSharesEffectiveRichExtractorsWithAttachmentProcessor(t *testing.T) {
 	content := buildChatContent(config.Config{
-		MarkitdownURL:       "https://markitdown.example.test/mcp",
-		MarkitdownTransport: "streamable-http",
+		MarkitdownURL:       testMarkitdownURL,
+		MarkitdownTransport: testMarkitdownTransport,
 	})
 	if len(content.extractors) != 2 {
 		t.Fatalf("extractors = %d, want rich + PDF fallback", len(content.extractors))

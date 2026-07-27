@@ -32,6 +32,14 @@ const (
 	maxNativeImagePixels = 8 << 20
 )
 
+// Native image MIME types supported by the attachment processor.
+const (
+	mimeImagePNG  = "image/png"
+	mimeImageJPEG = "image/jpeg"
+	mimeImageWebP = "image/webp"
+	mimeImageGIF  = "image/gif"
+)
+
 // FileInput is one raw file supplied for the current chat turn.
 type FileInput struct {
 	Filename string
@@ -137,7 +145,7 @@ func (p *AttachmentProcessor) ExtractDocuments(
 
 func isNativeImageMIME(mediaType string) bool {
 	switch mediaType {
-	case "image/png", "image/jpeg", "image/webp", "image/gif":
+	case mimeImagePNG, mimeImageJPEG, mimeImageWebP, mimeImageGIF:
 		return true
 	default:
 		return false
@@ -154,13 +162,13 @@ func validateNativeImage(mediaType string, data []byte) (int, int, error) {
 
 	var config image.Config
 	switch mediaType {
-	case "image/png":
+	case mimeImagePNG:
 		config, err = png.DecodeConfig(bytes.NewReader(data))
-	case "image/jpeg":
+	case mimeImageJPEG:
 		config, err = jpeg.DecodeConfig(bytes.NewReader(data))
-	case "image/webp":
+	case mimeImageWebP:
 		config, err = webp.DecodeConfig(bytes.NewReader(data))
-	case "image/gif":
+	case mimeImageGIF:
 		if err = validateStaticGIF(data); err == nil {
 			config, err = gif.DecodeConfig(bytes.NewReader(data))
 		}
@@ -195,16 +203,16 @@ func validateNativeImage(mediaType string, data []byte) (int, int, error) {
 func decodeNativeImage(mediaType string, data []byte) error {
 	reader := bytes.NewReader(data)
 	switch mediaType {
-	case "image/png":
+	case mimeImagePNG:
 		_, err := png.Decode(reader)
 		return err
-	case "image/jpeg":
+	case mimeImageJPEG:
 		_, err := jpeg.Decode(reader)
 		return err
-	case "image/webp":
+	case mimeImageWebP:
 		_, err := webp.Decode(reader)
 		return err
-	case "image/gif":
+	case mimeImageGIF:
 		_, err := gif.Decode(reader)
 		return err
 	default:

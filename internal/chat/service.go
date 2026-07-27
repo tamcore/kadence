@@ -739,10 +739,7 @@ func fitCurrentTurnContext(
 		return fittedMessage, fittedDocuments
 	}
 
-	availableContextBytes := availableTokens * estBytesPerToken
-	if availableContextBytes < 0 {
-		availableContextBytes = 0
-	}
+	availableContextBytes := max(availableTokens*estBytesPerToken, 0)
 	maxEncodedBytes := len(userMessage.Content) + availableContextBytes
 	encodedBytes := func() int {
 		current, err := currentTurnProviderMessage(fittedMessage, fittedDocuments)
@@ -1384,6 +1381,145 @@ func (s *Service) sendTurnMeta(
 	return sink.Flush()
 }
 
+// applyGuardrailAndExtract runs the egress guardrail classifier (skipped
+// when guardrailChecked is already true from an earlier pipeline stage) and,
+// if the turn is allowed through, extracts any attachment text. When the
+// classifier refuses the turn or extraction fails, the failure is already
+// persisted and reported via sink; the caller must treat done==true as "stop
+// and return guardErr immediately" without any further work.
+func (s *Service) applyGuardrailAndExtract(
+	ctx, streamCtx context.Context, conversationID string, userID int64,
+	userMsg model.Message, history []model.Message, userText string,
+	guardrailChecked bool, sink EventSink,
+) (updated model.Message, done bool, guardErr error) {
+	if guardrailChecked {
+		return userMsg, false, nil
+	}
+	classifierText := userText
+	if strings.TrimSpace(classifierText) == "" {
+		classifierText = "The user submitted files or selected documents without accompanying text."
+	}
+	if s.classifyGuardrail(streamCtx, conversationID, guardrailMessages(history, classifierText)) {
+		return userMsg, true, s.persistGuardrailRefusal(ctx, conversationID, userMsg, sink)
+	}
+	updated, err := s.ensureAttachmentExtractions(ctx, streamCtx, conversationID, userID, userMsg)
+	if err != nil {
+		return userMsg, true, s.fail(sink, "could not extract attachment")
+	}
+	return updated, false, nil
+}
+
+// turnContextAssembly holds the provider messages and RAG bookkeeping that
+// assembleTurnContext produces once it has fit the current turn and prior
+// history within the model's token budget.
+type turnContextAssembly struct {
+	historyMessages []provider.Message
+	currentMessage  provider.Message
+	ragInserts      []provider.Message
+	ragTurnStorable bool
+}
+
+// assembleTurnContext retrieves RAG context (broad memory, selected-document
+// sections, and the query embedding for later storage), fits the current
+// turn's attachments/documents into the remaining token budget, bounds prior
+// history to fit, and loads (or restricts an already-preloaded)
+// historical-attachment payload cache. On failure, the failure is already
+// persisted and reported via sink; the caller must return the returned error
+// as-is without further work.
+func (s *Service) assembleTurnContext(
+	ctx, streamCtx context.Context,
+	conversationID string, userID int64,
+	userMsg model.Message, userText string, history []model.Message, documents []model.Document,
+	systemPrompt string, storeUserChunk bool,
+	preloadedHistoricalPayloads *historicalPayloadCache,
+	sink EventSink,
+) (assembly turnContextAssembly, retrieval TurnRetrieval, ragErr error, err error) {
+	// Retrieve once after the guardrail so the same query embedding can serve
+	// broad memory, selected-document sections, and message storage.
+	documentIDs := make([]int64, 0, len(documents))
+	for _, document := range documents {
+		documentIDs = append(documentIDs, document.ID)
+	}
+	retrieval, ragErr = s.retrieveRAGContext(
+		streamCtx, conversationID, userID, userText, documentIDs,
+	)
+
+	currentImageTokens := 0
+	for _, attachment := range userMsg.Attachments {
+		if attachment.Kind == model.AttachmentKindImage {
+			currentImageTokens += (len(attachment.RawBytes) + 2) / 3
+		}
+	}
+	explicitBudget := s.contextBudget -
+		estimateTokens(systemPrompt) -
+		estimateTokens(userText) -
+		currentImageTokens
+	fittedUser, fittedDocuments := fitCurrentTurnContext(
+		userMsg, documents, retrieval.ByDocument, explicitBudget,
+	)
+	currentMessage, msgErr := currentTurnProviderMessage(
+		fittedUser, fittedDocuments,
+	)
+	if msgErr != nil {
+		return turnContextAssembly{}, retrieval, ragErr, s.fail(sink, "could not assemble attachment context")
+	}
+	currentMessageTokens := estimateProviderMessageTokens(currentMessage)
+	if estimateTokens(systemPrompt)+currentMessageTokens > s.contextBudget {
+		return turnContextAssembly{}, retrieval, ragErr, s.fail(
+			sink,
+			"current message and attachments exceed the configured context budget",
+		)
+	}
+	ragBudget := s.contextBudget -
+		estimateTokens(systemPrompt) -
+		currentMessageTokens
+	ragInserts := s.buildRAGInserts(retrieval.Broad, ragBudget)
+	ragTurnStorable := storeUserChunk && len(retrieval.Embedding) > 0 && userText != ""
+	reservedTokens := 0
+	for _, message := range ragInserts {
+		reservedTokens += estimateTokens(message.Content)
+	}
+	minimumHistory := minimumHistoricalMessages(history)
+	boundedHistory, droppedCount := s.boundHistory(
+		minimumHistory, systemPrompt, currentMessage, reservedTokens,
+	)
+	if droppedCount > 0 {
+		slog.Debug("chat history trimmed to fit token budget",
+			"conversation", conversationID, "dropped_messages", droppedCount, "budget_tokens", s.contextBudget)
+	}
+	historyUsed := estimateTokens(systemPrompt) +
+		currentMessageTokens + reservedTokens
+	for _, message := range boundedHistory {
+		historyUsed += estimateTokens(message.Content)
+	}
+	historyBudget := s.contextBudget - historyUsed
+	var historicalPayloads *historicalPayloadCache
+	if preloadedHistoricalPayloads == nil {
+		var payloadErr error
+		boundedHistory, historicalPayloads, payloadErr = s.loadHistoricalPayloads(
+			ctx, userID, conversationID, boundedHistory, historyBudget,
+		)
+		if payloadErr != nil {
+			slog.Error("historical attachment payload lookup failed", "err", payloadErr)
+			return turnContextAssembly{}, retrieval, ragErr, s.fail(sink, "could not load historical attachment context")
+		}
+	} else {
+		historicalPayloads = restrictHistoricalPayloadCache(
+			boundedHistory, historyBudget, preloadedHistoricalPayloads,
+		)
+	}
+	historyMessages := buildHistoricalProviderMessages(
+		boundedHistory, historyBudget, historicalPayloads,
+	)
+
+	return turnContextAssembly{
+		historyMessages: historyMessages,
+		currentMessage:  currentMessage,
+		ragInserts:      ragInserts,
+		ragTurnStorable: ragTurnStorable,
+	}, retrieval, ragErr, nil
+}
+
 func (s *Service) streamPersistedTurn(
 	ctx, streamCtx context.Context,
 	userID int64, uc UserContext, conversationID string,
@@ -1420,110 +1556,32 @@ func (s *Service) streamPersistedTurn(
 		defer s.secrets.PurgeUser(userID)
 	}
 
-	if !guardrailChecked {
-		classifierText := userText
-		if strings.TrimSpace(classifierText) == "" {
-			classifierText = "The user submitted files or selected documents without accompanying text."
-		}
-		if s.classifyGuardrail(streamCtx, conversationID, guardrailMessages(history, classifierText)) {
-			return s.persistGuardrailRefusal(ctx, conversationID, userMsg, sink)
-		}
-		var err error
-		userMsg, err = s.ensureAttachmentExtractions(
-			ctx, streamCtx, conversationID, userID, userMsg,
-		)
-		if err != nil {
-			return s.fail(sink, "could not extract attachment")
-		}
+	updatedMsg, done, guardErr := s.applyGuardrailAndExtract(
+		ctx, streamCtx, conversationID, userID, userMsg, history, userText, guardrailChecked, sink,
+	)
+	if done {
+		return guardErr
 	}
+	userMsg = updatedMsg
 
 	// Retrieve once after the guardrail so the same query embedding can serve
-	// broad memory, selected-document sections, and message storage.
-	documentIDs := make([]int64, 0, len(documents))
-	for _, document := range documents {
-		documentIDs = append(documentIDs, document.ID)
-	}
-	retrieval, ragErr := s.retrieveRAGContext(
-		streamCtx, conversationID, userID, userText, documentIDs,
-	)
-
-	currentImageTokens := 0
-	for _, attachment := range userMsg.Attachments {
-		if attachment.Kind == model.AttachmentKindImage {
-			currentImageTokens += (len(attachment.RawBytes) + 2) / 3
-		}
-	}
-	explicitBudget := s.contextBudget -
-		estimateTokens(systemPrompt) -
-		estimateTokens(userText) -
-		currentImageTokens
-	fittedUser, fittedDocuments := fitCurrentTurnContext(
-		userMsg, documents, retrieval.ByDocument, explicitBudget,
-	)
-	currentMessage, err := currentTurnProviderMessage(
-		fittedUser, fittedDocuments,
+	// broad memory, selected-document sections, and message storage; then fit
+	// the current turn and prior history into the remaining token budget.
+	assembly, retrieval, ragErr, err := s.assembleTurnContext(
+		ctx, streamCtx, conversationID, userID, userMsg, userText, history, documents,
+		systemPrompt, storeUserChunk, preloadedHistoricalPayloads, sink,
 	)
 	if err != nil {
-		return s.fail(sink, "could not assemble attachment context")
+		return err
 	}
-	currentMessageTokens := estimateProviderMessageTokens(currentMessage)
-	if estimateTokens(systemPrompt)+currentMessageTokens > s.contextBudget {
-		return s.fail(
-			sink,
-			"current message and attachments exceed the configured context budget",
-		)
-	}
-	ragBudget := s.contextBudget -
-		estimateTokens(systemPrompt) -
-		currentMessageTokens
-	ragInserts := s.buildRAGInserts(retrieval.Broad, ragBudget)
-	ragTurnStorable := storeUserChunk && len(retrieval.Embedding) > 0 && userText != ""
-	reservedTokens := 0
-	for _, message := range ragInserts {
-		reservedTokens += estimateTokens(message.Content)
-	}
-	minimumHistory := minimumHistoricalMessages(history)
-	boundedHistory, droppedCount := s.boundHistory(
-		minimumHistory, systemPrompt, currentMessage, reservedTokens,
-	)
-	if droppedCount > 0 {
-		slog.Debug("chat history trimmed to fit token budget",
-			"conversation", conversationID, "dropped_messages", droppedCount, "budget_tokens", s.contextBudget)
-	}
-	historyUsed := estimateTokens(systemPrompt) +
-		currentMessageTokens + reservedTokens
-	for _, message := range boundedHistory {
-		historyUsed += estimateTokens(message.Content)
-	}
-	historyBudget := s.contextBudget - historyUsed
-	var historicalPayloads *historicalPayloadCache
-	if preloadedHistoricalPayloads == nil {
-		var payloadErr error
-		boundedHistory, historicalPayloads, payloadErr = s.loadHistoricalPayloads(
-			ctx, userID, conversationID, boundedHistory, historyBudget,
-		)
-		if payloadErr != nil {
-			slog.Error("historical attachment payload lookup failed", "err", payloadErr)
-			return s.fail(sink, "could not load historical attachment context")
-		}
-	} else {
-		historicalPayloads = restrictHistoricalPayloadCache(
-			boundedHistory, historyBudget, preloadedHistoricalPayloads,
-		)
-	}
-	req.Messages = append(
-		req.Messages,
-		buildHistoricalProviderMessages(
-			boundedHistory, historyBudget, historicalPayloads,
-		)...,
-	)
-	req.Messages = append(req.Messages, currentMessage)
+	req.Messages = append(req.Messages, assembly.historyMessages...)
+	req.Messages = append(req.Messages, assembly.currentMessage)
 
 	if s.rag != nil && ragErr == nil {
-		for _, m := range ragInserts {
+		for _, m := range assembly.ragInserts {
 			req.Messages = insertAfterSystem(req.Messages, m)
 		}
-		if ragTurnStorable {
+		if assembly.ragTurnStorable {
 			if err := s.rag.Store(
 				ctx, userID, conversationID, userMsg.ID, userText, retrieval.Embedding,
 			); err != nil {
@@ -1563,7 +1621,7 @@ func (s *Service) streamPersistedTurn(
 		return s.fail(sink, "could not save response")
 	}
 
-	if s.rag != nil && ragTurnStorable && full != "" {
+	if s.rag != nil && assembly.ragTurnStorable && full != "" {
 		if emb, embErr := s.rag.Embed(streamCtx, full); embErr != nil {
 			slog.Warn("rag embed assistant failed", "err", embErr)
 		} else if storeErr := s.rag.Store(ctx, userID, conversationID, assistantMsg.ID, full, emb); storeErr != nil {
@@ -1577,31 +1635,6 @@ func (s *Service) streamPersistedTurn(
 		return err
 	}
 	return sink.Flush()
-}
-
-// resolveConversation returns the conversation ID Stream should use for this
-// turn: it creates a new conversation (titled from userText, truncated to
-// TitleMaxLen runes) when conversationID is empty, or verifies the caller
-// owns the existing conversation otherwise. Any failure is reported via sink
-// and returned as the error.
-func (s *Service) resolveConversation(ctx context.Context, userID int64, conversationID, userText string, sink EventSink) (string, error) {
-	if conversationID != "" {
-		if _, err := s.convs.GetByID(ctx, conversationID, userID); err != nil {
-			return "", s.fail(sink, "conversation not found")
-		}
-		return conversationID, nil
-	}
-
-	title := userText
-	runes := []rune(title)
-	if len(runes) > TitleMaxLen {
-		title = string(runes[:TitleMaxLen])
-	}
-	c, err := s.convs.Create(ctx, userID, title)
-	if err != nil {
-		return "", s.fail(sink, "could not create conversation")
-	}
-	return c.ID, nil
 }
 
 // resolveMCPAndSystemPrompt resolves the caller's MCP server snapshot (once,
@@ -2437,7 +2470,7 @@ func (s *Service) boundHistory(
 	}
 
 	dropped := 0
-	for i := 0; i < firstKeptFromEnd; i++ {
+	for i := range firstKeptFromEnd {
 		dropped += len(turns[i].messages)
 	}
 

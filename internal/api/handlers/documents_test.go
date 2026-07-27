@@ -22,7 +22,7 @@ const sampleUserID = int64(7)
 
 type fakeDocExtractor struct{}
 
-func (fakeDocExtractor) CanHandle(mime string) bool { return mime == "application/pdf" }
+func (fakeDocExtractor) CanHandle(mime string) bool { return mime == testMimePDF }
 func (fakeDocExtractor) Extract(_ context.Context, _ []byte, _ string) (ingest.Result, error) {
 	return ingest.Result{Markdown: "para one here.\n\npara two here.", SourceType: model.DocSourcePDF}, nil
 }
@@ -149,7 +149,7 @@ func TestUploadSuccess(t *testing.T) {
 		t.Fatalf("read sample.pdf: %v", err)
 	}
 
-	req := withDocUser(multipartUploadRequest(t, "sample.pdf", "application/pdf", data))
+	req := withDocUser(multipartUploadRequest(t, "sample.pdf", testMimePDF, data))
 	rec := httptest.NewRecorder()
 	h.Upload(rec, req)
 
@@ -175,21 +175,21 @@ func TestReferenceOptionsGroupsOwnAndPublicDocumentsWithoutContent(t *testing.T)
 	documents.docs = map[int64]model.Document{
 		1: {
 			ID: 1, OwnerUserID: &ownerID, Scope: model.ScopePrivate,
-			Filename: "my-plan.md", Mime: "text/markdown", SourceType: model.DocSourceText,
+			Filename: "my-plan.md", Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 			ExtractedMarkdown: "private content must not leak",
 		},
 		2: {
 			ID: 2, Scope: model.ScopePublic,
-			Filename: "public-guide.pdf", Mime: "application/pdf", SourceType: model.DocSourcePDF,
+			Filename: "public-guide.pdf", Mime: testMimePDF, SourceType: model.DocSourcePDF,
 			ExtractedMarkdown: "public content must not leak",
 		},
 		3: {
 			ID: 3, OwnerUserID: &otherOwnerID, Scope: model.ScopePrivate,
-			Filename: "other-user.md", Mime: "text/markdown", SourceType: model.DocSourceText,
+			Filename: "other-user.md", Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		},
 		4: {
 			ID: 4, OwnerUserID: &ownerID, Scope: model.ScopePublic,
-			Filename: "owned-public.md", Mime: "text/markdown", SourceType: model.DocSourceText,
+			Filename: "owned-public.md", Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		},
 	}
 	request := withDocUser(httptest.NewRequest(
@@ -228,7 +228,7 @@ func TestReferenceOptionsGroupsOwnAndPublicDocumentsWithoutContent(t *testing.T)
 	if len(envelope.Data.Own) != 1 ||
 		envelope.Data.Own[0].ID != 1 ||
 		envelope.Data.Own[0].Filename != "my-plan.md" ||
-		envelope.Data.Own[0].MIME != "text/markdown" ||
+		envelope.Data.Own[0].MIME != testMimeMarkdown ||
 		envelope.Data.Own[0].SourceType != model.DocSourceText ||
 		envelope.Data.Own[0].Scope != model.ScopePrivate {
 		t.Fatalf("own options=%+v", envelope.Data.Own)
@@ -250,7 +250,7 @@ func TestReferenceOptionsGroupsOwnAndPublicDocumentsWithoutContent(t *testing.T)
 
 func TestUploadUnsupportedType(t *testing.T) {
 	h, _ := newDocumentsHandler(t, 10<<20)
-	req := withDocUser(multipartUploadRequest(t, "x.png", "image/png", []byte("not a real png but bytes")))
+	req := withDocUser(multipartUploadRequest(t, "x.png", testMimePNG, []byte("not a real png but bytes")))
 	rec := httptest.NewRecorder()
 	h.Upload(rec, req)
 	if rec.Code != http.StatusUnsupportedMediaType {
@@ -261,7 +261,7 @@ func TestUploadUnsupportedType(t *testing.T) {
 func TestUploadBodyTooLarge(t *testing.T) {
 	h, _ := newDocumentsHandler(t, 16)
 	data := bytes.Repeat([]byte("a"), 1024)
-	req := withDocUser(multipartUploadRequest(t, "big.pdf", "application/pdf", data))
+	req := withDocUser(multipartUploadRequest(t, "big.pdf", testMimePDF, data))
 	rec := httptest.NewRecorder()
 	h.Upload(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -275,7 +275,7 @@ func TestUploadAcceptsFileAtExactSizeLimit(t *testing.T) {
 	req := withDocUser(multipartUploadRequest(
 		t,
 		"exact.pdf",
-		"application/pdf",
+		testMimePDF,
 		bytes.Repeat([]byte("a"), maxBytes),
 	))
 	rec := httptest.NewRecorder()
@@ -293,7 +293,7 @@ func TestUploadRejectsPreparsedFileOneByteAboveSizeLimit(t *testing.T) {
 	req := multipartUploadRequest(
 		t,
 		"too-big.pdf",
-		"application/pdf",
+		testMimePDF,
 		bytes.Repeat([]byte("a"), maxBytes+1),
 	)
 	if err := req.ParseMultipartForm(1); err != nil {
@@ -316,7 +316,7 @@ func TestUploadRemovesMultipartTemporaryFiles(t *testing.T) {
 	req := multipartUploadRequest(
 		t,
 		"temporary.pdf",
-		"application/pdf",
+		testMimePDF,
 		bytes.Repeat([]byte("a"), 4<<10),
 	)
 	if err := req.ParseMultipartForm(1); err != nil {
@@ -380,8 +380,8 @@ func TestUploadNormalizesGenericMIMEFromKnownFilenameExtension(t *testing.T) {
 		{
 			name:         "meaningful declared type is preserved",
 			filename:     "renamed.docx",
-			declaredMIME: "application/pdf",
-			wantMIME:     "application/pdf",
+			declaredMIME: testMimePDF,
+			wantMIME:     testMimePDF,
 		},
 	}
 

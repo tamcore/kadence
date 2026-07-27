@@ -28,6 +28,10 @@ const (
 	chatPath           = "/api/chat"
 )
 
+// contentTypeJSON is the standard JSON response Content-Type, reused by
+// handlers and tests in this package.
+const contentTypeJSON = "application/json"
+
 // Deps carries the dependencies the router needs.
 type Deps struct {
 	Users       *store.UserRepository
@@ -263,7 +267,7 @@ func staticHandler(fsys fs.FS) http.Handler {
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", contentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

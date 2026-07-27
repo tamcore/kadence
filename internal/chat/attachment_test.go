@@ -18,6 +18,10 @@ import (
 	"github.com/tamcore/kadence/internal/model"
 )
 
+// mimeTextMarkdown is the MIME type used by attachment tests that exercise
+// document extraction.
+const mimeTextMarkdown = "text/markdown"
+
 func TestAttachmentProcessorPrepareAcceptsNativeStaticImages(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -27,14 +31,14 @@ func TestAttachmentProcessorPrepareAcceptsNativeStaticImages(t *testing.T) {
 		width    int
 		height   int
 	}{
-		{name: "PNG", filename: "chart.png", mime: "image/png", data: encodedPNG(t, 3, 2), width: 3, height: 2},
-		{name: "JPEG", filename: "photo.jpg", mime: "image/jpeg", data: encodedJPEG(t, 4, 3), width: 4, height: 3},
+		{name: "PNG", filename: "chart.png", mime: mimeImagePNG, data: encodedPNG(t, 3, 2), width: 3, height: 2},
+		{name: "JPEG", filename: "photo.jpg", mime: mimeImageJPEG, data: encodedJPEG(t, 4, 3), width: 4, height: 3},
 		{
-			name: "WebP", filename: "route.webp", mime: "image/webp",
+			name: "WebP", filename: "route.webp", mime: mimeImageWebP,
 			data:  mustBase64(t, "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA"),
 			width: 1, height: 1,
 		},
-		{name: "GIF", filename: "badge.gif", mime: "image/gif", data: encodedGIF(t, 5, 4, 1), width: 5, height: 4},
+		{name: "GIF", filename: "badge.gif", mime: mimeImageGIF, data: encodedGIF(t, 5, 4, 1), width: 5, height: 4},
 		{
 			name: "generic MIME normalized by filename", filename: "generic.png",
 			mime: "application/octet-stream", data: encodedPNG(t, 6, 5), width: 6, height: 5,
@@ -77,12 +81,12 @@ func TestAttachmentProcessorPrepareRejectsMIMEConfusionAndMalformedImages(t *tes
 	}{
 		{
 			name: "declared image differs from magic",
-			file: FileInput{Filename: "disguised.jpg", MIME: "image/jpeg", Data: encodedPNG(t, 2, 2)},
+			file: FileInput{Filename: "disguised.jpg", MIME: mimeImageJPEG, Data: encodedPNG(t, 2, 2)},
 			err:  ErrUnsupportedAttachment,
 		},
 		{
 			name: "malformed native image",
-			file: FileInput{Filename: "broken.png", MIME: "image/png", Data: []byte("\x89PNG\r\n\x1a\ntruncated")},
+			file: FileInput{Filename: "broken.png", MIME: mimeImagePNG, Data: []byte("\x89PNG\r\n\x1a\ntruncated")},
 			err:  ErrInvalidAttachment,
 		},
 		{
@@ -106,7 +110,7 @@ func TestAttachmentProcessorPrepareRejectsAnimatedAndTruncatedGIFWithoutDecodeAl
 
 	if _, err := processor.Prepare([]FileInput{{
 		Filename: "animated.gif",
-		MIME:     "image/gif",
+		MIME:     mimeImageGIF,
 		Data:     encodedGIF(t, 2, 2, 2),
 	}}); !errors.Is(err, ErrUnsupportedAttachment) {
 		t.Fatalf("animated GIF error = %v, want ErrUnsupportedAttachment", err)
@@ -115,7 +119,7 @@ func TestAttachmentProcessorPrepareRejectsAnimatedAndTruncatedGIFWithoutDecodeAl
 	static := encodedGIF(t, 2, 2, 1)
 	if _, err := processor.Prepare([]FileInput{{
 		Filename: "truncated.gif",
-		MIME:     "image/gif",
+		MIME:     mimeImageGIF,
 		Data:     static[:len(static)-1],
 	}}); !errors.Is(err, ErrInvalidAttachment) {
 		t.Fatalf("truncated GIF error = %v, want ErrInvalidAttachment", err)
@@ -135,7 +139,7 @@ func TestAttachmentProcessorPrepareRejectsOversizedImageDimensions(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := processor.Prepare([]FileInput{{
-				Filename: tt.name + ".png", MIME: "image/png", Data: tt.data,
+				Filename: tt.name + ".png", MIME: mimeImagePNG, Data: tt.data,
 			}})
 			if !errors.Is(err, ErrUnsupportedAttachment) {
 				t.Fatalf("Prepare error = %v, want ErrUnsupportedAttachment", err)
@@ -148,11 +152,11 @@ func TestAttachmentProcessorPrepareFullyDecodesConfigValidImageBodies(t *testing
 	jpegBody := encodedJPEG(t, 3, 2)
 	tests := []FileInput{
 		{
-			Filename: "header-only.png", MIME: "image/png",
+			Filename: "header-only.png", MIME: mimeImagePNG,
 			Data: pngHeaderOnly(3, 2),
 		},
 		{
-			Filename: "truncated.jpg", MIME: "image/jpeg",
+			Filename: "truncated.jpg", MIME: mimeImageJPEG,
 			Data: jpegBody[:len(jpegBody)-2],
 		},
 	}
@@ -169,14 +173,14 @@ func TestAttachmentProcessorPrepareFullyDecodesConfigValidImageBodies(t *testing
 
 func TestAttachmentProcessorExtractDocumentsUsesFirstEffectiveExtractorOnce(t *testing.T) {
 	first := &recordingAttachmentExtractor{
-		mime: "text/markdown",
+		mime: mimeTextMarkdown,
 		result: ingest.Result{
 			Markdown:   "# Extracted",
 			SourceType: model.DocSourceText,
 		},
 	}
 	second := &recordingAttachmentExtractor{
-		mime: "text/markdown",
+		mime: mimeTextMarkdown,
 		result: ingest.Result{
 			Markdown:   "# Wrong extractor",
 			SourceType: model.DocSourceText,
@@ -195,7 +199,7 @@ func TestAttachmentProcessorExtractDocumentsUsesFirstEffectiveExtractorOnce(t *t
 	if first.calls != 0 || second.calls != 0 {
 		t.Fatalf("Prepare performed external extraction: first=%d second=%d", first.calls, second.calls)
 	}
-	if len(prepared) != 1 || prepared[0].MIME != "text/markdown" ||
+	if len(prepared) != 1 || prepared[0].MIME != mimeTextMarkdown ||
 		prepared[0].Kind != model.AttachmentKindDocument {
 		t.Fatalf("prepared document = %+v", prepared)
 	}

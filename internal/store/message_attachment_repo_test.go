@@ -36,7 +36,7 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 	}
 	privateDocument, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "training.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "# Training",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "# Training",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,11 +53,11 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 		Content: "Compare these",
 		Attachments: []model.MessageAttachment{
 			{
-				Filename: "chart.png", MIME: "image/png", Kind: model.AttachmentKindImage,
-				RawBytes: []byte{1, 2, 3}, ImageWidth: intPtr(640), ImageHeight: intPtr(480),
+				Filename: testChartPNGFilename, MIME: testMimePNG, Kind: model.AttachmentKindImage,
+				RawBytes: []byte{1, 2, 3}, ImageWidth: new(640), ImageHeight: new(480),
 			},
 			{
-				Filename: "notes.md", MIME: "text/markdown", Kind: model.AttachmentKindDocument,
+				Filename: "notes.md", MIME: testMimeMarkdown, Kind: model.AttachmentKindDocument,
 				RawBytes: []byte("notes"), ExtractedMarkdown: "# Notes",
 			},
 		},
@@ -125,9 +125,9 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 	first, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
 		Content: "first",
 		Attachments: []model.MessageAttachment{{
-			Filename: "first.md", MIME: "text/markdown",
+			Filename: "first.md", MIME: testMimeMarkdown,
 			Kind: model.AttachmentKindDocument, RawBytes: []byte("first raw"),
-			ExtractedMarkdown: "# First", ExtractionComplete: true,
+			ExtractedMarkdown: testExtractedMarkdownH, ExtractionComplete: true,
 		}},
 	})
 	if err != nil {
@@ -136,7 +136,7 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 	second, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
 		Content: "second",
 		Attachments: []model.MessageAttachment{{
-			Filename: "second.png", MIME: "image/png",
+			Filename: "second.png", MIME: testMimePNG,
 			Kind: model.AttachmentKindImage, RawBytes: []byte{1, 2, 3},
 		}},
 	})
@@ -170,8 +170,8 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 	}
 	if got := payloads[first.ID]; len(got) != 1 ||
 		!bytes.Equal(got[0].RawBytes, []byte("first raw")) ||
-		got[0].ExtractedMarkdown != "# First" ||
-		got[0].PayloadBytes != int64(len("# First")) {
+		got[0].ExtractedMarkdown != testExtractedMarkdownH ||
+		got[0].PayloadBytes != int64(len(testExtractedMarkdownH)) {
 		t.Fatalf("full document payload = %+v", got)
 	}
 
@@ -183,8 +183,8 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 	}
 	if got := payloads[first.ID]; len(got) != 1 ||
 		len(got[0].RawBytes) != 0 ||
-		got[0].ExtractedMarkdown != "# First" ||
-		got[0].PayloadBytes != int64(len("# First")) {
+		got[0].ExtractedMarkdown != testExtractedMarkdownH ||
+		got[0].PayloadBytes != int64(len(testExtractedMarkdownH)) {
 		t.Fatalf("document provider payload = %+v", got)
 	}
 }
@@ -216,7 +216,7 @@ func TestMessageRepositoryRejectsCrossConversationAttachmentPayloadID(t *testing
 		ctx, secondConversation.ID, owner.ID, store.ChatUserInput{
 			Content: "foreign",
 			Attachments: []model.MessageAttachment{{
-				Filename: "foreign.png", MIME: "image/png",
+				Filename: "foreign.png", MIME: testMimePNG,
 				Kind: model.AttachmentKindImage, RawBytes: []byte{9},
 			}},
 		},
@@ -262,7 +262,7 @@ func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {
 	}
 	invisibleDocument, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &other.ID, Scope: model.ScopePrivate, Filename: "private.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "secret",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "secret",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {
 	_, err = messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
 		Content: "must roll back",
 		Attachments: []model.MessageAttachment{{
-			Filename: "proof.png", MIME: "image/png", Kind: model.AttachmentKindImage,
+			Filename: testProofPNGFilename, MIME: testMimePNG, Kind: model.AttachmentKindImage,
 			RawBytes: []byte{9},
 		}},
 		DocumentIDs: []int64{invisibleDocument.ID},
@@ -394,7 +394,7 @@ func TestMessageRepositoryConversationDeleteCascadesInputRelations(t *testing.T)
 	}
 	document, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "source.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "source",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "source",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +438,7 @@ func TestMessageRepositoryEditPreservesTargetInputAndDeletesSuffixRelations(t *t
 	}
 	document, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "plan.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "plan",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "plan",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +446,7 @@ func TestMessageRepositoryEditPreservesTargetInputAndDeletesSuffixRelations(t *t
 	target, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
 		Content: "original",
 		Attachments: []model.MessageAttachment{{
-			Filename: "target.md", MIME: "text/markdown", Kind: model.AttachmentKindDocument,
+			Filename: "target.md", MIME: testMimeMarkdown, Kind: model.AttachmentKindDocument,
 			RawBytes: []byte("target"), ExtractedMarkdown: "# Target",
 		}},
 		DocumentIDs: []int64{document.ID},
@@ -460,7 +460,7 @@ func TestMessageRepositoryEditPreservesTargetInputAndDeletesSuffixRelations(t *t
 	if _, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
 		Content: "later",
 		Attachments: []model.MessageAttachment{{
-			Filename: "later.png", MIME: "image/png", Kind: model.AttachmentKindImage,
+			Filename: "later.png", MIME: testMimePNG, Kind: model.AttachmentKindImage,
 			RawBytes: []byte{2},
 		}},
 		DocumentIDs: []int64{document.ID},
@@ -504,7 +504,7 @@ func TestMessageRepositoryRegenerateReusesPrecedingUserInput(t *testing.T) {
 	}
 	document, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "workout.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "workout",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "workout",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -512,7 +512,7 @@ func TestMessageRepositoryRegenerateReusesPrecedingUserInput(t *testing.T) {
 	userMessage, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
 		Content: "coach this",
 		Attachments: []model.MessageAttachment{{
-			Filename: "run.md", MIME: "text/markdown", Kind: model.AttachmentKindDocument,
+			Filename: "run.md", MIME: testMimeMarkdown, Kind: model.AttachmentKindDocument,
 			RawBytes: []byte("run"), ExtractedMarkdown: "# Run",
 		}},
 		DocumentIDs: []int64{document.ID},
@@ -569,7 +569,7 @@ func TestMessageRepositoryChatUserInputEnforcesConversationOwner(t *testing.T) {
 	_, err = messages.AddChatUserInput(ctx, conversation.ID, other.ID, store.ChatUserInput{
 		Content: "hijack",
 		Attachments: []model.MessageAttachment{{
-			Filename: "hijack.png", MIME: "image/png", Kind: model.AttachmentKindImage,
+			Filename: "hijack.png", MIME: testMimePNG, Kind: model.AttachmentKindImage,
 			RawBytes: []byte{3},
 		}},
 	})
@@ -601,7 +601,7 @@ func TestMessageRepositoryChatUserInputDeleteRaceRollsBack(t *testing.T) {
 	}
 	document, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "racing.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "race",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "race",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -623,7 +623,7 @@ func TestMessageRepositoryChatUserInputDeleteRaceRollsBack(t *testing.T) {
 		_, addErr := messages.AddChatUserInput(addCtx, conversation.ID, owner.ID, store.ChatUserInput{
 			Content: "race",
 			Attachments: []model.MessageAttachment{{
-				Filename: "race.png", MIME: "image/png", Kind: model.AttachmentKindImage,
+				Filename: "race.png", MIME: testMimePNG, Kind: model.AttachmentKindImage,
 				RawBytes: []byte{8},
 			}},
 			DocumentIDs: []int64{document.ID},
@@ -669,7 +669,7 @@ func TestMessageRepositoryChatUserInputMapsDocumentForeignKeyViolation(t *testin
 	}
 	document, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "fk.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText, ExtractedMarkdown: "fk",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "fk",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -763,7 +763,7 @@ func assertAttachmentMetadata(t *testing.T, attachments []model.MessageAttachmen
 	if len(attachments) != 2 {
 		t.Fatalf("attachments = %+v", attachments)
 	}
-	if attachments[0].Filename != "chart.png" || attachments[0].MIME != "image/png" ||
+	if attachments[0].Filename != testChartPNGFilename || attachments[0].MIME != testMimePNG ||
 		attachments[0].Kind != model.AttachmentKindImage || attachments[0].SizeBytes != 3 ||
 		attachments[0].Ordinal != 0 || attachments[0].ImageWidth == nil ||
 		*attachments[0].ImageWidth != 640 || attachments[0].ImageHeight == nil ||
@@ -869,8 +869,4 @@ func waitForBlockedDocumentReferenceQuery(t *testing.T, pool *pgxpool.Pool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("document-reference query did not block on concurrent delete")
-}
-
-func intPtr(value int) *int {
-	return &value
 }

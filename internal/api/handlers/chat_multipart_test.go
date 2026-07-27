@@ -17,6 +17,15 @@ import (
 	"github.com/tamcore/kadence/internal/chat"
 )
 
+// Multipart field-name literals reused across the fixtures below, to avoid
+// goconst duplicate-literal warnings.
+const (
+	fieldMessage        = "message"
+	fieldConversationID = "conversationId"
+	fieldDocumentIDs    = "documentIds"
+	fieldFiles          = "files"
+)
+
 type multipartStreamer struct {
 	legacyCalls    int
 	turnCalls      int
@@ -109,12 +118,12 @@ func TestChatSendMultipartParsesOrderedTurn(t *testing.T) {
 		streamer, &fakeConvLister{}, fakeMsgLister{}, 64, nil, nil,
 	)
 	request := newMultipartChatRequest(t, []multipartPart{
-		{field: "message", data: []byte("compare these")},
-		{field: "conversationId", data: []byte("conversation-1")},
-		{field: "documentIds", data: []byte("41")},
-		{field: "files", filename: "chart.png", mime: "image/png", data: []byte("png")},
-		{field: "documentIds", data: []byte("7")},
-		{field: "files", filename: "notes.md", mime: "text/markdown", data: []byte("notes")},
+		{field: fieldMessage, data: []byte("compare these")},
+		{field: fieldConversationID, data: []byte("conversation-1")},
+		{field: fieldDocumentIDs, data: []byte("41")},
+		{field: fieldFiles, filename: testChartPNGFilename, mime: testMimePNG, data: []byte("png")},
+		{field: fieldDocumentIDs, data: []byte("7")},
+		{field: fieldFiles, filename: "notes.md", mime: testMimeMarkdown, data: []byte("notes")},
 	})
 	response := httptest.NewRecorder()
 
@@ -134,8 +143,8 @@ func TestChatSendMultipartParsesOrderedTurn(t *testing.T) {
 		t.Fatalf("document ids=%v", got)
 	}
 	wantFiles := []chat.FileInput{
-		{Filename: "chart.png", MIME: "image/png", Data: []byte("png")},
-		{Filename: "notes.md", MIME: "text/markdown", Data: []byte("notes")},
+		{Filename: testChartPNGFilename, MIME: testMimePNG, Data: []byte("png")},
+		{Filename: "notes.md", MIME: testMimeMarkdown, Data: []byte("notes")},
 	}
 	if !reflect.DeepEqual(streamer.turn.Files, wantFiles) {
 		t.Fatalf("files=%+v want=%+v", streamer.turn.Files, wantFiles)
@@ -149,17 +158,17 @@ func TestChatSendMultipartAllowsTextFileOrReferenceOnly(t *testing.T) {
 	}{
 		{
 			name:  "text only",
-			parts: []multipartPart{{field: "message", data: []byte("hello")}},
+			parts: []multipartPart{{field: fieldMessage, data: []byte("hello")}},
 		},
 		{
 			name: "file only",
 			parts: []multipartPart{{
-				field: "files", filename: "screen.png", mime: "image/png", data: []byte("image"),
+				field: fieldFiles, filename: "screen.png", mime: testMimePNG, data: []byte("image"),
 			}},
 		},
 		{
 			name:  "reference only",
-			parts: []multipartPart{{field: "documentIds", data: []byte("91")}},
+			parts: []multipartPart{{field: fieldDocumentIDs, data: []byte("91")}},
 		},
 	}
 	for _, test := range tests {
@@ -189,13 +198,13 @@ func TestChatSendMultipartRejectsInvalidInputBeforeStreaming(t *testing.T) {
 		{name: "empty", wantStatus: http.StatusBadRequest},
 		{
 			name:       "whitespace text",
-			parts:      []multipartPart{{field: "message", data: []byte("   ")}},
+			parts:      []multipartPart{{field: fieldMessage, data: []byte("   ")}},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name: "unknown field after valid input",
 			parts: []multipartPart{
-				{field: "message", data: []byte("hello")},
+				{field: fieldMessage, data: []byte("hello")},
 				{field: "unexpected", data: []byte("value")},
 			},
 			wantStatus: http.StatusBadRequest,
@@ -203,47 +212,47 @@ func TestChatSendMultipartRejectsInvalidInputBeforeStreaming(t *testing.T) {
 		{
 			name: "duplicate message",
 			parts: []multipartPart{
-				{field: "message", data: []byte("one")},
-				{field: "message", data: []byte("two")},
+				{field: fieldMessage, data: []byte("one")},
+				{field: fieldMessage, data: []byte("two")},
 			},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name: "duplicate conversation id",
 			parts: []multipartPart{
-				{field: "message", data: []byte("hello")},
-				{field: "conversationId", data: []byte("one")},
-				{field: "conversationId", data: []byte("two")},
+				{field: fieldMessage, data: []byte("hello")},
+				{field: fieldConversationID, data: []byte("one")},
+				{field: fieldConversationID, data: []byte("two")},
 			},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "invalid document id",
-			parts:      []multipartPart{{field: "documentIds", data: []byte("not-an-id")}},
+			parts:      []multipartPart{{field: fieldDocumentIDs, data: []byte("not-an-id")}},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "non-positive document id",
-			parts:      []multipartPart{{field: "documentIds", data: []byte("0")}},
+			parts:      []multipartPart{{field: fieldDocumentIDs, data: []byte("0")}},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name: "duplicate document id",
 			parts: []multipartPart{
-				{field: "documentIds", data: []byte("9")},
-				{field: "documentIds", data: []byte("9")},
+				{field: fieldDocumentIDs, data: []byte("9")},
+				{field: fieldDocumentIDs, data: []byte("9")},
 			},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name: "too many files",
 			parts: []multipartPart{
-				{field: "files", filename: "1.md", mime: "text/markdown", data: []byte("1")},
-				{field: "files", filename: "2.md", mime: "text/markdown", data: []byte("2")},
-				{field: "files", filename: "3.md", mime: "text/markdown", data: []byte("3")},
-				{field: "files", filename: "4.md", mime: "text/markdown", data: []byte("4")},
-				{field: "files", filename: "5.md", mime: "text/markdown", data: []byte("5")},
-				{field: "files", filename: "6.md", mime: "text/markdown", data: []byte("6")},
+				{field: fieldFiles, filename: "1.md", mime: testMimeMarkdown, data: []byte("1")},
+				{field: fieldFiles, filename: "2.md", mime: testMimeMarkdown, data: []byte("2")},
+				{field: fieldFiles, filename: "3.md", mime: testMimeMarkdown, data: []byte("3")},
+				{field: fieldFiles, filename: "4.md", mime: testMimeMarkdown, data: []byte("4")},
+				{field: fieldFiles, filename: "5.md", mime: testMimeMarkdown, data: []byte("5")},
+				{field: fieldFiles, filename: "6.md", mime: testMimeMarkdown, data: []byte("6")},
 			},
 			wantStatus: http.StatusBadRequest,
 		},
@@ -282,8 +291,8 @@ func TestChatSendMultipartEnforcesAggregateFileLimit(t *testing.T) {
 		response := httptest.NewRecorder()
 
 		handler.Send(response, newMultipartChatRequest(t, []multipartPart{
-			{field: "files", filename: "a.md", mime: "text/markdown", data: []byte("1234")},
-			{field: "files", filename: "b.md", mime: "text/markdown", data: []byte("5678")},
+			{field: fieldFiles, filename: "a.md", mime: testMimeMarkdown, data: []byte("1234")},
+			{field: fieldFiles, filename: "b.md", mime: testMimeMarkdown, data: []byte("5678")},
 		}))
 
 		if response.Code != http.StatusOK || streamer.turnCalls != 1 {
@@ -300,7 +309,7 @@ func TestChatSendMultipartEnforcesAggregateFileLimit(t *testing.T) {
 		response := httptest.NewRecorder()
 
 		handler.Send(response, newMultipartChatRequest(t, []multipartPart{{
-			field: "files", filename: "too-big.md", mime: "text/markdown", data: []byte("123456789"),
+			field: fieldFiles, filename: "too-big.md", mime: testMimeMarkdown, data: []byte("123456789"),
 		}}))
 
 		if response.Code != http.StatusRequestEntityTooLarge {
@@ -319,7 +328,7 @@ func TestChatSendMultipartCapsExplicitDocumentReferences(t *testing.T) {
 		parts := make([]multipartPart, 0, 10)
 		for id := 1; id <= 10; id++ {
 			parts = append(parts, multipartPart{
-				field: "documentIds", data: []byte(strconv.Itoa(id)),
+				field: fieldDocumentIDs, data: []byte(strconv.Itoa(id)),
 			})
 		}
 		streamer := &multipartStreamer{}
@@ -340,7 +349,7 @@ func TestChatSendMultipartCapsExplicitDocumentReferences(t *testing.T) {
 		parts := make([]multipartPart, 0, 11)
 		for id := 1; id <= 11; id++ {
 			parts = append(parts, multipartPart{
-				field: "documentIds", data: []byte(strconv.Itoa(id)),
+				field: fieldDocumentIDs, data: []byte(strconv.Itoa(id)),
 			})
 		}
 		streamer := &multipartStreamer{}

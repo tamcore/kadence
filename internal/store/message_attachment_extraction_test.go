@@ -42,11 +42,11 @@ func TestMessageRepositoryUpdateChatAttachmentExtractionsIsOwnedAndScoped(t *tes
 			Content: "deferred",
 			Attachments: []model.MessageAttachment{
 				{
-					Filename: "deferred.md", MIME: "text/markdown",
+					Filename: "deferred.md", MIME: testMimeMarkdown,
 					Kind: model.AttachmentKindDocument, RawBytes: []byte("raw deferred"),
 				},
 				{
-					Filename: "chart.png", MIME: "image/png",
+					Filename: testChartPNGFilename, MIME: testMimePNG,
 					Kind: model.AttachmentKindImage, RawBytes: []byte{1, 2, 3},
 				},
 			},

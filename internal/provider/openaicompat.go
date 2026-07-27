@@ -15,6 +15,11 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
+// imageDetailHigh requests the API's highest-fidelity image analysis for
+// every attached image, since chat attachments (charts, workout screenshots)
+// often need fine detail to be useful.
+const imageDetailHigh = "high"
+
 // OpenAICompat is a Provider backed by any OpenAI-compatible chat API.
 type OpenAICompat struct {
 	client openai.Client
@@ -188,7 +193,7 @@ func buildUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
 		)
 		parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
 			URL:    dataURL,
-			Detail: "high",
+			Detail: imageDetailHigh,
 		}))
 	}
 	return openai.UserMessage(parts)

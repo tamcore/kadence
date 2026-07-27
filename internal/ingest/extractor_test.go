@@ -10,7 +10,7 @@ import (
 
 func TestSelectPicksByMime(t *testing.T) {
 	pdf := NewPDFExtractor()
-	got, err := Select([]Extractor{pdf}, "application/pdf")
+	got, err := Select([]Extractor{pdf}, pdfMimeType)
 	if err != nil || got == nil {
 		t.Fatalf("expected pdf extractor: %v", err)
 	}
@@ -45,16 +45,16 @@ func TestBuildUploadCapabilitiesIncludesRichFormatsFromEffectiveExtractors(t *te
 		t.Fatal("RichExtraction = false, want true when the effective extractor set handles rich formats")
 	}
 	for _, want := range []string{
-		"application/pdf", ".pdf",
+		pdfMimeType, ".pdf",
 		"image/png", ".png", "image/jpeg", ".jpg", ".jpeg", "image/webp", ".webp", "image/gif", ".gif",
-		"text/plain", ".txt", "text/markdown", ".md", "text/html", ".html", "text/csv", ".csv",
-		"application/msword", ".doc",
+		"text/plain", ".txt", "text/markdown", ".md", mimeTextHTML, ".html", "text/csv", ".csv",
+		docMimeWord, ".doc",
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
-		"application/vnd.ms-excel", ".xls",
+		docMimeExcel, ".xls",
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx",
-		"application/vnd.ms-powerpoint", ".ppt",
+		docMimePowerPoint, ".ppt",
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx",
-		"application/rtf", ".rtf", "application/epub+zip", ".epub",
+		docMimeRTF, ".rtf", docMimeEPUB, ".epub",
 	} {
 		if !strings.Contains(","+got.Accept+",", ","+want+",") {
 			t.Errorf("Accept %q does not contain exact entry %q", got.Accept, want)
@@ -67,7 +67,7 @@ func TestPDFExtractorExtractsText(t *testing.T) {
 	if err != nil {
 		t.Skipf("no sample.pdf fixture: %v", err)
 	}
-	res, err := NewPDFExtractor().Extract(context.Background(), data, "application/pdf")
+	res, err := NewPDFExtractor().Extract(context.Background(), data, pdfMimeType)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}

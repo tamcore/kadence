@@ -19,7 +19,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+	if ct := resp.Header.Get("Content-Type"); ct != contentTypeJSON {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
 	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {

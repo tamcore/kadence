@@ -22,16 +22,16 @@ const convertToolName = "convert_to_markdown"
 // markitdown-mcp: documents, images, and office formats it's known to
 // support, plus generic text.
 var markitdownMimePrefixes = []string{
-	"application/pdf",
+	pdfMimeType,
 	"image/",
 	"text/",
-	"application/msword",
+	docMimeWord,
 	"application/vnd.openxmlformats-officedocument",
-	"application/vnd.ms-excel",
-	"application/vnd.ms-powerpoint",
-	"application/rtf",
-	"application/epub+zip",
-	"text/html",
+	docMimeExcel,
+	docMimePowerPoint,
+	docMimeRTF,
+	docMimeEPUB,
+	mimeTextHTML,
 }
 
 // MarkitdownExtractor converts uploaded documents (PDFs, images, office

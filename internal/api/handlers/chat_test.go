@@ -26,6 +26,17 @@ const (
 	editedMessageJSON      = `{"message":"edited"}`
 )
 
+// Shared literals reused across handlers_test files, to avoid goconst
+// duplicate-literal warnings.
+const (
+	testStreamConvUUID   = "conv-uuid-1"
+	testErrNotFoundMsg   = "not found"
+	testChartPNGFilename = "chart.png"
+	testMimeMarkdown     = "text/markdown"
+	testMimePDF          = "application/pdf"
+	testMimePNG          = "image/png"
+)
+
 type fakeStreamer struct {
 	gotText           string
 	gotConversationID string
@@ -37,7 +48,7 @@ type fakeStreamer struct {
 func (f *fakeStreamer) Stream(_ context.Context, _ int64, uc chat.UserContext, _ string, text string, sink chat.EventSink) error {
 	f.gotUserContext = uc
 	f.gotText = text
-	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: "conv-uuid-1"})
+	_ = sink.Send(chat.ChatEvent{Type: chat.EventMeta, ConversationID: testStreamConvUUID})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventToken, Delta: "hi"})
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone})
 	return sink.Flush()
@@ -245,7 +256,7 @@ func TestChatSendStreamsSSE(t *testing.T) {
 }
 
 func TestListConversations(t *testing.T) {
-	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{ID: "conv-uuid-1", Title: "a"}}}, fakeMsgLister{}, nil, nil)
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{ID: testStreamConvUUID, Title: "a"}}}, fakeMsgLister{}, nil, nil)
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
 	rec := httptest.NewRecorder()
 	h.ListConversations(rec, req)
@@ -259,7 +270,7 @@ func TestListConversationsIncludesNavigationState(t *testing.T) {
 	lastActivityAt := pinnedAt.Add(time.Hour)
 	createdAt := pinnedAt.Add(-time.Hour)
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{
-		ID: "conv-uuid-1", Title: "a", PinnedAt: &pinnedAt,
+		ID: testStreamConvUUID, Title: "a", PinnedAt: &pinnedAt,
 		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
 	}}}, fakeMsgLister{}, nil, nil)
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
@@ -271,7 +282,7 @@ func TestListConversationsIncludesNavigationState(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil || rec.Code != http.StatusOK || len(response.Data) != 1 {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	assertNavigationConversationDTO(t, response.Data[0], "conv-uuid-1", "a", &pinnedAt, lastActivityAt, createdAt)
+	assertNavigationConversationDTO(t, response.Data[0], testStreamConvUUID, "a", &pinnedAt, lastActivityAt, createdAt)
 }
 
 func TestListConversationsFormatsNavigationTimestampsAsCanonicalPostgresPrecision(t *testing.T) {
@@ -280,7 +291,7 @@ func TestListConversationsFormatsNavigationTimestampsAsCanonicalPostgresPrecisio
 	lastActivityAt := time.Date(2026, time.July, 26, 14, 0, 0, 654321000, sourceZone)
 	createdAt := time.Date(2026, time.July, 26, 14, 0, 0, 1_000, sourceZone)
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{{
-		ID: "conv-uuid-1", Title: "precise", PinnedAt: &pinnedAt,
+		ID: testStreamConvUUID, Title: "precise", PinnedAt: &pinnedAt,
 		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
 	}}}, fakeMsgLister{}, nil, nil)
 	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
@@ -617,7 +628,7 @@ func TestMessagesOwnershipMiss(t *testing.T) {
 
 type convNotFoundErr struct{}
 
-func (*convNotFoundErr) Error() string { return "not found" }
+func (*convNotFoundErr) Error() string { return testErrNotFoundMsg }
 
 func TestDeleteConversationSuccess(t *testing.T) {
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{}, nil, nil)
@@ -792,7 +803,7 @@ func TestPatchConversationPinnedErrors(t *testing.T) {
 		err        error
 		wantStatus int
 	}{
-		{name: "not found", err: store.ErrNotFound, wantStatus: http.StatusNotFound},
+		{name: testErrNotFoundMsg, err: store.ErrNotFound, wantStatus: http.StatusNotFound},
 		{name: "repository error", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

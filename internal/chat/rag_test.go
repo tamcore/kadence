@@ -25,7 +25,6 @@ type fakeChunks struct {
 	documentSearch    map[int64][]model.Chunk
 	searchCalls       int
 	documentCalls     int
-	searchEmbedding   []float32
 	documentEmbedding []float32
 }
 

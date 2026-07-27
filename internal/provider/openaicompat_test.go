@@ -16,6 +16,15 @@ const (
 	testModel = "test-model"
 )
 
+// Shared JSON field/value literals reused across the OpenAI-compatible
+// vision content-part test fixtures below, to avoid goconst
+// duplicate-literal warnings.
+const (
+	testImagePNGMime      = "image/png"
+	jsonFieldType         = "type"
+	jsonFieldTypeImageURL = "image_url"
+)
+
 // A minimal OpenAI-compatible streaming completion: two content chunks + [DONE].
 const sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
 	"data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n" +
@@ -98,7 +107,7 @@ func TestOpenAICompatStreamChat_UserImagesUseOrderedContentParts(t *testing.T) {
 			Role:    testRole,
 			Content: "describe these",
 			Images: []ImageContent{
-				{MIMEType: "image/png", Data: []byte{0, 1, 2}},
+				{MIMEType: testImagePNGMime, Data: []byte{0, 1, 2}},
 				{MIMEType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff}},
 			},
 		}},
@@ -120,19 +129,19 @@ func TestOpenAICompatStreamChat_UserImagesUseOrderedContentParts(t *testing.T) {
 		t.Fatalf("unmarshal user content: %v", err)
 	}
 	want := []any{
-		map[string]any{"type": "text", "text": "describe these"},
+		map[string]any{jsonFieldType: "text", "text": "describe these"},
 		map[string]any{
-			"type": "image_url",
-			"image_url": map[string]any{
+			jsonFieldType: jsonFieldTypeImageURL,
+			jsonFieldTypeImageURL: map[string]any{
 				"url":    "data:image/png;base64,AAEC",
-				"detail": "high",
+				"detail": imageDetailHigh,
 			},
 		},
 		map[string]any{
-			"type": "image_url",
-			"image_url": map[string]any{
+			jsonFieldType: jsonFieldTypeImageURL,
+			jsonFieldTypeImageURL: map[string]any{
 				"url":    "data:image/jpeg;base64,/9j/",
-				"detail": "high",
+				"detail": imageDetailHigh,
 			},
 		},
 	}
@@ -181,7 +190,7 @@ func TestOpenAICompatStreamChat_UserImageWithoutTextOmitsTextPart(t *testing.T) 
 	if len(parts) != 1 {
 		t.Fatalf("content parts = %d, want only the image part", len(parts))
 	}
-	if parts[0].Type != "image_url" {
+	if parts[0].Type != jsonFieldTypeImageURL {
 		t.Fatalf("first content part type = %q, want image_url", parts[0].Type)
 	}
 }
@@ -334,9 +343,9 @@ func TestOpenAICompatStreamChatWithTools_ToolCall(t *testing.T) {
 	p := NewOpenAICompat(srv.URL, "test-key")
 
 	params, err := json.Marshal(map[string]any{
-		"type": "object",
+		jsonFieldType: "object",
 		"properties": map[string]any{
-			"limit": map[string]any{"type": "integer"},
+			"limit": map[string]any{jsonFieldType: "integer"},
 		},
 	})
 	if err != nil {

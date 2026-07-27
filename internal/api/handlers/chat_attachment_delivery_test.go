@@ -17,6 +17,14 @@ import (
 
 const attachmentConversationID = "00000000-0000-0000-0000-000000000123"
 
+// Attachment-delivery test literals reused across the fixtures below, to
+// avoid goconst duplicate-literal warnings.
+const (
+	dispositionAttachment = "attachment"
+	testMimeTextHTML      = "text/html"
+	fieldAttachmentID     = "attachmentId"
+)
+
 type attachmentDeliveryLister struct {
 	fakeMsgLister
 	attachment     model.MessageAttachment
@@ -48,7 +56,7 @@ func TestMessagesExposeSafeAttachmentAndReferenceMetadata(t *testing.T) {
 		{
 			ID: 12, Role: model.MsgRoleUser, Content: "compare",
 			Attachments: []model.MessageAttachment{{
-				ID: 31, MessageID: 12, Filename: "chart.png", MIME: "image/png",
+				ID: 31, MessageID: 12, Filename: testChartPNGFilename, MIME: testMimePNG,
 				Kind: model.AttachmentKindImage, SizeBytes: 987,
 				RawBytes: []byte("must-not-leak"), ExtractedMarkdown: "must-not-leak",
 				ImageWidth: &width, ImageHeight: &height, Ordinal: 0,
@@ -114,8 +122,8 @@ func TestMessagesExposeSafeAttachmentAndReferenceMetadata(t *testing.T) {
 	attachment := envelope.Data[0].Attachments
 	if len(attachment) != 1 ||
 		attachment[0].ID != 31 ||
-		attachment[0].Filename != "chart.png" ||
-		attachment[0].MIME != "image/png" ||
+		attachment[0].Filename != testChartPNGFilename ||
+		attachment[0].MIME != testMimePNG ||
 		attachment[0].Kind != model.AttachmentKindImage ||
 		attachment[0].SizeBytes != 987 ||
 		attachment[0].ImageWidth == nil || *attachment[0].ImageWidth != width ||
@@ -148,28 +156,28 @@ func TestDownloadAttachmentUsesSafeDispositionAndPayload(t *testing.T) {
 			name: "validated image inline",
 			attachment: model.MessageAttachment{
 				ID: 31, MessageID: 12, Filename: "chart\r\nX-Evil: yes.png",
-				MIME: "image/png", Kind: model.AttachmentKindImage, RawBytes: []byte("png-data"),
+				MIME: testMimePNG, Kind: model.AttachmentKindImage, RawBytes: []byte("png-data"),
 			},
 			wantDisposition: "inline",
-			wantContentType: "image/png",
+			wantContentType: testMimePNG,
 		},
 		{
 			name: "document forced download",
 			attachment: model.MessageAttachment{
 				ID: 31, MessageID: 12, Filename: `<script>alert("x")</script>.html`,
-				MIME: "text/html", Kind: model.AttachmentKindDocument, RawBytes: []byte("<script>"),
+				MIME: testMimeTextHTML, Kind: model.AttachmentKindDocument, RawBytes: []byte("<script>"),
 			},
-			wantDisposition: "attachment",
-			wantContentType: "text/html",
+			wantDisposition: dispositionAttachment,
+			wantContentType: testMimeTextHTML,
 		},
 		{
 			name: "non-image mime cannot be inline despite image kind",
 			attachment: model.MessageAttachment{
 				ID: 31, MessageID: 12, Filename: "fake.html",
-				MIME: "text/html", Kind: model.AttachmentKindImage, RawBytes: []byte("<script>"),
+				MIME: testMimeTextHTML, Kind: model.AttachmentKindImage, RawBytes: []byte("<script>"),
 			},
-			wantDisposition: "attachment",
-			wantContentType: "text/html",
+			wantDisposition: dispositionAttachment,
+			wantContentType: testMimeTextHTML,
 		},
 		{
 			name: "invalid mime defaults to opaque download",
@@ -178,7 +186,7 @@ func TestDownloadAttachmentUsesSafeDispositionAndPayload(t *testing.T) {
 				MIME: "text/html\r\nX-Evil: yes", Kind: model.AttachmentKindDocument,
 				RawBytes: []byte("bytes"),
 			},
-			wantDisposition: "attachment",
+			wantDisposition: dispositionAttachment,
 			wantContentType: "application/octet-stream",
 		},
 	}
@@ -191,7 +199,7 @@ func TestDownloadAttachmentUsesSafeDispositionAndPayload(t *testing.T) {
 			request := withChiParams(
 				withUser(httptest.NewRequest(http.MethodGet, "/attachment", nil), 7),
 				map[string]string{
-					"id": attachmentConversationID, "messageId": "12", "attachmentId": "31",
+					"id": attachmentConversationID, messageIDParam: "12", fieldAttachmentID: "31",
 				},
 			)
 			response := httptest.NewRecorder()
@@ -242,7 +250,7 @@ func TestDownloadAttachmentConcealsOwnershipMiss(t *testing.T) {
 	request := withChiParams(
 		withUser(httptest.NewRequest(http.MethodGet, "/attachment", nil), 7),
 		map[string]string{
-			"id": attachmentConversationID, "messageId": "12", "attachmentId": "31",
+			"id": attachmentConversationID, messageIDParam: "12", fieldAttachmentID: "31",
 		},
 	)
 	response := httptest.NewRecorder()
@@ -262,7 +270,7 @@ func TestDownloadAttachmentMapsUnexpectedStoreFailure(t *testing.T) {
 	request := withChiParams(
 		withUser(httptest.NewRequest(http.MethodGet, "/attachment", nil), 7),
 		map[string]string{
-			"id": attachmentConversationID, "messageId": "12", "attachmentId": "31",
+			"id": attachmentConversationID, messageIDParam: "12", fieldAttachmentID: "31",
 		},
 	)
 	response := httptest.NewRecorder()

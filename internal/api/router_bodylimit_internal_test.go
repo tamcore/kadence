@@ -30,6 +30,10 @@ import (
 	"github.com/tamcore/kadence/internal/api/middleware"
 )
 
+// testMultipartContentType is a minimal, valid multipart Content-Type used
+// to exercise isUploadRoute's media-type check without a full multipart body.
+const testMultipartContentType = "multipart/form-data; boundary=x"
+
 func TestIsUploadRoute(t *testing.T) {
 	cases := []struct {
 		method      string
@@ -37,15 +41,15 @@ func TestIsUploadRoute(t *testing.T) {
 		contentType string
 		want        bool
 	}{
-		{http.MethodPost, documentsPath, "multipart/form-data; boundary=x", true},
-		{http.MethodPost, adminDocumentsPath, "multipart/form-data; boundary=x", true},
+		{http.MethodPost, documentsPath, testMultipartContentType, true},
+		{http.MethodPost, adminDocumentsPath, testMultipartContentType, true},
 		{http.MethodGet, documentsPath, "", false},
 		{http.MethodDelete, documentsPath + "/1", "", false},
 		{http.MethodGet, adminDocumentsPath, "", false},
-		{http.MethodPost, "/api/profile", "application/json", false},
-		{http.MethodPost, "/api/chat", "multipart/form-data; boundary=x", true},
-		{http.MethodPost, "/api/chat", "application/json", false},
-		{http.MethodPost, "/api/chat", "", false},
+		{http.MethodPost, "/api/profile", contentTypeJSON, false},
+		{http.MethodPost, chatPath, testMultipartContentType, true},
+		{http.MethodPost, chatPath, contentTypeJSON, false},
+		{http.MethodPost, chatPath, "", false},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
@@ -99,8 +103,8 @@ func TestMaxBodyBytesExempt_UploadRoutesBypassGlobalCap(t *testing.T) {
 	// Multipart chat bypasses the global JSON cap; the chat handler enforces
 	// its own aggregate file cap.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(large))
-	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	req := httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(large))
+	req.Header.Set("Content-Type", testMultipartContentType)
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("/api/chat multipart: status = %d, want 200", rec.Code)
@@ -116,8 +120,8 @@ func TestMaxBodyBytesExempt_UploadRoutesBypassGlobalCap(t *testing.T) {
 
 	// JSON chat stays behind the global cap.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(large))
-	req.Header.Set("Content-Type", "application/json")
+	req = httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(large))
+	req.Header.Set("Content-Type", contentTypeJSON)
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("/api/chat JSON: status = %d, want 413", rec.Code)

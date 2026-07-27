@@ -35,6 +35,7 @@ const (
 	scheduledTimezoneUTC = "UTC"
 	scheduledTestMessage = `{"message":"x"}`
 	scheduledTestPaused  = `{"state":"paused"}`
+	scheduledTestMorning = "Morning"
 )
 
 type fakeScheduledLifecycle struct {
@@ -141,7 +142,7 @@ func TestScheduledDiscardDraftIsOwnerScopedAndRejectsFinalizedTasks(t *testing.T
 }
 
 func TestScheduledCreateStreamsBoundedDefinitionEvents(t *testing.T) {
-	proposal := &scheduled.Proposal{Name: "Morning", Version: 1}
+	proposal := &scheduled.Proposal{Name: scheduledTestMorning, Version: 1}
 	fake := &fakeScheduledLifecycle{createResult: scheduled.DefinitionResult{Task: model.ScheduledTask{ID: scheduledTestTask1, ConversationID: scheduledTestConv1}, Refinement: scheduled.Refinement{Text: "Saved it.", Proposal: proposal}}}
 	h := handlers.NewScheduled(fake)
 	req := withUser(httptest.NewRequest(http.MethodPost, "/api/scheduled/tasks", strings.NewReader(`{"message":"remind me"}`)), 7)
@@ -234,7 +235,7 @@ func TestScheduledDefinitionRouteBodiesQuestionsErrorsAndBounds(t *testing.T) {
 func TestScheduledLifecycleRoutesSuccessAndOwnerForwarding(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	task := model.ScheduledTask{
-		ID: scheduledTestTask1, ConversationID: scheduledTestConv1, Version: 2, Name: "Morning", Kind: model.ScheduledTaskKindReminder,
+		ID: scheduledTestTask1, ConversationID: scheduledTestConv1, Version: 2, Name: scheduledTestMorning, Kind: model.ScheduledTaskKindReminder,
 		State: model.ScheduledTaskStateActive, CompiledPrompt: "prompt", Timezone: scheduledTimezoneUTC,
 		ExecutionMode: "static", AuthorizedTools: []string{}, DeliveryPolicy: "always", InitialRun: "wait",
 		NextRunAt: &now, CreatedAt: now, UpdatedAt: now,
@@ -348,7 +349,7 @@ func TestScheduledLifecycleBodyAndErrorMapping(t *testing.T) {
 		err  error
 		want int
 	}{
-		{name: "not found", err: store.ErrNotFound, want: http.StatusNotFound},
+		{name: testErrNotFoundMsg, err: store.ErrNotFound, want: http.StatusNotFound},
 		{name: "active limit", err: store.ErrActiveTaskLimit, want: http.StatusConflict},
 		{name: "stale", err: scheduled.ErrStaleProposal, want: http.StatusConflict},
 		{name: "run in progress", err: scheduled.ErrRunInProgress, want: http.StatusConflict},
@@ -427,7 +428,7 @@ func TestDetailExposesDeliveryConversationID(t *testing.T) {
 	delivery := scheduledTestConv1
 	task := model.ScheduledTask{
 		ID: scheduledTestTask1, ConversationID: scheduledTestConv1, DeliveryConversationID: &delivery,
-		Version: 2, Name: "Morning", Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
+		Version: 2, Name: scheduledTestMorning, Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateActive,
 		CompiledPrompt: "prompt", Timezone: scheduledTimezoneUTC, ExecutionMode: "static", AuthorizedTools: []string{},
 		DeliveryPolicy: "always", InitialRun: "wait", CreatedAt: now, UpdatedAt: now,
 	}

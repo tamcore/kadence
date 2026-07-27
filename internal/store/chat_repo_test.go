@@ -27,6 +27,17 @@ const (
 	testEmailBob = "bob@x.io"
 )
 
+// Shared test-fixture values reused across store_test files to avoid
+// goconst duplicate-literal warnings.
+const (
+	testOtherUsername      = "other"
+	testMimeMarkdown       = "text/markdown"
+	testMimePNG            = "image/png"
+	testChartPNGFilename   = "chart.png"
+	testProofPNGFilename   = "proof.png"
+	testExtractedMarkdownH = "# First"
+)
+
 func TestConversationAndMessageFlow(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
@@ -167,7 +178,7 @@ func TestConversationScopedToOwner(t *testing.T) {
 	ctx := context.Background()
 
 	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
-	other, _ := users.Create(ctx, model.User{Username: "other", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
+	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, owner.ID, "secret")
 
 	if _, err := convs.GetByID(ctx, c.ID, other.ID); !errors.Is(err, store.ErrNotFound) {
@@ -183,7 +194,7 @@ func TestConversationUpdateTitle(t *testing.T) {
 	ctx := context.Background()
 
 	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
-	other, _ := users.Create(ctx, model.User{Username: "other", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
+	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, owner.ID, "old title")
 
 	updated, err := convs.UpdateTitle(ctx, c.ID, owner.ID, "new title")
@@ -202,6 +213,35 @@ func TestConversationUpdateTitle(t *testing.T) {
 
 	if _, err := convs.UpdateTitle(ctx, "00000000-0000-0000-0000-000000000000", owner.ID, "x"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing id UpdateTitle err = %v, want ErrNotFound", err)
+	}
+}
+
+// mustCreateConversation creates a conversation and fails the test on error,
+// reducing repetitive error-handling noise in ordering/pinning fixtures.
+func mustCreateConversation(
+	t *testing.T, conversations *store.ConversationRepository, ctx context.Context,
+	ownerID int64, title string,
+) model.Conversation {
+	t.Helper()
+	c, err := conversations.Create(ctx, ownerID, title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// requireConversationOrder fails the test unless list matches want by ID,
+// exactly and in order — used to assert ConversationRepository.ListByUser
+// ordering under pinning/recency rules.
+func requireConversationOrder(t *testing.T, list []model.Conversation, err error, want []string) {
+	t.Helper()
+	if err != nil || len(list) != len(want) {
+		t.Fatalf("conversation order = %+v, err=%v, want %d entries", list, err, len(want))
+	}
+	for i, wantID := range want {
+		if list[i].ID != wantID {
+			t.Fatalf("ordering[%d]=%s, want=%s full=%+v", i, list[i].ID, wantID, list)
+		}
 	}
 }
 
@@ -224,26 +264,11 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 	if err != nil || first.LastActivityAt.IsZero() {
 		t.Fatalf("create first conversation: %+v, %v", first, err)
 	}
-	second, err := conversations.Create(ctx, owner.ID, "second")
-	if err != nil {
-		t.Fatal(err)
-	}
-	recentNew, err := conversations.Create(ctx, owner.ID, "recent new")
-	if err != nil {
-		t.Fatal(err)
-	}
-	recentOld, err := conversations.Create(ctx, owner.ID, "recent old")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tieFirst, err := conversations.Create(ctx, owner.ID, "tie first")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tieSecond, err := conversations.Create(ctx, owner.ID, "tie second")
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := mustCreateConversation(t, conversations, ctx, owner.ID, "second")
+	recentNew := mustCreateConversation(t, conversations, ctx, owner.ID, "recent new")
+	recentOld := mustCreateConversation(t, conversations, ctx, owner.ID, "recent old")
+	tieFirst := mustCreateConversation(t, conversations, ctx, owner.ID, "tie first")
+	tieSecond := mustCreateConversation(t, conversations, ctx, owner.ID, "tie second")
 	if _, err := conversations.CreateWithKind(ctx, owner.ID, "scheduled", model.ConversationKindScheduled); err != nil {
 		t.Fatal(err)
 	}
@@ -285,14 +310,7 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 		tieEarlier, tieLater = tieLater, tieEarlier
 	}
 	wantPinnedOrder := []string{second.ID, first.ID, recentNew.ID, recentOld.ID, tieEarlier, tieLater}
-	if err != nil || len(list) != len(wantPinnedOrder) {
-		t.Fatalf("ordered chats = %+v, err=%v", list, err)
-	}
-	for i, wantID := range wantPinnedOrder {
-		if list[i].ID != wantID {
-			t.Fatalf("pinned ordering[%d]=%s, want=%s full=%+v", i, list[i].ID, wantID, list)
-		}
-	}
+	requireConversationOrder(t, list, err, wantPinnedOrder)
 	if _, err := conversations.UpdatePinned(ctx, first.ID, other.ID, false); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-owner unpin err=%v, want ErrNotFound", err)
 	}
@@ -307,14 +325,7 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 	}
 	list, err = conversations.ListByUser(ctx, owner.ID)
 	wantRecentOrder := []string{recentNew.ID, recentOld.ID, tieEarlier, tieLater, second.ID, first.ID}
-	if err != nil || len(list) != len(wantRecentOrder) {
-		t.Fatalf("recent chats = %+v, err=%v", list, err)
-	}
-	for i, wantID := range wantRecentOrder {
-		if list[i].ID != wantID {
-			t.Fatalf("recent ordering[%d]=%s, want=%s full=%+v", i, list[i].ID, wantID, list)
-		}
-	}
+	requireConversationOrder(t, list, err, wantRecentOrder)
 }
 
 func TestMessageRepositoryChatWritesAndRewindsTouchActivity(t *testing.T) {
@@ -498,7 +509,7 @@ func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.
 	userMessage, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, model.ChatUserInput{
 		Content: "deferred extraction",
 		Attachments: []model.MessageAttachment{{
-			Filename: "deferred.md", MIME: "text/markdown", Kind: model.AttachmentKindDocument,
+			Filename: "deferred.md", MIME: testMimeMarkdown, Kind: model.AttachmentKindDocument,
 			RawBytes: []byte("source"),
 		}},
 	})

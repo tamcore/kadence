@@ -17,6 +17,10 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
+// octetStreamMIME is the fallback content type used when an attachment's
+// declared MIME type cannot be parsed or normalized.
+const octetStreamMIME = "application/octet-stream"
+
 // AttachmentPayloadLoader returns one attachment only when every owner/path
 // component matches.
 type AttachmentPayloadLoader interface {
@@ -83,11 +87,11 @@ func (h *Chat) DownloadAttachment(w http.ResponseWriter, r *http.Request) {
 func safeAttachmentContentType(raw string) (string, string) {
 	mediaType, params, err := mime.ParseMediaType(raw)
 	if err != nil {
-		return "application/octet-stream", "application/octet-stream"
+		return octetStreamMIME, octetStreamMIME
 	}
 	formatted := mime.FormatMediaType(mediaType, params)
 	if formatted == "" {
-		return "application/octet-stream", "application/octet-stream"
+		return octetStreamMIME, octetStreamMIME
 	}
 	return formatted, strings.ToLower(mediaType)
 }

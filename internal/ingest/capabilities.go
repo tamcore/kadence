@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -19,23 +20,23 @@ type uploadFormat struct {
 }
 
 var uploadFormats = []uploadFormat{
-	{mime: "application/pdf", extensions: []string{".pdf"}},
+	{mime: pdfMimeType, extensions: []string{".pdf"}},
 	{mime: "image/png", extensions: []string{".png"}},
 	{mime: "image/jpeg", extensions: []string{".jpg", ".jpeg"}},
 	{mime: "image/webp", extensions: []string{".webp"}},
 	{mime: "image/gif", extensions: []string{".gif"}},
 	{mime: "text/plain", extensions: []string{".txt"}},
 	{mime: "text/markdown", extensions: []string{".md"}},
-	{mime: "text/html", extensions: []string{".html", ".htm"}},
+	{mime: mimeTextHTML, extensions: []string{".html", ".htm"}},
 	{mime: "text/csv", extensions: []string{".csv"}},
-	{mime: "application/msword", extensions: []string{".doc"}},
+	{mime: docMimeWord, extensions: []string{".doc"}},
 	{mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", extensions: []string{".docx"}},
-	{mime: "application/vnd.ms-excel", extensions: []string{".xls"}},
+	{mime: docMimeExcel, extensions: []string{".xls"}},
 	{mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", extensions: []string{".xlsx"}},
-	{mime: "application/vnd.ms-powerpoint", extensions: []string{".ppt"}},
+	{mime: docMimePowerPoint, extensions: []string{".ppt"}},
 	{mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation", extensions: []string{".pptx"}},
-	{mime: "application/rtf", extensions: []string{".rtf"}},
-	{mime: "application/epub+zip", extensions: []string{".epub"}},
+	{mime: docMimeRTF, extensions: []string{".rtf"}},
+	{mime: docMimeEPUB, extensions: []string{".epub"}},
 }
 
 // BuildUploadCapabilities derives the browser-facing profile from the
@@ -82,10 +83,8 @@ func NormalizeUploadMIME(filename, declaredMIME string) string {
 
 	extension := strings.ToLower(filepath.Ext(filename))
 	for _, format := range uploadFormats {
-		for _, candidate := range format.extensions {
-			if extension == candidate {
-				return format.mime
-			}
+		if slices.Contains(format.extensions, extension) {
+			return format.mime
 		}
 	}
 	return declaredMIME

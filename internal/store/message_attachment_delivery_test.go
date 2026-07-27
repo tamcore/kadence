@@ -55,9 +55,9 @@ func TestMessageRepositoryGetAttachmentForUserScopesWholePath(t *testing.T) {
 	}
 	otherMessage, err := messages.AddChatUserInput(
 		ctx, otherOwnedConversation.ID, owner.ID, model.ChatUserInput{
-			Content: "other",
+			Content: testOtherUsername,
 			Attachments: []model.MessageAttachment{{
-				Filename: "other.png", MIME: "image/png", Kind: model.AttachmentKindImage,
+				Filename: "other.png", MIME: testMimePNG, Kind: model.AttachmentKindImage,
 				RawBytes: []byte("other-bytes"),
 			}},
 		},
@@ -74,8 +74,8 @@ func TestMessageRepositoryGetAttachmentForUserScopesWholePath(t *testing.T) {
 	}
 	if got.ID != message.Attachments[0].ID ||
 		got.MessageID != message.ID ||
-		got.Filename != "proof.png" ||
-		got.MIME != "image/png" ||
+		got.Filename != testProofPNGFilename ||
+		got.MIME != testMimePNG ||
 		got.Kind != model.AttachmentKindImage ||
 		!bytes.Equal(got.RawBytes, []byte("private-image-bytes")) {
 		t.Fatalf("attachment=%+v", got)

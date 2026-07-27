@@ -28,7 +28,7 @@ func TestDocumentRepositoryListVisibleByIDsPreservesOrderAndIncludesMarkdown(t *
 	}
 	privateDocument, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "private.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText,
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		ExtractedMarkdown: "private markdown",
 	})
 	if err != nil {
@@ -36,7 +36,7 @@ func TestDocumentRepositoryListVisibleByIDsPreservesOrderAndIncludesMarkdown(t *
 	}
 	publicDocument, err := documents.Create(ctx, model.Document{
 		Scope: model.ScopePublic, Filename: "public.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText,
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		ExtractedMarkdown: "public markdown",
 	})
 	if err != nil {
@@ -79,7 +79,7 @@ func TestDocumentRepositoryListVisibleByIDsFailsClosedForInvisibleMissingAndDele
 	}
 	invisible, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &other.ID, Scope: model.ScopePrivate, Filename: "other-private.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText,
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		ExtractedMarkdown: "must not leak",
 	})
 	if err != nil {
@@ -87,7 +87,7 @@ func TestDocumentRepositoryListVisibleByIDsFailsClosedForInvisibleMissingAndDele
 	}
 	owned, err := documents.Create(ctx, model.Document{
 		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "deleted.md",
-		Mime: "text/markdown", SourceType: model.DocSourceText,
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		ExtractedMarkdown: "deleted content",
 	})
 	if err != nil {
@@ -187,7 +187,7 @@ func createExplicitChunkDocument(
 	t.Helper()
 	document, err := documents.Create(ctx, model.Document{
 		OwnerUserID: ownerID, Scope: scope, Filename: filename,
-		Mime: "text/markdown", SourceType: model.DocSourceText,
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText,
 		ExtractedMarkdown: filename + " full content",
 	})
 	if err != nil {

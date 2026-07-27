@@ -13,6 +13,17 @@ import (
 
 const pdfMimeType = "application/pdf"
 
+// Legacy office-document MIME types shared across the upload capability
+// list, the markitdown MIME prefix table, and their tests.
+const (
+	docMimeWord       = "application/msword"
+	docMimeExcel      = "application/vnd.ms-excel"
+	docMimePowerPoint = "application/vnd.ms-powerpoint"
+	docMimeRTF        = "application/rtf"
+	docMimeEPUB       = "application/epub+zip"
+	mimeTextHTML      = "text/html"
+)
+
 // PDFExtractor extracts the text layer from PDF documents using a pure-Go
 // parser. It does not perform OCR: image-only PDFs yield empty text.
 type PDFExtractor struct{}
