@@ -91,9 +91,10 @@ func (r *ScheduledHandoffRepository) CreateOrGetDraft(
 			return HydratedChatHandoff{}, false, fmt.Errorf("create handoff scheduled conversation: %w", err)
 		}
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO scheduled_tasks (user_id, conversation_id, name, kind, state, timezone)
-			 VALUES ($1, $2::uuid, $3, $4, $5, $6) RETURNING id::text`,
+			`INSERT INTO scheduled_tasks (user_id, conversation_id, name, kind, state, timezone, delivery_conversation_id)
+			 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7::uuid) RETURNING id::text`,
 			in.UserID, scheduledConversationID, in.Title, model.ScheduledTaskKindReminder, model.ScheduledTaskStateDraft, in.Timezone,
+			in.SourceConversationID,
 		).Scan(&taskID); err != nil {
 			return HydratedChatHandoff{}, false, fmt.Errorf("create handoff draft task: %w", err)
 		}

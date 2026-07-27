@@ -368,6 +368,50 @@ func TestChatScheduledHandoffStateUpdatesRecoverAndIgnoreOrdinaryTasks(t *testin
 	}
 }
 
+// TestChatScheduledHandoffCreateOrGetDraftSetsDeliveryToSourceConversation
+// ensures a chat-originated draft task pre-sets delivery_conversation_id to
+// the source chat, so ConfirmProposal never promotes its own Scheduled
+// conversation as delivery target.
+//
+// Note: handoffHydrationQuery/scanHydratedHandoff do not select
+// delivery_conversation_id (they don't route through scheduledTaskCols), so
+// this asserts the persisted DB value directly rather than the hydrated
+// Task field.
+func TestChatScheduledHandoffCreateOrGetDraftSetsDeliveryToSourceConversation(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "handoff-delivery", "handoff-delivery@example.com")
+	source, err := conversations.Create(ctx, owner.ID, "Source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, fresh, err := repo.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+		UserID: owner.ID, SourceConversationID: source.ID, SourceUserMessageID: message.ID,
+		SourceContentFingerprint: handoffFingerprint(99), InvocationOrdinal: 1, Title: "Digest", Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil || !fresh || created.Task == nil {
+		t.Fatalf("CreateOrGetDraft fresh=%t err=%v", fresh, err)
+	}
+	var delivery *string
+	if err := pool.QueryRow(ctx,
+		`SELECT delivery_conversation_id::text FROM scheduled_tasks WHERE id = $1::uuid`, created.Task.ID,
+	).Scan(&delivery); err != nil {
+		t.Fatal(err)
+	}
+	if delivery == nil || *delivery != source.ID {
+		t.Fatalf("delivery_conversation_id = %v, want %s", delivery, source.ID)
+	}
+}
+
 func handoffFingerprint(last byte) []byte {
 	fingerprint := make([]byte, 32)
 	fingerprint[len(fingerprint)-1] = last

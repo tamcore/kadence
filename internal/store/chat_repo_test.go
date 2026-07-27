@@ -861,7 +861,7 @@ func TestChatRepositoryRegenerateRewindsDraftHandoffsButKeepsConfirmed(t *testin
 	}
 }
 
-func TestChatRepositoryEditAndConversationDeleteCleanOnlyDraftHandoffs(t *testing.T) {
+func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDelivery(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
 	ctx := context.Background()
@@ -902,20 +902,29 @@ func TestChatRepositoryEditAndConversationDeleteCleanOnlyDraftHandoffs(t *testin
 	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = 'active' WHERE id = $1::uuid`, confirmed.Task.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := conversations.Delete(ctx, deleteSource.ID, owner.ID); err != nil {
-		t.Fatal(err)
+	// CreateOrGetDraft now pre-sets delivery_conversation_id =
+	// source_conversation_id, so the confirmed, active task still delivers
+	// into deleteSource. Deleting a source chat an active task still
+	// delivers into is blocked by the delivery_conversation_id FK (ON
+	// DELETE RESTRICT); the whole delete transaction rolls back, so nothing
+	// (including the still-draft handoff's own cleanup) is persisted.
+	if err := conversations.Delete(ctx, deleteSource.ID, owner.ID); err == nil {
+		t.Fatal("Delete err = nil, want FK-violation error for a source chat an active task still delivers into")
 	}
-	var draftCount, confirmedCount, confirmedTaskCount, confirmedConversationCount int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&draftCount); err != nil || draftCount != 0 {
-		t.Fatalf("deleted source draft handoff count=%d err=%v", draftCount, err)
+	var draftCount, confirmedCount, confirmedTaskCount, confirmedConversationCount, sourceCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&draftCount); err != nil || draftCount != 1 {
+		t.Fatalf("blocked delete draft handoff count=%d err=%v", draftCount, err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, confirmed.Handoff.ID).Scan(&confirmedCount); err != nil || confirmedCount != 0 {
-		t.Fatalf("deleted source confirmed handoff count=%d err=%v", confirmedCount, err)
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, confirmed.Handoff.ID).Scan(&confirmedCount); err != nil || confirmedCount != 1 {
+		t.Fatalf("blocked delete confirmed handoff count=%d err=%v", confirmedCount, err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, confirmed.Task.ID).Scan(&confirmedTaskCount); err != nil || confirmedTaskCount != 1 {
-		t.Fatalf("deleted source confirmed task count=%d err=%v", confirmedTaskCount, err)
+		t.Fatalf("blocked delete confirmed task count=%d err=%v", confirmedTaskCount, err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, confirmed.Task.ConversationID).Scan(&confirmedConversationCount); err != nil || confirmedConversationCount != 1 {
-		t.Fatalf("deleted source confirmed scheduled conversation count=%d err=%v", confirmedConversationCount, err)
+		t.Fatalf("blocked delete confirmed scheduled conversation count=%d err=%v", confirmedConversationCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, deleteSource.ID).Scan(&sourceCount); err != nil || sourceCount != 1 {
+		t.Fatalf("blocked delete source conversation count=%d err=%v", sourceCount, err)
 	}
 }
