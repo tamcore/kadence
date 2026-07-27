@@ -267,7 +267,9 @@ func (r *ScheduledTaskRepository) ConfirmProposal(ctx context.Context, id string
 		}
 	}
 	updated, err := scanScheduledTask(tx.QueryRow(ctx,
-		`UPDATE scheduled_tasks SET state = $1, next_run_at = $2, updated_at = NOW()
+		`UPDATE scheduled_tasks SET state = $1, next_run_at = $2,
+		   delivery_conversation_id = COALESCE(delivery_conversation_id, conversation_id),
+		   updated_at = NOW()
 		 WHERE id = $3::uuid AND user_id = $4 AND deleted_at IS NULL
 		   AND state = $5 AND version = $6 AND compiled_prompt <> ''
 		 RETURNING `+scheduledTaskCols,
@@ -277,6 +279,13 @@ func (r *ScheduledTaskRepository) ConfirmProposal(ctx context.Context, id string
 	}
 	if err != nil {
 		return model.ScheduledTask{}, err
+	}
+	if updated.DeliveryConversationID != nil && *updated.DeliveryConversationID == updated.ConversationID {
+		if _, err := tx.Exec(ctx,
+			`UPDATE conversations SET kind = $1 WHERE id = $2::uuid AND user_id = $3 AND kind = $4`,
+			model.ConversationKindChat, updated.ConversationID, userID, model.ConversationKindScheduled); err != nil {
+			return model.ScheduledTask{}, fmt.Errorf("promote scheduled conversation to chat: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.ScheduledTask{}, fmt.Errorf("commit scheduled confirmation: %w", err)

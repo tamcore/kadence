@@ -1087,6 +1087,76 @@ func TestScheduledTaskRepositoryFinishSuccessDeliversToChatConversationAndBumpsA
 	}
 }
 
+func TestConfirmProposalPromotesDirectConversationToChat(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "confirm-direct-owner", "confirm-direct@example.com")
+	scheduledConv := createScheduledConversation(t, ctx, conversations, owner.ID)
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: scheduledConv.ID, Version: 1, Name: "Direct schedule",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateDraft,
+		CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	confirmed, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, task.Version, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ConfirmProposal: %v", err)
+	}
+	if confirmed.DeliveryConversationID == nil || *confirmed.DeliveryConversationID != scheduledConv.ID {
+		t.Fatalf("delivery = %v, want %s", confirmed.DeliveryConversationID, scheduledConv.ID)
+	}
+	if kind := scheduledConversationKind(t, ctx, pool, scheduledConv.ID); kind != model.ConversationKindChat {
+		t.Fatalf("conversation kind = %s, want chat", kind)
+	}
+}
+
+func TestConfirmProposalKeepsPresetChatOriginatedDelivery(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "confirm-preset-owner", "confirm-preset@example.com")
+	scheduledConv := createScheduledConversation(t, ctx, conversations, owner.ID)
+	sourceChat, err := conversations.Create(ctx, owner.ID, "Source chat")
+	if err != nil {
+		t.Fatalf("create source chat: %v", err)
+	}
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: scheduledConv.ID, Version: 1, Name: "Handoff schedule",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateDraft,
+		CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE scheduled_tasks SET delivery_conversation_id = $1::uuid WHERE id = $2::uuid`,
+		sourceChat.ID, task.ID); err != nil {
+		t.Fatalf("preset delivery conversation: %v", err)
+	}
+
+	confirmed, err := repo.ConfirmProposal(ctx, task.ID, owner.ID, task.Version, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ConfirmProposal: %v", err)
+	}
+	if confirmed.DeliveryConversationID == nil || *confirmed.DeliveryConversationID != sourceChat.ID {
+		t.Fatalf("delivery = %v, want %s (preserved)", confirmed.DeliveryConversationID, sourceChat.ID)
+	}
+	// The task's own scheduled conversation must NOT be promoted.
+	if kind := scheduledConversationKind(t, ctx, pool, scheduledConv.ID); kind != model.ConversationKindScheduled {
+		t.Fatalf("scheduled conversation kind = %s, want scheduled (unpromoted)", kind)
+	}
+}
+
 func TestScheduledTaskRepositoryFinishNoChangeAndFailureTransitions(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
@@ -1413,4 +1483,13 @@ func createScheduledConversation(t *testing.T, ctx context.Context, conversation
 		t.Fatalf("create conversation: %v", err)
 	}
 	return c
+}
+
+func scheduledConversationKind(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id string) string {
+	t.Helper()
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT kind FROM conversations WHERE id = $1::uuid`, id).Scan(&kind); err != nil {
+		t.Fatalf("read conversation kind: %v", err)
+	}
+	return kind
 }
