@@ -55,4 +55,13 @@ describe('MarkdownMessage', () => {
 		const { container } = render(MarkdownMessage, { content: '| a | b |\n|---|---|\n| 1 | 2 |' });
 		expect(container.querySelector('.table-scroll table')).not.toBeNull();
 	});
+
+	it('wraps rendered tables in a horizontal scroll container', () => {
+		const md = '| Date | Details |\n| --- | --- |\n| Mon 27 Jul | 13 km easy |';
+		const { container } = render(MarkdownMessage, { content: md });
+		const table = container.querySelector('table');
+		expect(table).not.toBeNull();
+		const wrapper = table?.closest('.table-scroll');
+		expect(wrapper).not.toBeNull();
+	});
 });
