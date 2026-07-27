@@ -71,6 +71,7 @@ export interface ChatMessage {
 	documentReferences?: ChatDocumentReference[];
 	scheduledArtifacts?: ScheduledArtifact[];
 	stopped?: boolean;
+	purpose?: string;
 }
 
 export interface CredentialField {

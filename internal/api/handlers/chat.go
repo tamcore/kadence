@@ -246,6 +246,7 @@ type messageDTO struct {
 	ID                 int64                         `json:"id"`
 	Role               string                        `json:"role"`
 	Content            string                        `json:"content"`
+	Purpose            string                        `json:"purpose,omitempty"`
 	Attachments        []chat.EventAttachment        `json:"attachments"`
 	DocumentReferences []chat.EventDocumentReference `json:"documentReferences"`
 	ScheduledArtifacts []scheduled.ChatArtifact      `json:"scheduledArtifacts,omitempty"`
@@ -271,6 +272,7 @@ func toMessageDTO(message model.Message) messageDTO {
 	}
 	return messageDTO{
 		ID: message.ID, Role: message.Role, Content: message.Content,
+		Purpose:     message.Purpose,
 		Attachments: attachments, DocumentReferences: references,
 	}
 }

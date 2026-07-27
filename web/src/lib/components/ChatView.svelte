@@ -124,6 +124,9 @@
 						data-testid={`chat-message-${m.role}`}
 					>
 						{#if m.role === 'assistant'}
+							{#if m.purpose === 'scheduled_delivery'}
+								<div class="scheduled-badge">🔔 Scheduled result</div>
+							{/if}
 							{#if m.parts?.length}
 								{#each m.parts as part, j (part.kind === 'scheduled'
 									? `scheduled-${part.artifact.handoffId}`
@@ -286,6 +289,11 @@
 		font-size: 0.75rem;
 		color: var(--text-muted);
 		font-style: italic;
+	}
+	.scheduled-badge {
+		align-self: flex-start;
+		font-size: 0.75rem;
+		color: var(--text-muted);
 	}
 	.stop-btn {
 		align-self: center;

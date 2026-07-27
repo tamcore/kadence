@@ -372,6 +372,37 @@ func TestChatMessagesHydratesScheduledArtifactsOnce(t *testing.T) {
 	}
 }
 
+func TestMessagesExposeScheduledDeliveryPurpose(t *testing.T) {
+	messages := fakeMsgLister{msgs: []model.Message{
+		{ID: 2, Role: model.MsgRoleUser, Content: "run my morning check"},
+		{ID: 3, Role: model.MsgRoleAssistant, Content: "delivered result", Purpose: "scheduled_delivery"},
+	}}
+	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, messages, nil, nil)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/conversations/chat-conv-1/messages", nil), 7), "id", chatTestConversationID)
+	rec := httptest.NewRecorder()
+
+	h.Messages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	found := false
+	for _, m := range response.Data {
+		if m["purpose"] == "scheduled_delivery" && m["content"] == "delivered result" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no message with purpose=scheduled_delivery: %v", response.Data)
+	}
+}
+
 func TestChatMessagesReturnsSafeErrorWhenArtifactHydrationFails(t *testing.T) {
 	hydrator := &fakeChatArtifactHydrator{err: errors.New("database unavailable")}
 	h := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, fakeMsgLister{msgs: []model.Message{{ID: 9, Role: model.MsgRoleAssistant, Content: "reply"}}}, nil, hydrator)

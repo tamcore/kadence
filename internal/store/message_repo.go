@@ -449,7 +449,7 @@ func addMessageWithPurpose(
 // ListByConversation returns a conversation's messages in chronological order.
 func (r *MessageRepository) ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id::text, role, content, tool_calls, created_at FROM messages
+		`SELECT id, conversation_id::text, role, content, tool_calls, purpose, created_at FROM messages
 		 WHERE conversation_id = $1::uuid ORDER BY id`, conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("list messages: %w", err)
@@ -470,7 +470,7 @@ func (r *MessageRepository) ListChatHistory(
 	ctx context.Context, conversationID string,
 ) ([]model.Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT m.id, m.conversation_id::text, m.role, m.content, m.tool_calls, m.created_at
+		`SELECT m.id, m.conversation_id::text, m.role, m.content, m.tool_calls, m.purpose, m.created_at
 		   FROM messages AS m
 		   JOIN conversations AS c ON c.id = m.conversation_id
 		  WHERE m.conversation_id = $1::uuid
@@ -610,9 +610,9 @@ func (r *MessageRepository) GetByID(
 // preserving chronological order in the returned conversation history.
 func (r *MessageRepository) ListRecentByConversation(ctx context.Context, conversationID string, limit int) ([]model.Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id, role, content, tool_calls, created_at
+		`SELECT id, conversation_id, role, content, tool_calls, purpose, created_at
 		   FROM (
-		        SELECT id, conversation_id::text, role, content, tool_calls, created_at
+		        SELECT id, conversation_id::text, role, content, tool_calls, purpose, created_at
 		          FROM messages
 		         WHERE conversation_id = $1::uuid
 		         ORDER BY id DESC
@@ -637,9 +637,9 @@ func (r *MessageRepository) ListRecentByConversation(ctx context.Context, conver
 // and run history but cannot consume the definition compiler's bounded context.
 func (r *MessageRepository) ListRecentDefinitionByConversation(ctx context.Context, conversationID string, limit int) ([]model.Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id, role, content, tool_calls, created_at
+		`SELECT id, conversation_id, role, content, tool_calls, purpose, created_at
 		   FROM (
-		        SELECT id, conversation_id::text, role, content, tool_calls, created_at
+		        SELECT id, conversation_id::text, role, content, tool_calls, purpose, created_at
 		          FROM messages
 		         WHERE conversation_id = $1::uuid AND purpose = $2
 		         ORDER BY id DESC
@@ -871,7 +871,7 @@ func scanMessages(rows pgx.Rows) ([]model.Message, error) {
 	for rows.Next() {
 		var m model.Message
 		var tcRaw []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &tcRaw, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &tcRaw, &m.Purpose, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		if len(tcRaw) > 0 {

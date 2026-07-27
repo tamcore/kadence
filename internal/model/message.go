@@ -74,5 +74,9 @@ type Message struct {
 	ToolCalls          []MessageToolCall
 	Attachments        []MessageAttachment
 	DocumentReferences []MessageDocumentReference
-	CreatedAt          time.Time
+	// Purpose distinguishes ordinary chat turns from scheduled-task rows
+	// ("chat", "scheduled_definition", "scheduled_delivery"). Populated by
+	// read paths that select it; empty for callers that don't need it.
+	Purpose   string
+	CreatedAt time.Time
 }
