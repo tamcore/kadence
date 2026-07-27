@@ -648,6 +648,22 @@ func TestDeleteConversationScheduledRunConflict(t *testing.T) {
 	}
 }
 
+func TestDeleteConversationActiveDeliveryConflict(t *testing.T) {
+	convs := &fakeConvLister{deleteError: store.ErrConversationHasActiveDelivery}
+	pauser := &fakeScheduledConversationPauser{}
+	h := handlers.NewChat(&fakeStreamer{}, convs, fakeMsgLister{}, pauser, nil)
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/1", nil), 7), "id", "1")
+	rec := httptest.NewRecorder()
+	h.DeleteConversation(rec, req)
+	if rec.Code != http.StatusConflict || convs.deleteCalls != 1 {
+		t.Fatalf("status=%d deletes=%d body=%s", rec.Code, convs.deleteCalls, rec.Body.String())
+	}
+	const wantMessage = "This chat has an active scheduled task delivering into it. Pause or delete that task first."
+	if !strings.Contains(rec.Body.String(), wantMessage) {
+		t.Fatalf("body=%s, want message %q", rec.Body.String(), wantMessage)
+	}
+}
+
 func patchReq(t *testing.T, body string) *http.Request { //nolint:unparam
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPatch, "/api/conversations/1", strings.NewReader(body))

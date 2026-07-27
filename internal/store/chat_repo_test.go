@@ -929,6 +929,47 @@ func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDeliv
 	}
 }
 
+// TestChatRepositoryDeleteBlockedByActiveDeliveryReturnsSentinel covers the
+// error-mapping half of the blocked-delete path exercised by
+// TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDelivery:
+// when the delivery_conversation_id FK (ON DELETE RESTRICT) blocks the delete,
+// conversations.Delete must return the distinguishable
+// store.ErrConversationHasActiveDelivery sentinel (via errors.Is), not just a
+// generic wrapped error, so handlers can map it to a friendly 409.
+func TestChatRepositoryDeleteBlockedByActiveDeliveryReturnsSentinel(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "delete-sentinel", "delete-sentinel@example.com")
+	source, err := conversations.Create(ctx, owner.ID, "Source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: owner.ID, SourceConversationID: source.ID,
+		SourceUserMessageID: prompt.ID, SourceContentFingerprint: handoffFingerprint(70), InvocationOrdinal: 1, Title: "Confirmed", Timezone: scheduledTimezoneUTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handoffs.MarkTaskReady(ctx, owner.ID, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = 'active' WHERE id = $1::uuid`, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = conversations.Delete(ctx, source.ID, owner.ID)
+	if !errors.Is(err, store.ErrConversationHasActiveDelivery) {
+		t.Fatalf("Delete err = %v, want errors.Is(err, store.ErrConversationHasActiveDelivery)", err)
+	}
+}
+
 // TestChatRepositoryDeleteChatWithOnlyDraftHandoffCleansUp covers the
 // draft-only happy path of conversations.Delete: a source chat whose only
 // handoff is still an unconfirmed draft (no active/confirmed task delivering

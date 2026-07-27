@@ -507,6 +507,11 @@ func (h *Chat) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.convs.Delete(r.Context(), id, u.ID); err != nil {
+		if errors.Is(err, store.ErrConversationHasActiveDelivery) {
+			RespondError(w, http.StatusConflict,
+				"This chat has an active scheduled task delivering into it. Pause or delete that task first.")
+			return
+		}
 		RespondError(w, http.StatusInternalServerError, "could not delete conversation")
 		return
 	}

@@ -6,10 +6,16 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tamcore/kadence/internal/model"
 )
+
+// ErrConversationHasActiveDelivery is returned by Delete when the conversation
+// is the active delivery_conversation_id of a scheduled task (ON DELETE
+// RESTRICT). Handlers should map this to a 409, not a generic 500.
+var ErrConversationHasActiveDelivery = errors.New("store: conversation has an active scheduled delivery")
 
 // ConversationRepository accesses the conversations table.
 type ConversationRepository struct{ pool *pgxpool.Pool }
@@ -143,10 +149,23 @@ func (r *ConversationRepository) Delete(ctx context.Context, id string, userID i
 		}
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID); err != nil {
+		if isDeliveryConversationForeignKeyViolation(err) {
+			return ErrConversationHasActiveDelivery
+		}
 		return fmt.Errorf("delete conversation: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit delete conversation: %w", err)
 	}
 	return nil
+}
+
+// isDeliveryConversationForeignKeyViolation reports whether err is a Postgres
+// foreign-key violation (23503) caused by scheduled_tasks.delivery_conversation_id
+// still referencing this conversation (ON DELETE RESTRICT).
+func isDeliveryConversationForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23503" &&
+		pgErr.ConstraintName == "scheduled_tasks_delivery_conversation_id_fkey"
 }
