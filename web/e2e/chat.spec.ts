@@ -126,17 +126,17 @@ test('edits and regenerates persisted chat turns', async ({ page }) => {
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('keeps the desktop chat thread and composer in a shared 960px column', async ({ page }) => {
+test('keeps the desktop chat thread and composer in a shared 1200px column', async ({ page }) => {
 	await page.setViewportSize({ width: 1600, height: 1000 });
 	await login(page, USERNAME, PASSWORD);
 	await page.goto('/chat');
 
 	const thread = page.getByTestId('chat-thread');
 	const composer = page.getByTestId('chat-composer');
-	await expect(thread).toHaveCSS('max-width', '960px');
-	await expect(composer).toHaveCSS('max-width', '960px');
-	await expect(thread).toHaveJSProperty('clientWidth', 960);
-	await expect(composer).toHaveJSProperty('clientWidth', 960);
+	await expect(thread).toHaveCSS('max-width', '1200px');
+	await expect(composer).toHaveCSS('max-width', '1200px');
+	await expect(thread).toHaveJSProperty('clientWidth', 1200);
+	await expect(composer).toHaveJSProperty('clientWidth', 1200);
 });
 
 test('uses content-fit assistant and user bubbles on opposite sides', async ({ page }, testInfo) => {
