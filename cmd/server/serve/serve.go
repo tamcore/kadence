@@ -381,6 +381,10 @@ func Run() error {
 		slog.Info("chat disabled (KADENCE_LLM_API_KEY not set)")
 	}
 
+	if startPushDispatcher(rootCtx, &bgWG, pool, cfg) {
+		slog.Info("push dispatcher enabled")
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           api.NewRouter(deps),
