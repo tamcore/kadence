@@ -47,6 +47,7 @@ type Deps struct {
 	WebAuthn    *handlers.WebAuthn
 	Scheduled   *handlers.Scheduled
 	MCPAudit    *handlers.MCPAudit
+	Push        *handlers.Push
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -173,6 +174,12 @@ func mountAuth(r chi.Router, deps Deps) {
 			r.Post("/api/scheduled/tasks/{id}/run", deps.Scheduled.RunNow)
 			r.Post("/api/scheduled/tasks/{id}/read", deps.Scheduled.MarkRead)
 			r.Post("/api/scheduled/tasks/{id}/discard", deps.Scheduled.Discard)
+		}
+
+		if deps.Push != nil {
+			r.Get("/api/push/config", deps.Push.Config)
+			r.Post("/api/push/subscriptions", deps.Push.Subscribe)
+			r.Delete("/api/push/subscriptions", deps.Push.Unsubscribe)
 		}
 
 		if deps.Context != nil {

@@ -381,6 +381,8 @@ func Run() error {
 		slog.Info("chat disabled (KADENCE_LLM_API_KEY not set)")
 	}
 
+	deps.Push = newPushHandler(pool, cfg)
+
 	if startPushDispatcher(rootCtx, &bgWG, pool, cfg) {
 		slog.Info("push dispatcher enabled")
 	}
