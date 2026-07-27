@@ -223,7 +223,7 @@
 
 <style>
 	.chat {
-		--chat-content-width: 960px;
+		--chat-content-width: 1200px;
 		display: flex;
 		flex-direction: column;
 		height: 100%;
