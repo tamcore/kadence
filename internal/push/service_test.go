@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -159,5 +160,37 @@ func TestSendToUserNoSubscriptionsIsNoop(t *testing.T) {
 
 	if err := svc.SendToUser(context.Background(), 1, Payload{Title: "t"}); err != nil {
 		t.Fatalf("expected nil error for no subscriptions, got %v", err)
+	}
+}
+
+func TestSendToUserReturnsErrorWhenAllSendsFail(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	defer failing.Close()
+
+	vapidPub, vapidPriv, p256dh, auth := testKeys(t)
+
+	fake := &fakeStore{subs: []model.PushSubscription{{ID: "s1", Endpoint: failing.URL, P256dh: p256dh, Auth: auth}}}
+	svc := NewService(fake, vapidPub, vapidPriv, "mailto:a@b.c", slog.Default())
+
+	err := svc.SendToUser(context.Background(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
+	if err == nil {
+		t.Fatal("expected error when every send fails, got nil")
+	}
+	if fake.deleted["s1"] {
+		t.Fatal("did not expect a non-410/404 failure to prune below the failure cap")
+	}
+}
+
+func TestSendToUserPropagatesListError(t *testing.T) {
+	sentinel := errors.New("boom from store")
+	fake := &fakeStore{listErr: sentinel}
+	svc := NewService(fake, "pub", "priv", "mailto:a@b.c", slog.Default())
+
+	err := svc.SendToUser(context.Background(), 1, Payload{Title: "t"})
+	if err == nil {
+		t.Fatal("expected error propagated from ListByUser, got nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected error to wrap sentinel, got %v", err)
 	}
 }
