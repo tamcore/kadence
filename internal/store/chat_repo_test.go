@@ -928,3 +928,49 @@ func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDeliv
 		t.Fatalf("blocked delete source conversation count=%d err=%v", sourceCount, err)
 	}
 }
+
+// TestChatRepositoryDeleteChatWithOnlyDraftHandoffCleansUp covers the
+// draft-only happy path of conversations.Delete: a source chat whose only
+// handoff is still an unconfirmed draft (no active/confirmed task delivering
+// into it) can be deleted, and cleanupDraftHandoffsForConversation hard-cleans
+// the draft handoff, its draft scheduled_task, and that task's own Scheduled
+// definition conversation.
+func TestChatRepositoryDeleteChatWithOnlyDraftHandoffCleansUp(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "delete-draft-handoff", "delete-draft-handoff@example.com")
+	source, err := conversations.Create(ctx, owner.ID, "Source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{UserID: owner.ID, SourceConversationID: source.ID,
+		SourceUserMessageID: prompt.ID, SourceContentFingerprint: handoffFingerprint(63), InvocationOrdinal: 1, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conversations.Delete(ctx, source.ID, owner.ID); err != nil {
+		t.Fatalf("Delete draft-only source chat err=%v, want nil", err)
+	}
+	var handoffCount, taskCount, scheduledConversationCount, sourceCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&handoffCount); err != nil || handoffCount != 0 {
+		t.Fatalf("draft handoff count=%d err=%v, want 0", handoffCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, draft.Task.ID).Scan(&taskCount); err != nil || taskCount != 0 {
+		t.Fatalf("draft task count=%d err=%v, want 0", taskCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, draft.Task.ConversationID).Scan(&scheduledConversationCount); err != nil || scheduledConversationCount != 0 {
+		t.Fatalf("draft scheduled conversation count=%d err=%v, want 0", scheduledConversationCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, source.ID).Scan(&sourceCount); err != nil || sourceCount != 0 {
+		t.Fatalf("deleted source conversation count=%d err=%v, want 0", sourceCount, err)
+	}
+}
