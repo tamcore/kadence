@@ -60,6 +60,29 @@ func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
 	}
 }
 
+func TestScheduledTaskCreateHasNilDeliveryConversation(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "delivery-owner", "delivery-owner@example.com")
+	conversation := createScheduledConversation(t, ctx, conversations, owner.ID)
+
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: conversation.ID, Name: "Draft",
+		Kind: model.ScheduledTaskKindReminder, State: model.ScheduledTaskStateDraft,
+		Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if task.DeliveryConversationID != nil {
+		t.Fatalf("new draft delivery = %v, want nil", *task.DeliveryConversationID)
+	}
+}
+
 func TestScheduledTaskRepositoryOwnerScopeAndActiveLimit(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

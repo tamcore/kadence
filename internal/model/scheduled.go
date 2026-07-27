@@ -41,31 +41,32 @@ const (
 
 // ScheduledTask is a confirmed or in-progress unattended task definition.
 type ScheduledTask struct {
-	ID                  string
-	UserID              int64
-	ConversationID      string
-	Version             int
-	Name                string
-	Kind                string
-	State               string
-	CompiledPrompt      string
-	OneOffAt            *time.Time
-	DTStart             *time.Time
-	RRULE               string
-	Timezone            string
-	ExecutionMode       string
-	AuthorizedTools     []string
-	DeliveryPolicy      string
-	InitialRun          string
-	StopCondition       string
-	StaticMessage       string
-	MonitoringState     json.RawMessage
-	ConsecutiveFailures int
-	NextRunAt           *time.Time
-	LastRunAt           *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	DeletedAt           *time.Time
+	ID                     string
+	UserID                 int64
+	ConversationID         string
+	DeliveryConversationID *string
+	Version                int
+	Name                   string
+	Kind                   string
+	State                  string
+	CompiledPrompt         string
+	OneOffAt               *time.Time
+	DTStart                *time.Time
+	RRULE                  string
+	Timezone               string
+	ExecutionMode          string
+	AuthorizedTools        []string
+	DeliveryPolicy         string
+	InitialRun             string
+	StopCondition          string
+	StaticMessage          string
+	MonitoringState        json.RawMessage
+	ConsecutiveFailures    int
+	NextRunAt              *time.Time
+	LastRunAt              *time.Time
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	DeletedAt              *time.Time
 }
 
 // ScheduledTaskRun is the durable record for exactly one task occurrence.

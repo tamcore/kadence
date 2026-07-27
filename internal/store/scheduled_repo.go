@@ -48,7 +48,8 @@ func NewScheduledTaskRepository(pool *pgxpool.Pool, maxActivePerUser int) *Sched
 const scheduledTaskCols = "id::text, user_id, conversation_id::text, version, name, kind, state, compiled_prompt, " +
 	"one_off_at, dtstart, COALESCE(rrule, ''), timezone, execution_mode, authorized_tools, monitoring_state, " +
 	"delivery_policy, initial_run, stop_condition, static_message, " +
-	"consecutive_failures, next_run_at, last_run_at, created_at, updated_at, deleted_at"
+	"consecutive_failures, next_run_at, last_run_at, created_at, updated_at, deleted_at, " +
+	"delivery_conversation_id::text"
 
 type rowScanner interface{ Scan(...any) error }
 
@@ -60,7 +61,7 @@ func scanScheduledTask(row rowScanner) (model.ScheduledTask, error) {
 		&task.CompiledPrompt, &task.OneOffAt, &task.DTStart, &task.RRULE, &task.Timezone, &task.ExecutionMode,
 		&tools, &monitoring, &task.DeliveryPolicy, &task.InitialRun, &task.StopCondition, &task.StaticMessage,
 		&task.ConsecutiveFailures, &task.NextRunAt, &task.LastRunAt, &task.CreatedAt,
-		&task.UpdatedAt, &task.DeletedAt,
+		&task.UpdatedAt, &task.DeletedAt, &task.DeliveryConversationID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.ScheduledTask{}, ErrNotFound
