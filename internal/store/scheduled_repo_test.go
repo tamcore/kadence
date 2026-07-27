@@ -1023,6 +1023,70 @@ func TestScheduledTaskRepositoryFinishSuccessIsAtomicAndCASProtected(t *testing.
 	}
 }
 
+func TestScheduledTaskRepositoryFinishSuccessDeliversToChatConversationAndBumpsActivity(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledTaskRepository(pool, 10)
+	owner := createScheduledUser(t, ctx, users, "delivery-target-owner", "delivery-target@example.com")
+	scheduledConv := createScheduledConversation(t, ctx, conversations, owner.ID)
+	chatConv, err := conversations.Create(ctx, owner.ID, "Ongoing chat")
+	if err != nil {
+		t.Fatalf("create chat conversation: %v", err)
+	}
+	task, err := repo.Create(ctx, model.ScheduledTask{
+		UserID: owner.ID, ConversationID: scheduledConv.ID, Name: "Delivers to chat", Kind: model.ScheduledTaskKindData,
+		State: model.ScheduledTaskStateActive, CompiledPrompt: scheduledCompiledQuery, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE scheduled_tasks SET delivery_conversation_id = $1::uuid WHERE id = $2::uuid`,
+		chatConv.ID, task.ID); err != nil {
+		t.Fatalf("set delivery conversation: %v", err)
+	}
+	var before time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT last_activity_at FROM conversations WHERE id = $1::uuid`, chatConv.ID).Scan(&before); err != nil {
+		t.Fatalf("read chat last_activity_at: %v", err)
+	}
+	run, err := repo.CreateRun(ctx, owner.ID, model.ScheduledTaskRun{
+		TaskID: task.ID, OccurrenceKey: "deliver-to-chat", ScheduledFor: time.Now().UTC(), State: model.ScheduledTaskRunStateRunning,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.FinishSuccess(ctx, model.ScheduledExecutionSuccess{
+		RunID: run.ID, UserID: owner.ID, ConversationID: scheduledConv.ID,
+		RunState: model.ScheduledTaskRunStateDelivered, TaskState: model.ScheduledTaskStateActive,
+		Content: "the result", Unread: true, MonitoringState: json.RawMessage(`{}`), NextRunAt: nil,
+	}); err != nil {
+		t.Fatalf("FinishSuccess: %v", err)
+	}
+
+	chatHistory, err := messages.ListByConversation(ctx, chatConv.ID)
+	if err != nil || len(chatHistory) != 1 || chatHistory[0].Content != "the result" {
+		t.Fatalf("delivery not in chat conversation: %+v, err=%v", chatHistory, err)
+	}
+	scheduledHistory, err := messages.ListByConversation(ctx, scheduledConv.ID)
+	if err != nil || len(scheduledHistory) != 0 {
+		t.Fatalf("delivery leaked into scheduled conversation: %+v, err=%v", scheduledHistory, err)
+	}
+	var after time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT last_activity_at FROM conversations WHERE id = $1::uuid`, chatConv.ID).Scan(&after); err != nil {
+		t.Fatalf("read chat last_activity_at: %v", err)
+	}
+	if !after.After(before) {
+		t.Fatalf("last_activity_at not bumped: before=%v after=%v", before, after)
+	}
+}
+
 func TestScheduledTaskRepositoryFinishNoChangeAndFailureTransitions(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

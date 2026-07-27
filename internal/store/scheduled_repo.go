@@ -919,14 +919,16 @@ func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success mod
 		return fmt.Errorf("begin scheduled success: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var taskID, conversationID, currentTaskState string
+	var taskID, conversationID, currentTaskState, deliveryConversationID string
 	err = tx.QueryRow(ctx,
-		`SELECT task.id::text, task.conversation_id::text, task.state
+		`SELECT task.id::text, task.conversation_id::text, task.state,
+		        COALESCE(task.delivery_conversation_id::text, task.conversation_id::text)
 		 FROM scheduled_task_runs AS run
 		 JOIN scheduled_tasks AS task ON task.id = run.task_id
 		 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
 		 FOR UPDATE OF run, task`,
-		success.RunID, success.UserID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &conversationID, &currentTaskState)
+		success.RunID, success.UserID, model.ScheduledTaskRunStateRunning).
+		Scan(&taskID, &conversationID, &currentTaskState, &deliveryConversationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -946,8 +948,14 @@ func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success mod
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO messages (conversation_id, role, content, purpose)
 			 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')`,
-			conversationID, model.MsgRoleAssistant, success.Content); err != nil {
+			deliveryConversationID, model.MsgRoleAssistant, success.Content); err != nil {
 			return fmt.Errorf("insert scheduled delivery: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE conversations SET last_activity_at = GREATEST(last_activity_at, NOW())
+			 WHERE id = $1::uuid AND kind = $2`,
+			deliveryConversationID, model.ConversationKindChat); err != nil {
+			return fmt.Errorf("bump delivery conversation activity: %w", err)
 		}
 	}
 	if _, err := tx.Exec(ctx,
