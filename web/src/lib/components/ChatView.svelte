@@ -27,6 +27,7 @@
 	let threadEl: HTMLDivElement | null = null;
 	let editingMessageId = $state<number | null>(null);
 	let anchorId = $state<number | null>(null);
+	let anchorConsumed = $state(false);
 	let pendingAction = $state<
 		| { kind: 'edit'; messageId: number; text: string }
 		| { kind: 'regenerate'; messageId: number }
@@ -49,15 +50,18 @@
 		void $messages.length;
 		void lastMessage?.content.length;
 		void lastMessage?.scheduledArtifacts;
-		if (anchorId !== null) return; // deep-link: don't fight the anchor scroll
+		if (anchorId !== null && !anchorConsumed) return; // deep-link: don't fight the anchor scroll until consumed
 		if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
 	});
 
 	$effect(() => {
-		if (anchorId === null || !threadEl) return;
+		if (anchorId === null || anchorConsumed || !threadEl) return;
 		void $messages.length; // re-run as messages load
 		const el = threadEl.querySelector(`#msg-${anchorId}`);
-		if (el) el.scrollIntoView({ block: 'center' });
+		if (el) {
+			el.scrollIntoView({ block: 'center' });
+			anchorConsumed = true; // scroll exactly once, when the element first appears
+		}
 	});
 
 	async function submit(
