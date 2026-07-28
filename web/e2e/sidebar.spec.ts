@@ -327,7 +327,9 @@ test('overlays desktop conversation actions without reserving title width', asyn
 	const menu = page.getByRole('menu', { name: `${longConversationTitle} actions`, exact: true });
 	await expect(trigger).toHaveAttribute('aria-expanded', 'true');
 	await expect(menu).toBeVisible();
+	await page.getByRole('button', { name: 'New chat', exact: true }).focus();
 	await page.mouse.move(1000, 500);
+	await expect(menu).toBeVisible();
 	await expect(inactiveActions).toHaveCSS('opacity', '1');
 	await expect(inactiveActions).toHaveCSS('pointer-events', 'auto');
 
@@ -345,7 +347,7 @@ test('keeps mobile drawer chrome bounded and opens overflow actions for touch na
 	try {
 		const page = await context.newPage();
 		await installSidebarFixture(page, testInfo);
-		await page.goto('/');
+		await page.goto('/chat/recent-01');
 		await page.getByRole('button', { name: 'Menu', exact: true }).click();
 
 		const sidebar = page.locator('.sidebar');
@@ -355,6 +357,9 @@ test('keeps mobile drawer chrome bounded and opens overflow actions for touch na
 		const row = conversationRow(page, 'Recent first');
 		const actions = row.locator('.row-actions');
 		await expect(actions).toHaveCSS('opacity', '1');
+		const activeRow = conversationRow(page, 'Recent first');
+		const activeRowBackground = await activeRow.evaluate((element) => getComputedStyle(element).backgroundColor);
+		await expect(activeRow.locator('.row-actions')).toHaveCSS('background-color', activeRowBackground);
 		const trigger = row.getByRole('button', { name: 'Recent first actions', exact: true });
 		await expect(trigger).toBeVisible();
 		await expect(row.locator('.pin-action')).toHaveCSS('display', 'none');
@@ -370,8 +375,18 @@ test('opens the overflow menu with the keyboard and keeps future actions disable
 	await page.goto('/');
 
 	const row = conversationRow(page, 'Recent first');
-	await row.getByRole('link', { name: 'Recent first', exact: true }).focus();
+	const link = row.getByRole('link', { name: 'Recent first', exact: true });
+	const pin = row.getByRole('button', { name: 'Pin conversation', exact: true });
+	await link.focus();
+	await expect(link).toBeFocused();
+	await expect(row.locator('.row-actions')).toHaveCSS('opacity', '1');
+	await page.keyboard.press('Tab');
+	await expect(pin).toBeFocused();
+	await expect(row.locator('.row-actions')).toHaveCSS('opacity', '1');
+	await page.keyboard.press('Tab');
 	const trigger = row.getByRole('button', { name: 'Recent first actions', exact: true });
+	await expect(trigger).toBeFocused();
+	await expect(row.locator('.row-actions')).toHaveCSS('opacity', '1');
 	await trigger.press('Enter');
 	const menu = page.getByRole('menu', { name: 'Recent first actions', exact: true });
 	await expect(menu).toBeVisible();

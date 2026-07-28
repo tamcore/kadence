@@ -338,6 +338,7 @@
 	.conversation-list a { display: block; width: 100%; min-width: 0; overflow: hidden; color: var(--text); padding: 8px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 	.conversation-list a.active { font-weight: 650; }
 	.row-actions { position: absolute; top: 0; right: 0; bottom: 0; z-index: 1; display: flex; align-items: center; background: var(--surface); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+	.conversation-list li.active .row-actions { background: var(--bg); }
 	.conversation-list li:is(:hover, :focus-within, :has([aria-expanded="true"])) .row-actions { background: var(--bg); opacity: 1; pointer-events: auto; }
 	.icon-button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; }
 	.icon-button:hover, .icon-button:focus-visible { background: var(--surface); color: var(--text); }
