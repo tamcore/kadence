@@ -322,7 +322,16 @@ test('overlays desktop conversation actions without reserving title width', asyn
 	expect(actionBox!.x).toBeLessThan(hoveredLinkBox!.x + hoveredLinkBox!.width);
 	expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
 
+	const trigger = inactiveRow.getByRole('button', { name: `${longConversationTitle} actions`, exact: true });
+	await trigger.click();
+	const menu = page.getByRole('menu', { name: `${longConversationTitle} actions`, exact: true });
+	await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+	await expect(menu).toBeVisible();
 	await page.mouse.move(1000, 500);
+	await expect(inactiveActions).toHaveCSS('opacity', '1');
+	await expect(inactiveActions).toHaveCSS('pointer-events', 'auto');
+
+	await menu.press('Escape');
 	await link.focus();
 	await expect(inactiveActions).toHaveCSS('opacity', '1');
 });
