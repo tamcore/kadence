@@ -21,8 +21,11 @@ import (
 const maxPushFailures = 5
 
 // pushTTLSeconds is the TTL (in seconds) the push service is asked to hold a
-// notification for if the user's device is offline.
-const pushTTLSeconds = 30
+// notification for if the user's device is offline. 24h so a locked phone or a
+// briefly-disconnected browser still receives the digest when it next reconnects
+// — a short TTL silently drops notifications for any device not reachable at the
+// instant of send.
+const pushTTLSeconds = 86400
 
 // SubscriptionStore persists and queries browser Web Push subscriptions.
 // Satisfied in production by *store.PushSubscriptionRepository.
