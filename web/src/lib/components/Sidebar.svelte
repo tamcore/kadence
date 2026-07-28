@@ -333,12 +333,12 @@
 	.conversation-section > div, .section-toggle, .conversation-list { min-width: 0; }
 	.section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: 650 .72rem/1 var(--font); letter-spacing: .06em; padding: 7px 6px; text-align: left; text-transform: uppercase; }
 	.conversation-list { overflow: hidden; list-style: none; margin: 0; padding: 0; }
-	.conversation-list li { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
+	.conversation-list li { position: relative; display: flex; align-items: center; min-width: 0; border-radius: 6px; }
 	.conversation-list li:hover, .conversation-list li:focus-within, .conversation-list li.active { background: var(--bg); }
-	.conversation-list a { flex: 1; min-width: 0; overflow: hidden; color: var(--text); padding: 8px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+	.conversation-list a { display: block; width: 100%; min-width: 0; overflow: hidden; color: var(--text); padding: 8px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 	.conversation-list a.active { font-weight: 650; }
-	.row-actions { display: flex; flex: 0 0 auto; opacity: 0; transition: opacity .12s ease; }
-	.conversation-list li:is(:hover, :focus-within, .active), .conversation-list li:has([aria-expanded="true"]) { .row-actions { opacity: 1; } }
+	.row-actions { position: absolute; top: 0; right: 0; bottom: 0; z-index: 1; display: flex; align-items: center; background: var(--surface); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+	.conversation-list li:is(:hover, :focus-within, :has([aria-expanded="true"])) .row-actions { background: var(--bg); opacity: 1; pointer-events: auto; }
 	.icon-button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; }
 	.icon-button:hover, .icon-button:focus-visible { background: var(--surface); color: var(--text); }
 	.icon-button svg { width: 15px; height: 15px; }
@@ -355,7 +355,8 @@
 	.rename-actions { display: flex; justify-content: flex-end; gap: 8px; }
 	.error { color: var(--danger); font-size: .85rem; }
 	@media (hover: none), (pointer: coarse) {
-		.row-actions { opacity: 1; }
+		.conversation-list { overflow: visible; }
+		.row-actions { opacity: 1; pointer-events: auto; }
 		.row-actions .pin-action { display: none; }
 	}
 </style>

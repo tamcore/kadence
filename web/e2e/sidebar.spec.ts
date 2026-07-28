@@ -289,19 +289,42 @@ test('persists a collapsed recents section across reload', async ({ page }, test
 	await expect(page.locator('#sidebar-recent-conversations')).toHaveCount(0);
 });
 
-test('reveals desktop conversation actions on hover and keyboard focus', async ({ page }, testInfo) => {
+test('overlays desktop conversation actions without reserving title width', async ({ page }, testInfo) => {
 	await page.setViewportSize({ width: 1280, height: 700 });
 	await installSidebarFixture(page, testInfo);
-	await page.goto('/');
+	await page.goto('/chat/recent-01');
 
-	const row = conversationRow(page, 'Recent first');
-	const actions = row.locator('.row-actions');
-	await expect(actions).toHaveCSS('opacity', '0');
-	await row.hover();
-	await expect(actions).toHaveCSS('opacity', '1');
+	const activeRow = conversationRow(page, 'Recent first');
+	const inactiveRow = conversationRow(page, longConversationTitle);
+	const activeActions = activeRow.locator('.row-actions');
+	const inactiveActions = inactiveRow.locator('.row-actions');
+	await expect(activeActions).toHaveCSS('opacity', '0');
+	await expect(inactiveActions).toHaveCSS('opacity', '0');
+	await expect(activeActions).toHaveCSS('pointer-events', 'none');
+	await expect(inactiveActions).toHaveCSS('pointer-events', 'none');
+
+	const link = inactiveRow.getByRole('link', { name: longConversationTitle, exact: true });
+	const initialLinkBox = await link.boundingBox();
+	const rowBox = await inactiveRow.boundingBox();
+	expect(initialLinkBox).not.toBeNull();
+	expect(rowBox).not.toBeNull();
+	expect(initialLinkBox!.x).toBeCloseTo(rowBox!.x, 3);
+	expect(initialLinkBox!.width).toBeCloseTo(rowBox!.width, 3);
+
+	await inactiveRow.hover();
+	await expect(inactiveActions).toHaveCSS('opacity', '1');
+	await expect(inactiveActions).toHaveCSS('pointer-events', 'auto');
+	const hoveredLinkBox = await link.boundingBox();
+	const actionBox = await inactiveActions.boundingBox();
+	expect(hoveredLinkBox).not.toBeNull();
+	expect(actionBox).not.toBeNull();
+	expect(hoveredLinkBox!.width).toBeCloseTo(initialLinkBox!.width, 3);
+	expect(actionBox!.x).toBeLessThan(hoveredLinkBox!.x + hoveredLinkBox!.width);
+	expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
+
 	await page.mouse.move(1000, 500);
-	await row.getByRole('link', { name: 'Recent first', exact: true }).focus();
-	await expect(actions).toHaveCSS('opacity', '1');
+	await link.focus();
+	await expect(inactiveActions).toHaveCSS('opacity', '1');
 });
 
 test('keeps mobile drawer chrome bounded and opens overflow actions for touch navigation', async ({ browser }, testInfo) => {
