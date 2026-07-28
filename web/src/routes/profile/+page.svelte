@@ -366,7 +366,7 @@
 			<h2>Notifications</h2>
 			<p class="muted">Get a push notification when a scheduled task delivers a result.</p>
 			{#if $pushPermission === 'denied'}
-				<p class="error" role="alert">
+				<p class="error">
 					Notifications are blocked in your browser settings. Re-enable them there first.
 				</p>
 			{:else}
