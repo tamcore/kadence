@@ -12,6 +12,7 @@
 	import McpServerForm from '$lib/components/McpServerForm.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import ActionMenu, { type ActionMenuItem } from '$lib/components/ActionMenu.svelte';
 
 	let servers = $state<McpServer[]>([]);
 	let canAdd = $state(false);
@@ -102,6 +103,17 @@
 		showAddForm = false;
 		formError = '';
 	}
+
+	function serverActions(server: McpServer): ActionMenuItem[] {
+		const items: ActionMenuItem[] = [{ label: 'View', href: `/mcp/${server.name}` }];
+		if (server.editable) {
+			items.push(
+				{ label: 'Edit', onSelect: () => startEdit(server) },
+				{ label: 'Delete', danger: true, onSelect: () => requestDelete(server) }
+			);
+		}
+		return items;
+	}
 </script>
 
 <div class="page">
@@ -148,6 +160,9 @@
 										<Button variant="danger" onclick={() => requestDelete(s)}>Delete</Button>
 									</div>
 								{/if}
+								<div class="mobile-actions">
+									<ActionMenu label={`Actions for ${s.name}`} items={serverActions(s)} />
+								</div>
 							</div>
 						{/if}
 					</li>
@@ -194,6 +209,7 @@
 		gap: 8px;
 	}
 	.card {
+		position: relative;
 		display: flex;
 		align-items: center;
 		gap: 10px;
@@ -247,7 +263,41 @@
 		gap: 8px;
 		flex-shrink: 0;
 	}
+	.mobile-actions { display: none; }
 	.add-section {
 		margin-top: 16px;
+	}
+
+	@media (max-width: 700px) {
+		.page { padding: 20px 16px; }
+		.list { gap: 10px; }
+		.card {
+			align-items: flex-start;
+			min-width: 0;
+			padding: 13px 48px 13px 14px;
+			border-radius: calc(var(--radius) + 2px);
+			background: var(--surface);
+		}
+		.card-link {
+			flex-wrap: wrap;
+			gap: 6px 8px;
+			min-width: 0;
+		}
+		.card-link > .muted {
+			flex-basis: 100%;
+			min-width: 0;
+		}
+		.name, .url { overflow-wrap: anywhere; }
+		.url {
+			margin-left: 0;
+			word-break: break-word;
+		}
+		.row-actions { display: none; }
+		.mobile-actions {
+			position: absolute;
+			top: 7px;
+			right: 7px;
+			display: block;
+		}
 	}
 </style>

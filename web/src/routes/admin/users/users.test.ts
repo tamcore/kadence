@@ -33,6 +33,31 @@ describe('admin users page', () => {
 		expect(screen.getByText('bob')).toBeInTheDocument();
 	});
 
+	it('exposes labeled mobile user cards with Edit and Delete menus while retaining the table', async () => {
+		listMock.mockResolvedValue([
+			{ id: 2, username: 'bob', email: 'bob.with.a.long.address@example.test', role: 'user' }
+		]);
+		render(Users);
+		await waitFor(() => expect(screen.getByText('bob')).toBeInTheDocument());
+
+		expect(screen.getByRole('table', { name: 'Users' })).toBeInTheDocument();
+		const card = screen.getByRole('row', { name: 'bob' });
+		expect(within(card).getByText('Username')).toBeInTheDocument();
+		expect(within(card).getByText('Email')).toBeInTheDocument();
+		expect(within(card).getByText('Role')).toBeInTheDocument();
+
+		await fireEvent.click(
+			within(card).getByRole('button', { name: 'Actions for bob', hidden: true })
+		);
+		const menu = screen.getByRole('menu', { hidden: true });
+		expect(menu).toHaveAttribute('aria-label', 'Actions for bob');
+		expect(within(menu).getByRole('menuitem', { name: 'Edit', hidden: true })).toBeInTheDocument();
+		expect(within(menu).getByRole('menuitem', { name: 'Delete', hidden: true })).toBeInTheDocument();
+
+		await fireEvent.click(within(menu).getByRole('menuitem', { name: 'Edit', hidden: true }));
+		expect(await screen.findByDisplayValue('bob')).toBeInTheDocument();
+	});
+
 	it('does not show a create form until "New user" is clicked', async () => {
 		listMock.mockResolvedValueOnce([]);
 		render(Users);

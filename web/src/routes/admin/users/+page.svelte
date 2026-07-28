@@ -9,6 +9,7 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import UserForm from '$lib/components/UserForm.svelte';
+	import ActionMenu from '$lib/components/ActionMenu.svelte';
 
 	let users = $state<User[]>([]);
 	let error = $state('');
@@ -89,17 +90,28 @@
 	{#if loading}
 		<p class="muted">Loading…</p>
 	{:else}
-		<table>
+		<table aria-label="Users">
 			<thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
 			<tbody>
 				{#each users as u (u.id)}
-					<tr>
-						<td>{u.username}</td>
-						<td>{u.email}</td>
-						<td>{u.role}</td>
+					<tr aria-label={u.username}>
+						<td><span class="mobile-label">Username</span><strong>{u.username}</strong></td>
+						<td><span class="mobile-label">Email</span><span>{u.email}</span></td>
+						<td><span class="mobile-label">Role</span><span>{u.role}</span></td>
 						<td class="row-actions">
-							<Button variant="ghost" onclick={() => openEdit(u)}>Edit</Button>
-							<Button variant="danger" onclick={() => requestDelete(u)}>Delete</Button>
+							<span class="desktop-actions">
+								<Button variant="ghost" onclick={() => openEdit(u)}>Edit</Button>
+								<Button variant="danger" onclick={() => requestDelete(u)}>Delete</Button>
+							</span>
+							<span class="mobile-actions">
+								<ActionMenu
+									label={`Actions for ${u.username}`}
+									items={[
+										{ label: 'Edit', onSelect: () => openEdit(u) },
+										{ label: 'Delete', danger: true, onSelect: () => requestDelete(u) }
+									]}
+								/>
+							</span>
 						</td>
 					</tr>
 				{/each}
@@ -156,8 +168,60 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.row-actions {
-		display: flex;
-		gap: 8px;
-		justify-content: flex-end;
+		text-align: right;
+	}
+	.desktop-actions { display: inline-flex; gap: 8px; }
+	.mobile-label, .mobile-actions { display: none; }
+
+	@media (max-width: 700px) {
+		table, tbody { display: block; width: 100%; min-width: 0; }
+		thead {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			padding: 0;
+			margin: -1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
+			border: 0;
+		}
+		tbody { display: grid; gap: 10px; }
+		tr {
+			position: relative;
+			display: block;
+			min-width: 0;
+			padding: 12px 48px 12px 14px;
+			border: 1px solid var(--border);
+			border-radius: calc(var(--radius) + 2px);
+			background: var(--surface);
+		}
+		td {
+			display: grid;
+			grid-template-columns: 72px minmax(0, 1fr);
+			gap: 10px;
+			min-width: 0;
+			padding: 4px 0;
+			border: 0;
+			overflow-wrap: anywhere;
+		}
+		.mobile-label {
+			display: block;
+			color: var(--text-muted);
+			font-size: 0.72rem;
+			font-weight: 650;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+		}
+		.row-actions {
+			position: absolute;
+			top: 7px;
+			right: 7px;
+			display: block;
+			width: auto;
+			padding: 0;
+		}
+		.desktop-actions { display: none; }
+		.mobile-actions { display: block; }
 	}
 </style>

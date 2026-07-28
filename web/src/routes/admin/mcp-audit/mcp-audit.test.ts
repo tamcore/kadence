@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import type { Writable } from 'svelte/store';
 import * as auditApi from '$lib/api/mcpAudit';
 
@@ -84,6 +84,31 @@ describe('/admin/mcp-audit', () => {
 		await waitFor(() => expect(detailSpy).toHaveBeenCalledWith(42));
 		expect(screen.getByText('{"limit":5}')).toBeInTheDocument();
 		expect(screen.getByText('{"count":1}')).toBeInTheDocument();
+	});
+
+	it('exposes complete mobile summaries and opens detail through the action menu', async () => {
+		isAdminStore.set(true);
+		vi.spyOn(auditApi, 'listMcpAuditCalls').mockResolvedValue({ items: [call] });
+		const detailSpy = vi.spyOn(auditApi, 'getMcpAuditCall').mockResolvedValue({
+			...call,
+			arguments: '{"limit":5}',
+			result: '{"count":1}',
+			error: ''
+		});
+		render(Page);
+		await waitFor(() => expect(screen.getByText('garmin__activities')).toBeInTheDocument());
+
+		const card = screen.getByRole('row', { name: 'garmin__activities audit call' });
+		for (const label of ['Status', 'Started', 'Tool', 'Source', 'Actor', 'Model', 'Duration']) {
+			expect(within(card).getByText(label)).toBeInTheDocument();
+		}
+
+		await fireEvent.click(
+			within(card).getByRole('button', { name: 'Actions for call 42', hidden: true })
+		);
+		await fireEvent.click(screen.getByRole('menuitem', { name: 'View', hidden: true }));
+		await waitFor(() => expect(detailSpy).toHaveBeenCalledWith(42));
+		expect(screen.getByLabelText('MCP call 42 detail')).toBeInTheDocument();
 	});
 
 	it('ignores a stale list response after filters change', async () => {

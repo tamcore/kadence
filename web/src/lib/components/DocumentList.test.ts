@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, within } from '@testing-library/svelte';
 import DocumentList from './DocumentList.svelte';
 import type { Document } from '$lib/types';
 
@@ -12,7 +12,25 @@ describe('DocumentList', () => {
 		const ondelete = vi.fn();
 		render(DocumentList, { documents: docs, ondelete });
 		expect(screen.getByText('plan.pdf')).toBeInTheDocument();
-		await fireEvent.click(screen.getByRole('button', { name: /delete/i }));
+		expect(screen.getByRole('table', { name: 'Documents' })).toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete plan.pdf' }));
+		expect(ondelete).toHaveBeenCalledWith(1);
+	});
+
+	it('exposes labeled mobile card content and Delete through an action menu', async () => {
+		const ondelete = vi.fn();
+		render(DocumentList, { documents: docs, ondelete });
+
+		const card = screen.getByRole('row', { name: 'plan.pdf' });
+		expect(within(card).getByText('Filename')).toBeInTheDocument();
+		expect(within(card).getByText('Type')).toBeInTheDocument();
+		expect(within(card).getByText('Scope')).toBeInTheDocument();
+		expect(within(card).getByText('Added')).toBeInTheDocument();
+
+		await fireEvent.click(
+			within(card).getByRole('button', { name: 'Actions for plan.pdf', hidden: true })
+		);
+		await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', hidden: true }));
 		expect(ondelete).toHaveBeenCalledWith(1);
 	});
 

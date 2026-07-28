@@ -3,6 +3,7 @@
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { isAdmin } from '$lib/stores/auth';
+	import ActionMenu from '$lib/components/ActionMenu.svelte';
 	import {
 		getMcpAuditCall,
 		listMcpAuditCalls,
@@ -202,7 +203,7 @@
 				<p class="state">No calls match current filters.</p>
 			{:else}
 				<div class="table-wrap">
-					<table>
+					<table aria-label="MCP audit calls">
 						<thead>
 							<tr>
 								<th>Started</th>
@@ -216,23 +217,53 @@
 						</thead>
 						<tbody>
 							{#each calls as call (call.id)}
-								<tr class:selected={selected?.id === call.id}>
-									<td class="timestamp">{formatTimestamp(call.startedAt)}</td>
-									<td><span class="status {call.status}">{call.status}</span></td>
-									<td>
-										<strong>{call.toolName}</strong>
-										<span class="source">{call.source}</span>
+								<tr
+									class:selected={selected?.id === call.id}
+									aria-label={`${call.toolName} audit call`}
+								>
+									<td class="timestamp">
+										<span class="mobile-label">Started</span>
+										<span>{formatTimestamp(call.startedAt)}</span>
 									</td>
-									<td>{call.actorUsername || `User ${call.actorUserId}`}</td>
-									<td class="model">{call.model}</td>
-									<td>{duration(call)}</td>
 									<td>
+										<span class="mobile-label">Status</span>
+										<span class="status {call.status}">{call.status}</span>
+									</td>
+									<td class="tool-cell">
+										<span class="mobile-label">Tool</span>
+										<span class="tool-value">
+											<strong>{call.toolName}</strong>
+											<span class="source-row">
+												<span class="mobile-label">Source</span>
+												<span class="source">{call.source}</span>
+											</span>
+										</span>
+									</td>
+									<td>
+										<span class="mobile-label">Actor</span>
+										<span>{call.actorUsername || `User ${call.actorUserId}`}</span>
+									</td>
+									<td class="model">
+										<span class="mobile-label">Model</span>
+										<span>{call.model}</span>
+									</td>
+									<td>
+										<span class="mobile-label">Duration</span>
+										<span>{duration(call)}</span>
+									</td>
+									<td class="actions-cell">
 										<button
 											class="inspect"
 											type="button"
 											aria-label={`View call ${call.id}`}
 											onclick={() => openDetail(call.id)}
 										>View</button>
+										<span class="mobile-actions">
+											<ActionMenu
+												label={`Actions for call ${call.id}`}
+												items={[{ label: 'View', onSelect: () => openDetail(call.id) }]}
+											/>
+										</span>
 									</td>
 								</tr>
 							{/each}
@@ -400,7 +431,9 @@
 	tbody tr.selected { background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: inset 3px 0 var(--accent); }
 	td strong { display: block; font-size: 0.88rem; }
 	.timestamp, .model, .source { color: var(--text-muted); font-size: 0.78rem; }
+	.source-row { display: block; }
 	.source { display: block; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+	.mobile-label, .mobile-actions { display: none; }
 	.status {
 		display: inline-flex;
 		align-items: center;
@@ -482,5 +515,72 @@
 		.filters { grid-template-columns: 1fr; }
 		.conversation-filter { grid-column: auto; }
 		.filter-actions { align-items: center; }
+		.table-wrap { overflow: visible; }
+		table, tbody { display: block; width: 100%; min-width: 0; }
+		thead {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			padding: 0;
+			margin: -1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
+			border: 0;
+		}
+		tbody {
+			display: grid;
+			gap: 10px;
+			padding: 10px;
+		}
+		tbody tr {
+			position: relative;
+			display: block;
+			min-width: 0;
+			padding: 12px 48px 12px 14px;
+			border: 1px solid var(--border);
+			border-radius: calc(var(--radius) + 2px);
+			box-shadow: inset 3px 0 transparent;
+		}
+		tbody tr.selected {
+			border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+			box-shadow: inset 3px 0 var(--accent);
+		}
+		td {
+			display: grid;
+			grid-template-columns: 76px minmax(0, 1fr);
+			gap: 10px;
+			min-width: 0;
+			padding: 4px 0;
+			border: 0;
+			white-space: normal;
+			overflow-wrap: anywhere;
+		}
+		.mobile-label {
+			display: block;
+			color: var(--text-muted);
+			font-size: 0.69rem;
+			font-weight: 650;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+		}
+		.tool-value { min-width: 0; }
+		.source-row {
+			display: grid;
+			grid-template-columns: 76px minmax(0, 1fr);
+			gap: 10px;
+			margin-top: 5px;
+		}
+		.source { margin: 0; overflow-wrap: anywhere; }
+		.actions-cell {
+			position: absolute;
+			top: 7px;
+			right: 7px;
+			display: block;
+			width: auto;
+			padding: 0;
+		}
+		.inspect { display: none; }
+		.mobile-actions { display: block; }
 	}
 </style>

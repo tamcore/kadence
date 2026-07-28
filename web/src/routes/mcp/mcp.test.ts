@@ -46,6 +46,42 @@ describe('/mcp', () => {
 		expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(1);
 	});
 
+	it('exposes mobile View, Edit, and Delete actions while retaining desktop controls', async () => {
+		vi.spyOn(mcpApi, 'listMcp').mockResolvedValue({
+			servers: [ownServer, globalServer],
+			canAdd: true
+		});
+		render(Page);
+		await waitFor(() => expect(screen.getByText('my-server')).toBeInTheDocument());
+
+		expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+
+		await fireEvent.click(
+			screen.getByRole('button', { name: 'Actions for my-server', hidden: true })
+		);
+		const ownMenu = screen.getByRole('menu', { hidden: true });
+		expect(ownMenu).toHaveAttribute('aria-label', 'Actions for my-server');
+		expect(within(ownMenu).getByRole('menuitem', { name: 'View', hidden: true })).toHaveAttribute(
+			'href',
+			'/mcp/my-server'
+		);
+		expect(within(ownMenu).getByRole('menuitem', { name: 'Edit', hidden: true })).toBeInTheDocument();
+		expect(within(ownMenu).getByRole('menuitem', { name: 'Delete', hidden: true })).toBeInTheDocument();
+
+		await fireEvent.click(within(ownMenu).getByRole('menuitem', { name: 'Edit', hidden: true }));
+		expect(screen.getByDisplayValue('https://example.test/mcp')).toBeInTheDocument();
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+		await fireEvent.click(
+			screen.getByRole('button', { name: 'Actions for shared-server', hidden: true })
+		);
+		const globalMenu = screen.getByRole('menu', { hidden: true });
+		expect(globalMenu).toHaveAttribute('aria-label', 'Actions for shared-server');
+		expect(within(globalMenu).getAllByRole('menuitem', { hidden: true })).toHaveLength(1);
+		expect(within(globalMenu).getByRole('menuitem', { name: 'View', hidden: true })).toBeInTheDocument();
+	});
+
 	it('shows the add form only when canAdd is true, and creates a server on submit', async () => {
 		vi.spyOn(mcpApi, 'listMcp').mockResolvedValue({ servers: [], canAdd: true });
 		const createSpy = vi.spyOn(mcpApi, 'createMcp').mockResolvedValue(undefined);

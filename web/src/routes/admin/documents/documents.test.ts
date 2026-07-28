@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import type { Writable } from 'svelte/store';
 import * as documentsApi from '$lib/api/documents';
 
@@ -112,5 +112,32 @@ describe('/admin/documents', () => {
 			expect(screen.getByText(/PDF, images, text, web pages, office files, and e-books/i)).toBeInTheDocument()
 		);
 		expect(documentsApi.getDocumentUploadCapabilities).toHaveBeenCalledTimes(1);
+	});
+
+	it('asks for confirmation before deleting a shared document', async () => {
+		isAdminStore.set(true);
+		vi.spyOn(documentsApi, 'listDocuments').mockResolvedValue([
+			{
+				id: 2,
+				filename: 'shared.pdf',
+				mime: 'application/pdf',
+				source_type: 'pdf',
+				scope: 'public',
+				created_at: '2026-07-19T10:00:00Z'
+			}
+		]);
+		const deleteSpy = vi.spyOn(documentsApi, 'deleteDocument').mockResolvedValue(undefined);
+		render(Page);
+		await waitFor(() => expect(screen.getByText('shared.pdf')).toBeInTheDocument());
+
+		await fireEvent.click(
+			screen.getByRole('button', { name: 'Actions for shared.pdf', hidden: true })
+		);
+		await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', hidden: true }));
+		const dialog = await screen.findByRole('dialog', { name: 'Delete document' });
+		expect(within(dialog).getByText(/shared\.pdf/)).toBeInTheDocument();
+
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+		expect(deleteSpy).not.toHaveBeenCalled();
 	});
 });
