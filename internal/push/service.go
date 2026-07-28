@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
@@ -116,9 +118,37 @@ func (s *Service) sendOne(ctx context.Context, sub model.PushSubscription, msg [
 		return true
 	default:
 		s.afterFailure(ctx, sub.ID)
-		s.log.Warn("push send non-2xx", "subscription", sub.ID, "status", resp.StatusCode)
+		s.log.Warn("push send non-2xx",
+			"subscription", sub.ID,
+			"status", resp.StatusCode,
+			"endpoint_host", endpointHost(sub.Endpoint),
+			"body", responseSnippet(resp.Body))
 		return false
 	}
+}
+
+// maxResponseSnippet bounds how much of a push service's error response body
+// is read for diagnostic logging.
+const maxResponseSnippet = 512
+
+// responseSnippet returns up to maxResponseSnippet bytes of a push service's
+// response body (the gateway's error reason, e.g. Apple's JSON) for logging.
+func responseSnippet(body io.Reader) string {
+	b, err := io.ReadAll(io.LimitReader(body, maxResponseSnippet))
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// endpointHost returns just the host of a push endpoint (e.g.
+// web.push.apple.com) so logs identify the gateway without the token path.
+func endpointHost(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }
 
 // afterFailure increments the subscription's failure counter and prunes it
