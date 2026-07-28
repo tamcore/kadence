@@ -1,13 +1,12 @@
-// Real push subscription + delivery needs a browser push service and an
-// assignable `navigator.serviceWorker.ready`, neither available in headless
-// Chromium — so the subscribe→deliver path is covered by the internal/push and
-// web unit tests, not here. This e2e asserts the deterministic, live-observable
-// part: with the server reporting push enabled (KADENCE_PUSH_VAPID_* set in
-// scripts/e2e-web.sh) and the browser exposing the web-push APIs, the profile
-// "enable notifications" toggle renders — /api/push/config, the store, and the
-// gating are all wired end to end against the real app. Where the headless
-// browser lacks the web-push APIs (so `pushSupported` is false and the toggle
-// is intentionally hidden), the test skips rather than fails.
+// The web-push UI (profile toggle) and subscribe→deliver flow depend on real
+// browser push APIs (Notification permission grant, an assignable
+// serviceWorker.ready, a live push service) that headless Chromium does not
+// provide, so those are covered by the internal/push + web unit tests and were
+// verified in a real browser against the dev deployment. What this e2e asserts
+// is the deterministic, live server contract the client relies on: an
+// authenticated GET /api/push/config reports push enabled and returns a VAPID
+// public key (and never the private key). KADENCE_PUSH_VAPID_* is set for the
+// e2e app in scripts/e2e-web.sh.
 
 import { expect, test } from '@playwright/test';
 import { login } from './helpers';
@@ -15,19 +14,21 @@ import { login } from './helpers';
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-pw';
 
-test('profile shows the enable-notifications toggle when push is supported', async ({ page, context }) => {
-	await context.grantPermissions(['notifications']);
-
+test('push config endpoint reports enabled with a VAPID public key (and no private key)', async ({
+	page
+}) => {
 	await login(page, ADMIN_USERNAME, ADMIN_PASSWORD);
-	await page.goto('/profile');
 
-	// Mirror the app's own `pushSupported` capability check. If this headless
-	// browser doesn't expose the web-push APIs, the toggle is correctly hidden —
-	// skip rather than report a false failure.
-	const pushSupported = await page.evaluate(
-		() => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
-	);
-	test.skip(!pushSupported, 'headless browser lacks web push APIs; toggle is intentionally hidden');
+	const res = await page.evaluate(async () => {
+		const r = await fetch('/api/push/config', { credentials: 'include' });
+		return { status: r.status, text: await r.text() };
+	});
 
-	await expect(page.getByTestId('toggle-push')).toBeVisible();
+	expect(res.status).toBe(200);
+	const body = JSON.parse(res.text);
+	expect(body.data.enabled).toBe(true);
+	expect(typeof body.data.vapidPublicKey).toBe('string');
+	expect(body.data.vapidPublicKey.length).toBeGreaterThan(0);
+	// The private key must never be exposed to the client.
+	expect(res.text.toLowerCase()).not.toContain('private');
 });
