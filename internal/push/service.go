@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
@@ -50,9 +51,21 @@ func NewService(store SubscriptionStore, vapidPublic, vapidPrivate, vapidSubject
 		store:        store,
 		vapidPublic:  vapidPublic,
 		vapidPrivate: vapidPrivate,
-		vapidSubject: vapidSubject,
+		vapidSubject: normalizeVAPIDSubject(vapidSubject),
 		log:          log,
 	}
+}
+
+// normalizeVAPIDSubject strips a leading "mailto:" from a bare-email subject.
+// The webpush library re-adds "mailto:" to any non-"https:" subject, so a
+// configured "mailto:admin@example.com" would otherwise become the malformed
+// "mailto:mailto:admin@example.com" — which Apple rejects with BadJwtToken
+// (Mozilla tolerates it). An "https:" subject is left untouched.
+func normalizeVAPIDSubject(subject string) string {
+	if strings.HasPrefix(subject, "https:") {
+		return subject
+	}
+	return strings.TrimPrefix(subject, "mailto:")
 }
 
 // SendToUser sends p to every subscription the user has registered. Dead

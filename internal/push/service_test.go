@@ -194,3 +194,22 @@ func TestSendToUserPropagatesListError(t *testing.T) {
 		t.Fatalf("expected error to wrap sentinel, got %v", err)
 	}
 }
+
+func TestNormalizeVAPIDSubject(t *testing.T) {
+	const email = "admin@example.com"
+	cases := map[string]string{
+		"mailto:" + email:       email,                   // strip so webpush re-adds exactly one mailto:
+		email:                   email,                   // bare left as-is (webpush adds mailto:)
+		"https://example.com/x": "https://example.com/x", // https left untouched
+	}
+	for in, want := range cases {
+		if got := normalizeVAPIDSubject(in); got != want {
+			t.Errorf("normalizeVAPIDSubject(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// NewService applies the normalization to the stored subject.
+	svc := NewService(&fakeStore{}, "pubkey", "privkey", "mailto:"+email, slog.Default())
+	if svc.vapidSubject != email {
+		t.Errorf("NewService vapidSubject = %q, want %q", svc.vapidSubject, email)
+	}
+}
