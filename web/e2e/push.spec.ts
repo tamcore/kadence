@@ -13,8 +13,15 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-pw';
 test('enabling notifications posts a subscription', async ({ page, context }) => {
 	await context.grantPermissions(['notifications']);
 
-	// Stub pushManager to avoid needing a real push service.
+	// Stub pushManager to avoid needing a real push service, and guarantee the
+	// push-capability check (`'PushManager' in window`) passes even on a headless
+	// Chromium build that doesn't expose PushManager — otherwise the profile
+	// toggle (gated on `pushSupported`) never renders.
 	await page.addInitScript(() => {
+		if (!('PushManager' in window)) {
+			// @ts-expect-error test stub so pushSupported is true in CI
+			window.PushManager = function () {};
+		}
 		// @ts-expect-error test stub of serviceWorker.ready
 		navigator.serviceWorker.ready = Promise.resolve({
 			pushManager: {
