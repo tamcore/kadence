@@ -94,7 +94,7 @@
 			<thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
 			<tbody>
 				{#each users as u (u.id)}
-					<tr aria-label={u.username}>
+					<tr>
 						<td><span class="mobile-label">Username</span><strong>{u.username}</strong></td>
 						<td><span class="mobile-label">Email</span><span>{u.email}</span></td>
 						<td><span class="mobile-label">Role</span><span>{u.role}</span></td>

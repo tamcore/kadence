@@ -41,7 +41,9 @@ describe('admin users page', () => {
 		await waitFor(() => expect(screen.getByText('bob')).toBeInTheDocument());
 
 		expect(screen.getByRole('table', { name: 'Users' })).toBeInTheDocument();
-		const card = screen.getByRole('row', { name: 'bob' });
+		const card = screen.getByRole('row', {
+			name: /bob.*bob\.with\.a\.long\.address@example\.test/i
+		});
 		expect(within(card).getByText('Username')).toBeInTheDocument();
 		expect(within(card).getByText('Email')).toBeInTheDocument();
 		expect(within(card).getByText('Role')).toBeInTheDocument();
