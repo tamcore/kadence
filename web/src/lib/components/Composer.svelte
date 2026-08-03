@@ -235,7 +235,7 @@
 		{#if richInput}
 			<div class="composer-tools">
 				<label class="attach-control" title="Attach files">
-					<span aria-hidden="true">＋</span>
+					<span class="composer-icon" aria-hidden="true">+</span>
 					<span class="sr-only">Attach files</span>
 					<input
 						type="file"
@@ -310,6 +310,14 @@
 	.attach-control:focus-within {
 		outline: 2px solid var(--accent);
 		outline-offset: 2px;
+	}
+
+	.composer-icon {
+		display: grid;
+		width: 20px;
+		height: 20px;
+		place-items: center;
+		line-height: 1;
 	}
 
 	input[type='file'] {

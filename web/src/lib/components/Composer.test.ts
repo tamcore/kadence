@@ -50,6 +50,22 @@ beforeEach(() => {
 });
 
 describe('Composer', () => {
+	it('renders aligned attach and reference icons with stable labels', () => {
+		const { container } = render(Composer, { props: { richInput: true, onSubmit: vi.fn() } });
+
+		expect(container.querySelector('label[title="Attach files"] .composer-icon')).toHaveTextContent(
+			'+'
+		);
+		expect(screen.getByRole('button', { name: 'Reference documents' })).toContainElement(
+			container.querySelector('.reference-trigger .composer-icon')
+		);
+		expect(container.querySelectorAll('.composer-icon')).toHaveLength(2);
+		expect(screen.getByRole('button', { name: 'Reference documents' })).toHaveAttribute(
+			'aria-label',
+			'Reference documents'
+		);
+	});
+
 	it('keeps evidence controls disabled unless rich input is explicitly enabled', () => {
 		const { container } = render(Composer, { props: { onSubmit: vi.fn() } });
 

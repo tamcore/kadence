@@ -78,7 +78,7 @@
 		disabled={disabled}
 		onclick={toggleOpen}
 	>
-		<span aria-hidden="true">@</span>
+		<span class="composer-icon" aria-hidden="true">@</span>
 		{#if selected.length > 0}<b>{selected.length}</b>{/if}
 	</button>
 
@@ -202,6 +202,14 @@
 		background: var(--accent);
 		color: white;
 		font-size: 0.67rem;
+	}
+
+	.composer-icon {
+		display: grid;
+		width: 20px;
+		height: 20px;
+		place-items: center;
+		line-height: 1;
 	}
 
 	.reference-panel {
