@@ -68,6 +68,7 @@ type ToolResolver func(context.Context, string) ([]provider.ToolDefinition, erro
 // not acquire chat persistence coupling.
 type ChatHandoffStore interface {
 	CreateOrGetDraft(context.Context, store.CreateChatHandoffInput) (store.HydratedChatHandoff, bool, error)
+	GetByTask(context.Context, int64, string) (store.HydratedChatHandoff, error)
 	MarkTaskReady(context.Context, int64, string) error
 	MarkTaskFailed(context.Context, int64, string, string, bool) error
 	ListByAssistantMessages(context.Context, int64, string, []int64) ([]store.HydratedChatHandoff, error)
@@ -334,7 +335,34 @@ func (s *Service) Detail(ctx context.Context, userID int64, taskID string) (Deta
 	if err != nil {
 		return Detail{}, fmt.Errorf("scheduled: load definition history: %w", err)
 	}
-	return Detail{Task: task, Runs: runs, DefinitionMessages: definitionMessages(history)}, nil
+	projection, err := s.handoffDefinitionProjection(ctx, userID, task)
+	if err != nil {
+		return Detail{}, err
+	}
+	return Detail{Task: task, Runs: runs, DefinitionMessages: definitionMessages(history, projection)}, nil
+}
+
+type handoffDefinitionProjection struct{}
+
+func (s *Service) handoffDefinitionProjection(
+	ctx context.Context, userID int64, task model.ScheduledTask,
+) (*handoffDefinitionProjection, error) {
+	if s.deps.ChatHandoffs == nil {
+		return nil, nil
+	}
+	handoff, err := s.deps.ChatHandoffs.GetByTask(ctx, userID, task.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scheduled: load chat handoff: %w", err)
+	}
+	if handoff.Handoff.UserID != userID || handoff.Handoff.SourceConversationID == "" || handoff.Handoff.SourceUserMessageID <= 0 ||
+		handoff.Handoff.ScheduledTaskID == nil || *handoff.Handoff.ScheduledTaskID != task.ID || handoff.Task == nil ||
+		handoff.Task.ID != task.ID || handoff.Task.UserID != userID || handoff.Task.ConversationID != task.ConversationID {
+		return nil, nil
+	}
+	return &handoffDefinitionProjection{}, nil
 }
 
 func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model.ScheduledTask, error) {
@@ -492,11 +520,19 @@ func historyForCompiler(history []model.Message) []provider.Message {
 	return out
 }
 
-func definitionMessages(history []model.Message) []DefinitionMessage {
+func definitionMessages(history []model.Message, projection *handoffDefinitionProjection) []DefinitionMessage {
 	out := make([]DefinitionMessage, 0, len(history))
+	projectFirstUserMessage := projection != nil
 	for _, message := range history {
 		if message.Role != model.MsgRoleUser && message.Role != model.MsgRoleAssistant {
 			continue
+		}
+		if message.Role == model.MsgRoleUser && projectFirstUserMessage {
+			projectFirstUserMessage = false
+			if instruction, ok := ExtractHandoffInstruction(message.Content); ok {
+				out = append(out, DefinitionMessage{Role: message.Role, Text: instruction})
+				continue
+			}
 		}
 		text, question := definitionMessageContent(message.Content)
 		out = append(out, DefinitionMessage{Role: message.Role, Text: text, Question: question})

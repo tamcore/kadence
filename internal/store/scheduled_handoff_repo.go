@@ -198,6 +198,15 @@ func (r *ScheduledHandoffRepository) ListByAssistantMessages(
 	return out, rows.Err()
 }
 
+// GetByTask returns the hydrated chat handoff linked to one owner-scoped
+// Scheduled task.
+func (r *ScheduledHandoffRepository) GetByTask(
+	ctx context.Context, userID int64, taskID string,
+) (HydratedChatHandoff, error) {
+	return scanHydratedHandoff(r.pool.QueryRow(ctx, handoffHydrationQuery+`
+	 WHERE h.user_id = $1 AND h.scheduled_task_id = $2::uuid AND task.user_id = $1`, userID, taskID))
+}
+
 // ListPendingBySourceConversation returns at most two owner-scoped,
 // assistant-bound unresolved drafts. Two rows are enough for callers to
 // distinguish a sole draft from multiple pending tasks.

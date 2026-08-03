@@ -230,6 +230,55 @@ func TestChatScheduledHandoffLifecycleHydrationAndOwnerScope(t *testing.T) {
 	}
 }
 
+func TestChatScheduledHandoffGetByTaskIsOwnerScoped(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	ctx := context.Background()
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	repo := store.NewScheduledHandoffRepository(pool)
+	owner := createScheduledUser(t, ctx, users, "handoff-get-owner", "handoff-get-owner@example.com")
+	other := createScheduledUser(t, ctx, users, "handoff-get-other", "handoff-get-other@example.com")
+	source, err := conversations.Create(ctx, owner.ID, "Source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := messages.AddChatUser(ctx, source.ID, "Schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _, err := repo.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+		UserID: owner.ID, SourceConversationID: source.ID, SourceUserMessageID: message.ID,
+		SourceContentFingerprint: handoffFingerprint(101), InvocationOrdinal: 1, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil || created.Task == nil {
+		t.Fatalf("CreateOrGetDraft row=%+v err=%v", created, err)
+	}
+	got, err := repo.GetByTask(ctx, owner.ID, created.Task.ID)
+	if err != nil || got.Handoff.ID != created.Handoff.ID || got.Handoff.UserID != owner.ID || got.Task == nil || got.Task.ID != created.Task.ID {
+		t.Fatalf("GetByTask row=%+v err=%v", got, err)
+	}
+	if _, err := repo.GetByTask(ctx, other.ID, created.Task.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-owner GetByTask err=%v, want ErrNotFound", err)
+	}
+	directConversation, err := conversations.CreateWithKind(ctx, owner.ID, "Direct", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var directTaskID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO scheduled_tasks (user_id, conversation_id, name, kind, state, timezone)
+		 VALUES ($1, $2::uuid, 'Direct', 'reminder', 'draft', $3) RETURNING id::text`,
+		owner.ID, directConversation.ID, scheduledTimezoneUTC,
+	).Scan(&directTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetByTask(ctx, owner.ID, directTaskID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unlinked GetByTask err=%v, want ErrNotFound", err)
+	}
+}
+
 func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

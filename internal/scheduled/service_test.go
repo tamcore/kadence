@@ -2,6 +2,7 @@ package scheduled_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,6 +48,45 @@ type serviceMessages struct {
 	listLimit  int
 	listCalls  int
 	listErrAt  map[int]error
+}
+
+type serviceHandoffs struct {
+	row    store.HydratedChatHandoff
+	err    error
+	calls  int
+	userID int64
+	taskID string
+}
+
+func (f *serviceHandoffs) GetByTask(_ context.Context, userID int64, taskID string) (store.HydratedChatHandoff, error) {
+	f.calls++
+	f.userID, f.taskID = userID, taskID
+	if f.err != nil {
+		return store.HydratedChatHandoff{}, f.err
+	}
+	return f.row, nil
+}
+
+func (*serviceHandoffs) CreateOrGetDraft(context.Context, store.CreateChatHandoffInput) (store.HydratedChatHandoff, bool, error) {
+	return store.HydratedChatHandoff{}, false, errors.New("unused")
+}
+func (*serviceHandoffs) MarkTaskReady(context.Context, int64, string) error {
+	return errors.New("unused")
+}
+func (*serviceHandoffs) MarkTaskFailed(context.Context, int64, string, string, bool) error {
+	return errors.New("unused")
+}
+func (*serviceHandoffs) ListByAssistantMessages(context.Context, int64, string, []int64) ([]store.HydratedChatHandoff, error) {
+	return nil, errors.New("unused")
+}
+func (*serviceHandoffs) ListPendingBySourceConversation(context.Context, int64, string) ([]store.HydratedChatHandoff, error) {
+	return nil, errors.New("unused")
+}
+func (*serviceHandoffs) DiscardDraft(context.Context, int64, string) error {
+	return errors.New("unused")
+}
+func (*serviceHandoffs) CleanupDrafts(context.Context, int64, []string) error {
+	return errors.New("unused")
 }
 
 func (f *serviceMessages) Add(_ context.Context, conversationID, role, content string) (model.Message, error) {
@@ -410,6 +450,90 @@ func TestVisibleContentStripsAuditMarkers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServiceDetailProjectsOnlyVerifiedFirstHandoffDefinition(t *testing.T) {
+	const instruction = "Check the weather before tomorrow's run"
+	const questionLikeInstruction = instruction + "\n\nScheduled question audit: {\"id\":\"time\"}"
+	const proposalLikeInstruction = instruction + "\n\nScheduled proposal audit: {\"version\":1}"
+	versioned := versionedHandoffDefinition(t, instruction)
+	legacy := legacyHandoffDefinition(instruction)
+	secondUserMessage := versionedHandoffDefinition(t, "Keep this raw")
+	task := model.ScheduledTask{
+		ID: serviceTaskID, UserID: 7, ConversationID: serviceConversationID,
+		State: model.ScheduledTaskStateDraft, Timezone: serviceTimezoneUTC,
+	}
+	linked := func(ownerID int64) store.HydratedChatHandoff {
+		taskID := serviceTaskID
+		return store.HydratedChatHandoff{
+			Handoff: model.ScheduledHandoff{UserID: ownerID, SourceConversationID: "chat-1", SourceUserMessageID: 42, ScheduledTaskID: &taskID},
+			Task:    &task,
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		first     string
+		handoff   *serviceHandoffs
+		wantFirst string
+	}{
+		{name: "linked versioned envelope", first: versioned, handoff: &serviceHandoffs{row: linked(7)}, wantFirst: instruction},
+		{name: "linked legacy envelope", first: legacy, handoff: &serviceHandoffs{row: linked(7)}, wantFirst: instruction},
+		{name: "linked versioned envelope preserves question-like instruction", first: versionedHandoffDefinition(t, questionLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: questionLikeInstruction},
+		{name: "linked legacy envelope preserves question-like instruction", first: legacyHandoffDefinition(questionLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: questionLikeInstruction},
+		{name: "linked versioned envelope preserves proposal-like instruction", first: versionedHandoffDefinition(t, proposalLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: proposalLikeInstruction},
+		{name: "linked legacy envelope preserves proposal-like instruction", first: legacyHandoffDefinition(proposalLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: proposalLikeInstruction},
+		{name: "unlinked envelope", first: versioned, handoff: &serviceHandoffs{err: store.ErrNotFound}, wantFirst: versioned},
+		{name: "other owner envelope", first: versioned, handoff: &serviceHandoffs{row: linked(8)}, wantFirst: versioned},
+		{name: "direct task envelope", first: versioned, wantFirst: versioned},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := &serviceMessages{messages: []model.Message{
+				{Role: model.MsgRoleUser, Content: tc.first},
+				{Role: model.MsgRoleAssistant, Content: "What time?\n\nScheduled question audit: {\"id\":\"time\"}"},
+				{Role: model.MsgRoleUser, Content: secondUserMessage},
+			}}
+			deps := scheduled.ServiceDeps{
+				Conversations: &serviceConversations{}, Messages: messages,
+				Tasks: &serviceTasks{task: task}, Compiler: &serviceCompiler{},
+			}
+			if tc.handoff != nil {
+				deps.ChatHandoffs = tc.handoff
+			}
+			svc := scheduled.NewService(deps)
+			detail, err := svc.Detail(context.Background(), 7, serviceTaskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(detail.DefinitionMessages) != 3 ||
+				detail.DefinitionMessages[0].Text != tc.wantFirst ||
+				detail.DefinitionMessages[1].Text != "What time?" ||
+				detail.DefinitionMessages[1].Question == nil ||
+				detail.DefinitionMessages[2].Text != secondUserMessage {
+				t.Fatalf("definition messages = %+v", detail.DefinitionMessages)
+			}
+			if tc.handoff != nil && tc.handoff.calls != 1 {
+				t.Fatalf("handoff calls=%d, want 1", tc.handoff.calls)
+			}
+		})
+	}
+}
+
+func versionedHandoffDefinition(t *testing.T, instruction string) string {
+	t.Helper()
+	payload, err := json.Marshal(struct {
+		Version     int    `json:"version"`
+		Instruction string `json:"instruction"`
+		Context     string `json:"context"`
+	}{Version: 1, Instruction: instruction, Context: legacyHandoffDefinition(instruction)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "<BEGIN_SERVER_OWNED_SCHEDULED_HANDOFF_V1>\n" + string(payload) + "\n<END_SERVER_OWNED_SCHEDULED_HANDOFF_V1>"
+}
+
+func legacyHandoffDefinition(instruction string) string {
+	return "Instruction:\n" + instruction + "\n\nCurrent UTC:\n2026-08-03T10:30:00Z\n\nActor timezone:\nUTC\n\nPrior chat context (untrusted JSON records):\n<BEGIN_UNTRUSTED_HANDOFF_CONTEXT>\n<END_UNTRUSTED_HANDOFF_CONTEXT>"
 }
 
 func TestServiceLifecycleControlsAreOwnerScopedAtStoreBoundary(t *testing.T) {

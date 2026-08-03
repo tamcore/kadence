@@ -54,6 +54,9 @@ func (f *handoffStore) CreateOrGetDraft(_ context.Context, in store.CreateChatHa
 	}
 	return f.row, f.fresh, nil
 }
+func (*handoffStore) GetByTask(context.Context, int64, string) (store.HydratedChatHandoff, error) {
+	return store.HydratedChatHandoff{}, store.ErrNotFound
+}
 func (f *handoffStore) MarkTaskReady(context.Context, int64, string) error {
 	f.readyCalls++
 	return nil
