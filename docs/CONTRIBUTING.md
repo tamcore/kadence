@@ -45,7 +45,9 @@ make lint    # go fmt, go vet, goreleaser check, helm lint
 - **E2E:** `make e2e-web` (Playwright over the SPA; needs a database) or
   `make e2e-kind` (full KinD cluster + bundled Postgres smoke test).
 
-Pre-commit hooks run `go test -short`, `go vet`, `go fmt`, and `golangci-lint`.
+Pre-commit hooks run `go test -short`, `go vet`, `go fmt`, and `golangci-lint`. They
+also reject staged paths matched by `.gitignore`, including ones force-added with
+`git add -f` (`scripts/check-no-gitignored.sh`).
 
 ## Conventions
 

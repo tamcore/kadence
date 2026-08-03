@@ -18,6 +18,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: no-gitignored-files
+        name: Reject staged paths matched by .gitignore (incl. git add -f)
+        entry: scripts/check-no-gitignored.sh
+        language: script
+        always_run: true
+        pass_filenames: false
+
       - id: go-test
         name: Run Go tests (short mode, skips integration tests)
         entry: go test -short ./...
