@@ -130,7 +130,14 @@ func validHandoffContextRecords(records string) bool {
 	if records == "" {
 		return true
 	}
-	seenTool := false
+	const (
+		handoffRecordsMessages = iota
+		handoffRecordsPriorTools
+		handoffRecordsVisibleTools
+	)
+	phase := handoffRecordsMessages
+	messages := 0
+	var previousPriorTool, previousVisibleTool string
 	for line := range strings.SplitSeq(records, "\n") {
 		decoder := json.NewDecoder(strings.NewReader(line))
 		decoder.DisallowUnknownFields()
@@ -143,14 +150,23 @@ func validHandoffContextRecords(records string) bool {
 		}
 		switch record.Type {
 		case handoffContextMessage:
-			if seenTool || (record.Role != model.MsgRoleUser && record.Role != model.MsgRoleAssistant) || record.Name != "" {
+			messages++
+			if phase != handoffRecordsMessages || messages > maxHandoffMessages ||
+				(record.Role != model.MsgRoleUser && record.Role != model.MsgRoleAssistant) || record.Name != "" {
 				return false
 			}
-		case handoffContextPriorSafeTool, handoffContextVisibleTool:
-			if record.Name == "" || record.Role != "" || record.Content != "" {
+		case handoffContextPriorSafeTool:
+			if phase > handoffRecordsPriorTools || record.Name == "" || record.Name <= previousPriorTool ||
+				record.Role != "" || record.Content != "" {
 				return false
 			}
-			seenTool = true
+			phase, previousPriorTool = handoffRecordsPriorTools, record.Name
+		case handoffContextVisibleTool:
+			if record.Name == "" || record.Name <= previousVisibleTool ||
+				record.Role != "" || record.Content != "" {
+				return false
+			}
+			phase, previousVisibleTool = handoffRecordsVisibleTools, record.Name
 		default:
 			return false
 		}

@@ -1,12 +1,15 @@
 package scheduled
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tamcore/kadence/internal/model"
 )
+
+const handoffVisibilityWeatherTool = "weather"
 
 func TestHandoffEnvelopeRoundTripsInstructionAndCompilerContext(t *testing.T) {
 	now := time.Date(2026, 8, 3, 10, 30, 0, 0, time.UTC)
@@ -94,4 +97,61 @@ func TestExtractHandoffInstructionRejectsMalformedAndUnrelatedLegacyText(t *test
 			}
 		})
 	}
+}
+
+func TestExtractHandoffInstructionRejectsNonCanonicalLegacyRecords(t *testing.T) {
+	messages := make([]handoffContextRecord, maxHandoffMessages+1)
+	for i := range messages {
+		messages[i] = handoffContextRecord{Type: handoffContextMessage, Role: model.MsgRoleUser, Content: "message"}
+	}
+	for _, tc := range []struct {
+		name    string
+		records []handoffContextRecord
+	}{
+		{name: "too many messages", records: messages},
+		{name: "prior tool after current tool", records: []handoffContextRecord{
+			{Type: handoffContextVisibleTool, Name: handoffVisibilityWeatherTool},
+			{Type: handoffContextPriorSafeTool, Name: handoffVisibilityWeatherTool},
+		}},
+		{name: "duplicate prior tool", records: []handoffContextRecord{
+			{Type: handoffContextPriorSafeTool, Name: handoffVisibilityWeatherTool},
+			{Type: handoffContextPriorSafeTool, Name: handoffVisibilityWeatherTool},
+		}},
+		{name: "duplicate current tool", records: []handoffContextRecord{
+			{Type: handoffContextVisibleTool, Name: handoffVisibilityWeatherTool},
+			{Type: handoffContextVisibleTool, Name: handoffVisibilityWeatherTool},
+		}},
+		{name: "unsorted prior tools", records: []handoffContextRecord{
+			{Type: handoffContextPriorSafeTool, Name: handoffVisibilityWeatherTool},
+			{Type: handoffContextPriorSafeTool, Name: "calendar"},
+		}},
+		{name: "unsorted current tools", records: []handoffContextRecord{
+			{Type: handoffContextVisibleTool, Name: handoffVisibilityWeatherTool},
+			{Type: handoffContextVisibleTool, Name: "calendar"},
+		}},
+		{name: "message after tool", records: []handoffContextRecord{
+			{Type: handoffContextPriorSafeTool, Name: handoffVisibilityWeatherTool},
+			{Type: handoffContextMessage, Role: model.MsgRoleUser, Content: "later"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := ExtractHandoffInstruction(legacyHandoffWithRecords(t, tc.records)); ok || got != "" {
+				t.Fatalf("ExtractHandoffInstruction() = %q, %t; want no projection", got, ok)
+			}
+		})
+	}
+}
+
+func legacyHandoffWithRecords(t *testing.T, records []handoffContextRecord) string {
+	t.Helper()
+	lines := make([]string, len(records))
+	for i, record := range records {
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines[i] = string(encoded)
+	}
+	legacy := boundedHandoffDefinition(time.Date(2026, 8, 3, 10, 30, 0, 0, time.UTC), "UTC", "Check the weather", nil, nil)
+	return strings.Replace(legacy, handoffContextBegin+"\n"+handoffContextEnd, handoffContextBegin+"\n"+strings.Join(lines, "\n")+"\n"+handoffContextEnd, 1)
 }
