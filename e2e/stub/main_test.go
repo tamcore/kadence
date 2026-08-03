@@ -254,7 +254,7 @@ func TestChatSchedulingToolScript_OpenAICompat(t *testing.T) {
 	res, err := p.StreamChatWithTools(context.Background(), provider.ChatRequest{
 		Model:    stubModelName,
 		Messages: []provider.Message{{Role: messageRoleUser, Content: scheduleWeatherPrompt}},
-		Tools:    []provider.ToolDefinition{{Name: draftScheduledToolName}},
+		Tools:    []provider.ToolDefinition{{Name: "kadence__draft_future_unattended_task"}},
 	}, func(string) error { return nil })
 	if err != nil {
 		t.Fatalf("StreamChatWithTools: %v", err)
@@ -263,7 +263,7 @@ func TestChatSchedulingToolScript_OpenAICompat(t *testing.T) {
 		t.Fatalf("tool calls = %+v", res.ToolCalls)
 	}
 	for i, call := range res.ToolCalls {
-		if call.Name != draftScheduledToolName {
+		if call.Name != "kadence__draft_future_unattended_task" {
 			t.Fatalf("call[%d] name = %q", i, call.Name)
 		}
 		if !json.Valid([]byte(call.Arguments)) {

@@ -83,12 +83,22 @@ JSON); attachment payloads never appear in message JSON.
 ### Inline Scheduled handoff
 
 Chat can offer future follow-ups, but it may create a Scheduled draft only when
-the **current user turn explicitly requests scheduling**. A suggestion, a prior
-turn, or model inference is not an authorization. One
-`kadence__draft_scheduled_task` call represents one independently confirmable
-task. Its instruction is a bounded, safe transfer of the source request and a
-small recent-text context; it is not a copied tool transcript, credential, or
-unbounded chat history.
+the **current user turn explicitly requests future unattended work**. A
+suggestion, a prior turn, or model inference is not authorization. One
+`kadence__draft_future_unattended_task` call represents one independently
+confirmable task. Direct calendar or domain work belongs to its direct MCP tool,
+including an operation that creates data for a future date. A direct-operation
+failure does not create a draft: the model must separately request a future
+retry or follow-up through the Scheduled tool.
+
+Its instruction is a bounded, safe transfer of the source request and a small
+recent-text context; it is not a copied tool transcript, credential, or
+unbounded chat history. The persisted handoff envelope also contains
+server-owned compiler context. It is private compiler input, not a display
+format: an owner-scoped Scheduled detail view projects only the delegated
+instruction into its first user bubble. Later refinements and direct Scheduled
+messages remain unchanged. The API and UI never receive the envelope, prior-chat
+records, timestamps, trust markers, or tool catalog records.
 
 The handoff creates a relational draft and a source-message artifact, then hands
 compiler authority to `scheduled/`. The chat model cannot choose the final
@@ -105,6 +115,9 @@ uses tombstones for obsolete, unconfirmed artifacts; confirmed tasks and their
 links survive the rewind as auditable Scheduled work. There is no new environment
 variable for this handoff; it uses the existing Scheduled feature and provider/MCP
 configuration.
+
+Existing false drafts are manual-cleanup scope. Kadence adds no migration,
+automatic deletion, or automatic dismissal for them.
 
 ## Scheduled pipeline (`scheduled/`)
 
@@ -135,6 +148,12 @@ one catch-up run before advancing to the next future occurrence. Claiming clears
 the next due time and records a unique running occurrence, so a timeout, provider
 error, or process loss never automatically replays an occurrence. A user can
 explicitly run the task again instead.
+
+If handoff preparation fails, the artifact persists only one stable safe code:
+`provider_timeout`, `provider_unavailable`, `invalid_definition`, or
+`internal_error`. The category is safe for API and UI display; wrapped provider
+causes and compiler input remain server-side. Existing lifecycle rules decide
+whether that artifact remains retryable.
 
 A missing confirmed tool pauses its task immediately. Other execution failures
 increment a consecutive-failure count; one-off tasks become `failed`, while

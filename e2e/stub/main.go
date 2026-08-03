@@ -28,7 +28,7 @@ const (
 	functionToolType          = "function"
 	finishToolCalls           = "tool_calls"
 	messageRoleTool           = "tool"
-	draftScheduledToolName    = "kadence__draft_scheduled_task"
+	draftScheduledToolName    = "kadence__draft_future_unattended_task"
 	workerPromptPrefix        = "Gather evidence using only the offered tools."
 	synthesisPromptPrefix     = "Write the concise user-facing Scheduled result"
 	browserNavigateTool       = "browser__browser_navigate"

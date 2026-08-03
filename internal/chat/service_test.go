@@ -439,6 +439,9 @@ const (
 	testScheduledToolName      = "kadence__draft_future_unattended_task"
 	testScheduledArtifactReady = "ready"
 	testScheduledCallID        = "call"
+	testDirectDomainCallID     = "calendar-call"
+	testDirectDomainToolName   = "calendar__schedule_event"
+	testDirectDomainArguments  = `{"start":"2040-01-02T08:00:00Z"}`
 	testScheduledArguments     = `{"instruction":"check recovery"}`
 	testSelectedDocFilename    = "selected.md"
 	testAssistantAnswer        = "answer"
@@ -534,6 +537,66 @@ func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testi
 	if len(artifacts) != 2 || artifacts[0].ScheduledArtifact == nil || artifacts[0].ScheduledArtifact.Ordinal != 1 ||
 		artifacts[1].ScheduledArtifact == nil || artifacts[1].ScheduledArtifact.Ordinal != 2 {
 		t.Fatalf("artifact events = %+v", artifacts)
+	}
+}
+
+func TestServiceKeepsDirectDomainSchedulesOutOfScheduledHandoffs(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		toolCalls        []provider.ToolCall
+		directDomainErr  error
+		wantHandoffCount int
+	}{
+		{
+			name: "direct domain schedule only",
+			toolCalls: []provider.ToolCall{{
+				ID: testDirectDomainCallID, Name: testDirectDomainToolName, Arguments: testDirectDomainArguments,
+			}},
+		},
+		{
+			name: "failed direct domain schedule only",
+			toolCalls: []provider.ToolCall{{
+				ID: testDirectDomainCallID, Name: testDirectDomainToolName, Arguments: testDirectDomainArguments,
+			}},
+			directDomainErr: errors.New("calendar unavailable"),
+		},
+		{
+			name: "explicit future unattended call creates handoff",
+			toolCalls: []provider.ToolCall{
+				{ID: testDirectDomainCallID, Name: testDirectDomainToolName, Arguments: testDirectDomainArguments},
+				{ID: testScheduledCallID, Name: testScheduledToolName, Arguments: testScheduledArguments},
+			},
+			wantHandoffCount: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handoff := &fakeScheduledHandoff{}
+			mcp := &fakeMCPTools{
+				enabled:    true,
+				tools:      []provider.ToolDefinition{{Name: testDirectDomainToolName}},
+				callResult: `{"id":"event-1"}`,
+				callErr:    tc.directDomainErr,
+			}
+			provider := &scriptedProvider{results: []provider.StreamResult{
+				{ToolCalls: tc.toolCalls},
+				{Content: "Done."},
+			}}
+			convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+			msgs := &fakeMsgs{}
+			svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+				Convs: convs, Msgs: msgs, MCP: mcp, Scheduled: handoff,
+			})
+
+			if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule my calendar event now", &capturingSink{}); err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			if !mcp.callInvoked || mcp.gotToolName != testDirectDomainToolName {
+				t.Fatalf("direct domain call = %q, invoked=%t", mcp.gotToolName, mcp.callInvoked)
+			}
+			if got := len(handoff.requests); got != tc.wantHandoffCount {
+				t.Fatalf("DraftFromChat calls = %d, want %d", got, tc.wantHandoffCount)
+			}
+		})
 	}
 }
 
