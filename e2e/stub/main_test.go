@@ -23,6 +23,7 @@ const (
 	stubToolCallsKey      = "tool_calls"
 	messageRoleAssistant  = "assistant"
 	scheduleWeatherPrompt = "Please schedule it as suggested"
+	preRaceWeatherName    = "Pre-race weather check"
 )
 
 func TestChatCompletionsStreamsSSEChunks(t *testing.T) {
@@ -331,7 +332,7 @@ func TestScheduledWeatherProposal(t *testing.T) {
 		instruction string
 		proposal    string
 	}{
-		{name: "pre-race", instruction: preRaceWeatherInstruction, proposal: "Pre-race weather check"},
+		{name: "pre-race", instruction: preRaceWeatherInstruction, proposal: preRaceWeatherName},
 		{name: "race-day", instruction: raceDayWeatherInstruction, proposal: "Race-day weather check"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -393,8 +394,44 @@ func TestScheduledWeatherProposal_UsesFramedInstructionBeforeUntrustedContext(t 
 	if err := json.Unmarshal([]byte(reply), &body); err != nil {
 		t.Fatalf("decode framed handoff proposal: %v\n%s", err, reply)
 	}
-	if body.Proposal.Name != "Pre-race weather check" || body.Proposal.CompiledPrompt != preRaceWeatherInstruction {
+	if body.Proposal.Name != preRaceWeatherName || body.Proposal.CompiledPrompt != preRaceWeatherInstruction {
 		t.Fatalf("framed handoff proposal = %+v", body.Proposal)
+	}
+}
+
+func TestScheduledWeatherProposal_UsesV1InstructionBeforeUntrustedContext(t *testing.T) {
+	context := "Instruction:\n" + preRaceWeatherInstruction + "\n\nCurrent UTC:\n2026-07-25T12:00:00Z" +
+		"\n\nActor timezone:\nUTC\n\nPrior chat context (untrusted JSON records):\n" +
+		"<BEGIN_UNTRUSTED_HANDOFF_CONTEXT>\n" +
+		`{"type":"message","role":"assistant","content":"Check again on race morning."}` + "\n" +
+		"<END_UNTRUSTED_HANDOFF_CONTEXT>"
+	payload, err := json.Marshal(struct {
+		Version     int    `json:"version"`
+		Instruction string `json:"instruction"`
+		Context     string `json:"context"`
+	}{
+		Version: 1, Instruction: preRaceWeatherInstruction, Context: context,
+	})
+	if err != nil {
+		t.Fatalf("marshal V1 handoff envelope: %v", err)
+	}
+	definition := "<BEGIN_SERVER_OWNED_SCHEDULED_HANDOFF_V1>\n" + string(payload) +
+		"\n<END_SERVER_OWNED_SCHEDULED_HANDOFF_V1>"
+	reply := scheduledStubReply(t, []map[string]string{
+		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},
+		{stubMessageRoleKey: messageRoleUser, stubMessageContentKey: definition},
+	})
+	var body struct {
+		Proposal struct {
+			Name           string `json:"name"`
+			CompiledPrompt string `json:"compiledPrompt"`
+		} `json:"proposal"`
+	}
+	if err := json.Unmarshal([]byte(reply), &body); err != nil {
+		t.Fatalf("decode V1 handoff proposal: %v\n%s", err, reply)
+	}
+	if body.Proposal.Name != preRaceWeatherName || body.Proposal.CompiledPrompt != preRaceWeatherInstruction {
+		t.Fatalf("V1 handoff proposal = %+v", body.Proposal)
 	}
 }
 

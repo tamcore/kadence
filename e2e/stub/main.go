@@ -29,6 +29,8 @@ const (
 	finishToolCalls           = "tool_calls"
 	messageRoleTool           = "tool"
 	draftScheduledToolName    = "kadence__draft_future_unattended_task"
+	handoffEnvelopeBegin      = "<BEGIN_SERVER_OWNED_SCHEDULED_HANDOFF_V1>"
+	handoffEnvelopeEnd        = "<END_SERVER_OWNED_SCHEDULED_HANDOFF_V1>"
 	workerPromptPrefix        = "Gather evidence using only the offered tools."
 	synthesisPromptPrefix     = "Write the concise user-facing Scheduled result"
 	browserNavigateTool       = "browser__browser_navigate"
@@ -480,6 +482,9 @@ func messageText(content json.RawMessage) string {
 }
 
 func scheduledInstruction(definition string) string {
+	if instruction, ok := decodeScheduledHandoffEnvelope(definition); ok {
+		return instruction
+	}
 	const instructionPrefix = "Instruction:\n"
 	const currentUTCMarker = "\n\nCurrent UTC:\n"
 	if !strings.HasPrefix(definition, instructionPrefix) {
@@ -490,6 +495,28 @@ func scheduledInstruction(definition string) string {
 		return before
 	}
 	return framed
+}
+
+func decodeScheduledHandoffEnvelope(definition string) (string, bool) {
+	body, ok := strings.CutPrefix(definition, handoffEnvelopeBegin+"\n")
+	if !ok {
+		return "", false
+	}
+	body, ok = strings.CutSuffix(body, "\n"+handoffEnvelopeEnd)
+	if !ok {
+		return "", false
+	}
+	var envelope struct {
+		Version     int    `json:"version"`
+		Instruction string `json:"instruction"`
+	}
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil ||
+		envelope.Version != 1 ||
+		strings.TrimSpace(envelope.Instruction) != envelope.Instruction ||
+		envelope.Instruction == "" {
+		return "", false
+	}
+	return envelope.Instruction, true
 }
 
 // writeSSEChunk marshals v and writes it as a single "data: <json>\n\n" SSE
