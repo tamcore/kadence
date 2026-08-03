@@ -119,6 +119,14 @@ func publicScheduledRunErrorCode(code string) string {
 	switch code {
 	case "provider_timeout", "provider_unavailable", "invalid_definition", "internal_error", "compiler_failed":
 		return code
+	case "provider_failed":
+		return "provider_unavailable"
+	case "timeout":
+		return "provider_timeout"
+	case "missing_tool":
+		return "invalid_definition"
+	case "execution_failed", "execution_interrupted":
+		return "internal_error"
 	default:
 		return ""
 	}

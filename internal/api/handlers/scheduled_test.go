@@ -19,23 +19,24 @@ import (
 )
 
 const (
-	scheduledTestTask1   = "task-1"
-	scheduledTestTask2   = "task-2"
-	scheduledTestConv1   = "conv-1"
-	scheduledTestConfirm = "confirm"
-	scheduledTestList    = "list"
-	scheduledTestDetail  = "detail"
-	scheduledTestPause   = "pause"
-	scheduledTestResume  = "resume"
-	scheduledTestDelete  = "delete"
-	scheduledTestRun     = "run"
-	scheduledTestRead    = "read"
-	scheduledTestDiscard = "discard"
-	scheduledDiscardID   = "00000000-0000-0000-0000-000000000001"
-	scheduledTimezoneUTC = "UTC"
-	scheduledTestMessage = `{"message":"x"}`
-	scheduledTestPaused  = `{"state":"paused"}`
-	scheduledTestMorning = "Morning"
+	scheduledTestTask1                = "task-1"
+	scheduledTestTask2                = "task-2"
+	scheduledTestConv1                = "conv-1"
+	scheduledTestConfirm              = "confirm"
+	scheduledTestList                 = "list"
+	scheduledTestDetail               = "detail"
+	scheduledTestPause                = "pause"
+	scheduledTestResume               = "resume"
+	scheduledTestDelete               = "delete"
+	scheduledTestRun                  = "run"
+	scheduledTestRead                 = "read"
+	scheduledTestDiscard              = "discard"
+	scheduledDiscardID                = "00000000-0000-0000-0000-000000000001"
+	scheduledTimezoneUTC              = "UTC"
+	scheduledTestMessage              = `{"message":"x"}`
+	scheduledTestPaused               = `{"state":"paused"}`
+	scheduledTestMorning              = "Morning"
+	scheduledErrorProviderUnavailable = "provider_unavailable"
 )
 
 type fakeScheduledLifecycle struct {
@@ -461,13 +462,28 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 		Task: model.ScheduledTask{ID: scheduledTestTask1, ConversationID: scheduledTestConv1, CreatedAt: now, UpdatedAt: now},
 		Runs: []model.ScheduledTaskRun{{
 			ID: 1, TaskID: scheduledTestTask1, OccurrenceKey: "manual:1", ScheduledFor: now,
-			State: model.ScheduledTaskRunStateFailed, Error: "provider_unavailable", CreatedAt: now,
+			State: model.ScheduledTaskRunStateFailed, Error: scheduledErrorProviderUnavailable, CreatedAt: now,
 		}, {
 			ID: 2, TaskID: scheduledTestTask1, OccurrenceKey: "manual:2", ScheduledFor: now,
 			State: model.ScheduledTaskRunStateFailed, Error: "provider response: bearer raw-secret", CreatedAt: now,
 		}, {
 			ID: 3, TaskID: scheduledTestTask1, OccurrenceKey: "manual:3", ScheduledFor: now,
 			State: model.ScheduledTaskRunStateFailed, Error: "compiler_failed", CreatedAt: now,
+		}, {
+			ID: 4, TaskID: scheduledTestTask1, OccurrenceKey: "manual:4", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "provider_failed", CreatedAt: now,
+		}, {
+			ID: 5, TaskID: scheduledTestTask1, OccurrenceKey: "manual:5", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "timeout", CreatedAt: now,
+		}, {
+			ID: 6, TaskID: scheduledTestTask1, OccurrenceKey: "manual:6", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "missing_tool", CreatedAt: now,
+		}, {
+			ID: 7, TaskID: scheduledTestTask1, OccurrenceKey: "manual:7", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "execution_failed", CreatedAt: now,
+		}, {
+			ID: 8, TaskID: scheduledTestTask1, OccurrenceKey: "manual:8", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "execution_interrupted", CreatedAt: now,
 		}},
 	}}
 	rec := httptest.NewRecorder()
@@ -486,7 +502,7 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(response.Data.Runs) != 3 || response.Data.Runs[0]["errorCode"] != "provider_unavailable" {
+	if len(response.Data.Runs) != 8 || response.Data.Runs[0]["errorCode"] != scheduledErrorProviderUnavailable {
 		t.Fatalf("runs=%v, want first safe provider_unavailable code", response.Data.Runs)
 	}
 	if _, ok := response.Data.Runs[0]["error"]; ok {
@@ -497,6 +513,17 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 	}
 	if response.Data.Runs[2]["errorCode"] != "compiler_failed" {
 		t.Fatalf("runs=%v, want legacy compiler_failed code", response.Data.Runs)
+	}
+	for runIndex, wantCode := range map[int]string{
+		3: scheduledErrorProviderUnavailable,
+		4: "provider_timeout",
+		5: "invalid_definition",
+		6: "internal_error",
+		7: "internal_error",
+	} {
+		if response.Data.Runs[runIndex]["errorCode"] != wantCode {
+			t.Fatalf("run %d=%v, want errorCode=%q", runIndex, response.Data.Runs[runIndex], wantCode)
+		}
 	}
 }
 
