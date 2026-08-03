@@ -112,7 +112,16 @@ func taskDTO(task model.ScheduledTask) scheduledTaskDTO {
 func runDTO(run model.ScheduledTaskRun) scheduledRunDTO {
 	return scheduledRunDTO{ID: run.ID, OccurrenceKey: run.OccurrenceKey, ScheduledFor: run.ScheduledFor.Format(time.RFC3339),
 		State: run.State, StartedAt: timeString(run.StartedAt), FinishedAt: timeString(run.FinishedAt), Result: run.Result,
-		ErrorCode: run.Error, Unread: run.Unread, CreatedAt: run.CreatedAt.Format(time.RFC3339)}
+		ErrorCode: publicScheduledRunErrorCode(run.Error), Unread: run.Unread, CreatedAt: run.CreatedAt.Format(time.RFC3339)}
+}
+
+func publicScheduledRunErrorCode(code string) string {
+	switch code {
+	case "provider_timeout", "provider_unavailable", "invalid_definition", "internal_error", "compiler_failed":
+		return code
+	default:
+		return ""
+	}
 }
 
 func timeString(value *time.Time) *string {

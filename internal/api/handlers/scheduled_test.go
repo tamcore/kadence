@@ -462,6 +462,12 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 		Runs: []model.ScheduledTaskRun{{
 			ID: 1, TaskID: scheduledTestTask1, OccurrenceKey: "manual:1", ScheduledFor: now,
 			State: model.ScheduledTaskRunStateFailed, Error: "provider_unavailable", CreatedAt: now,
+		}, {
+			ID: 2, TaskID: scheduledTestTask1, OccurrenceKey: "manual:2", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "provider response: bearer raw-secret", CreatedAt: now,
+		}, {
+			ID: 3, TaskID: scheduledTestTask1, OccurrenceKey: "manual:3", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "compiler_failed", CreatedAt: now,
 		}},
 	}}
 	rec := httptest.NewRecorder()
@@ -480,11 +486,17 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(response.Data.Runs) != 1 || response.Data.Runs[0]["errorCode"] != "provider_unavailable" {
-		t.Fatalf("runs=%v, want one safe provider_unavailable code", response.Data.Runs)
+	if len(response.Data.Runs) != 3 || response.Data.Runs[0]["errorCode"] != "provider_unavailable" {
+		t.Fatalf("runs=%v, want first safe provider_unavailable code", response.Data.Runs)
 	}
-	if _, ok := response.Data.Runs[0]["error"]; ok || strings.Contains(rec.Body.String(), "provider response") {
+	if _, ok := response.Data.Runs[0]["error"]; ok {
+		t.Fatalf("scheduled detail exposed a raw failure field: %s", rec.Body.String())
+	}
+	if _, ok := response.Data.Runs[1]["errorCode"]; ok || strings.Contains(rec.Body.String(), "provider response") || strings.Contains(rec.Body.String(), "raw-secret") {
 		t.Fatalf("scheduled detail exposed a raw failure: %s", rec.Body.String())
+	}
+	if response.Data.Runs[2]["errorCode"] != "compiler_failed" {
+		t.Fatalf("runs=%v, want legacy compiler_failed code", response.Data.Runs)
 	}
 }
 
