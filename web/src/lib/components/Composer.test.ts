@@ -59,6 +59,7 @@ describe('Composer', () => {
 		expect(screen.getByRole('button', { name: 'Reference documents' })).toContainElement(
 			container.querySelector('.reference-trigger .composer-icon')
 		);
+		expect(container.querySelector('.reference-trigger .composer-icon')).toHaveTextContent('@');
 		expect(container.querySelectorAll('.composer-icon')).toHaveLength(2);
 		expect(screen.getByRole('button', { name: 'Reference documents' })).toHaveAttribute(
 			'aria-label',
