@@ -186,7 +186,7 @@ describe('/scheduled/[id]', () => {
 					id: 3,
 					state,
 					scheduledFor: '2026-07-25T08:00:00Z',
-					error: '',
+					errorCode: '',
 					unread: false
 				},
 				...inProgress.runs
