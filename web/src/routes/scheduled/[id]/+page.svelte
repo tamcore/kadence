@@ -128,6 +128,19 @@
 		return value.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase());
 	}
 
+	function failureLabel(code: string): string {
+		switch (code) {
+			case 'provider_unavailable':
+				return 'Provider unavailable';
+			case 'provider_timeout':
+				return 'Timeout';
+			case 'invalid_definition':
+				return 'Invalid task definition';
+			default:
+				return 'Internal error';
+		}
+	}
+
 	function formatTaskTime(value: string): string {
 		if (!detail) return '';
 		return new Intl.DateTimeFormat(undefined, {
@@ -208,7 +221,7 @@
 								<time datetime={run.scheduledFor}>{formatTaskTime(run.scheduledFor)}</time>
 							</div>
 							{#if run.result}<div class="run-body"><MarkdownMessage content={run.result} /></div>{/if}
-							{#if run.error}<p class="run-error">{label(run.error)}</p>{/if}
+							{#if run.errorCode}<p class="run-error">{failureLabel(run.errorCode)}</p>{/if}
 							{#if run.state === 'no_change'}<p class="muted">Nothing changed.</p>{/if}
 						</li>
 					{/each}

@@ -62,6 +62,19 @@
 		}
 	}
 
+	function failureLabel(code: string | undefined): string {
+		switch (code) {
+			case 'provider_unavailable':
+				return 'Provider unavailable';
+			case 'provider_timeout':
+				return 'Timeout';
+			case 'invalid_definition':
+				return 'Invalid task definition';
+			default:
+				return 'Internal error';
+		}
+	}
+
 	function detailHref(): string | undefined {
 		if (isDismissed || !taskID || taskState === 'deleted') return undefined;
 		return taskState === 'draft' ? `/scheduled?task=${encodeURIComponent(taskID)}` : `/scheduled/${encodeURIComponent(taskID)}`;
@@ -145,8 +158,8 @@
 			<p class="scheduled-error" role="status" aria-live="polite">{controller.error}</p>
 		{/if}
 
-		{#if !isDismissed && artifactState === 'failed' && artifact.retryable}
-			<p class="scheduled-error" role="alert">This delegated task could not be prepared.</p>
+		{#if !isDismissed && artifactState === 'failed'}
+			<p class="scheduled-error" role="alert">{failureLabel(artifact.errorCode)}</p>
 		{/if}
 
 		{#if canDefine && question}

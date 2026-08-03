@@ -87,7 +87,7 @@ export interface ScheduledRun {
 	startedAt?: string;
 	finishedAt?: string;
 	result?: string;
-	error?: string;
+	errorCode?: string;
 	unread: boolean;
 	createdAt: string;
 }

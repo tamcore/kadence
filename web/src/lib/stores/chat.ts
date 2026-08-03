@@ -70,6 +70,11 @@ function sortArtifacts(artifacts: ScheduledArtifact[]): ScheduledArtifact[] {
 	return [...artifacts].sort((a, b) => a.ordinal - b.ordinal);
 }
 
+const scheduledHandoffToolNames = new Set([
+	'kadence__draft_future_unattended_task',
+	'kadence__draft_scheduled_task'
+]);
+
 function textFirstParts(message: ChatMessage, artifacts: ScheduledArtifact[]): MessagePart[] {
 	const transientTools = (message.parts ?? []).filter(
 		(part): part is Extract<MessagePart, { kind: 'tool' }> => part.kind === 'tool'
@@ -450,7 +455,7 @@ async function consumeStream(
 			} else if (ev.type === 'tool') {
 				const tool = ev.tool;
 				const status = ev.status;
-				if (tool === 'kadence__draft_scheduled_task') continue;
+				if (scheduledHandoffToolNames.has(tool)) continue;
 				if (status === 'running') {
 					updateAssistantParts((parts) => [
 						...parts,

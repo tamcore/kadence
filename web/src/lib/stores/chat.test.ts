@@ -375,11 +375,13 @@ describe('chat store', () => {
 		]);
 	});
 
-	it('upserts scheduled artifacts independently and ignores the scheduling built-in tool chip', async () => {
+	it('upserts scheduled artifacts and suppresses current and legacy handoff tool chips', async () => {
 		streamChatMock.mockReturnValueOnce(events([
 			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
 			{ type: 'token', delta: 'I delegated this.' },
+			{ type: 'tool', tool: 'kadence__draft_future_unattended_task', status: 'running' },
 			{ type: 'tool', tool: 'kadence__draft_scheduled_task', status: 'running' },
+			{ type: 'tool', tool: 'garmin__get_activities', status: 'running' },
 			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-2', ordinal: 2, artifactState: 'ready' } },
 			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'ready' } },
 			{ type: 'scheduled_artifact', scheduledArtifact: { handoffId: 'handoff-1', ordinal: 1, artifactState: 'failed', retryable: true, reused: true } },
@@ -394,6 +396,7 @@ describe('chat store', () => {
 		expect(assistant.scheduledArtifacts?.map((item) => item.handoffId)).toEqual(['handoff-1', 'handoff-2']);
 		expect(assistant.parts).toEqual([
 			{ kind: 'text', content: 'I delegated this.' },
+			{ kind: 'tool', tool: 'garmin__get_activities', status: 'running', arguments: undefined },
 			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-1', artifactState: 'failed' }) },
 			{ kind: 'scheduled', artifact: expect.objectContaining({ handoffId: 'handoff-2' }) }
 		]);

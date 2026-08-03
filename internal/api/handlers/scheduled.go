@@ -85,7 +85,7 @@ type scheduledRunDTO struct {
 	StartedAt     *string `json:"startedAt,omitempty"`
 	FinishedAt    *string `json:"finishedAt,omitempty"`
 	Result        string  `json:"result,omitempty"`
-	Error         string  `json:"error,omitempty"`
+	ErrorCode     string  `json:"errorCode,omitempty"`
 	Unread        bool    `json:"unread"`
 	CreatedAt     string  `json:"createdAt"`
 }
@@ -112,7 +112,7 @@ func taskDTO(task model.ScheduledTask) scheduledTaskDTO {
 func runDTO(run model.ScheduledTaskRun) scheduledRunDTO {
 	return scheduledRunDTO{ID: run.ID, OccurrenceKey: run.OccurrenceKey, ScheduledFor: run.ScheduledFor.Format(time.RFC3339),
 		State: run.State, StartedAt: timeString(run.StartedAt), FinishedAt: timeString(run.FinishedAt), Result: run.Result,
-		Error: run.Error, Unread: run.Unread, CreatedAt: run.CreatedAt.Format(time.RFC3339)}
+		ErrorCode: run.Error, Unread: run.Unread, CreatedAt: run.CreatedAt.Format(time.RFC3339)}
 }
 
 func timeString(value *time.Time) *string {

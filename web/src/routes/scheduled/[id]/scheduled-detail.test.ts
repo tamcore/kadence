@@ -53,7 +53,7 @@ const detail = {
 			id: 1,
 			state: 'failed',
 			scheduledFor: '2026-07-23T08:00:00Z',
-			error: 'provider_timeout',
+			errorCode: 'provider_timeout',
 			unread: false
 		}
 	]
@@ -74,7 +74,7 @@ describe('/scheduled/[id]', () => {
 
 		expect(await screen.findByRole('heading', { name: 'Post-run review' })).toBeInTheDocument();
 		expect(screen.getByText('Your pace was steady.')).toBeInTheDocument();
-		expect(screen.getByText(/provider timeout/i)).toBeInTheDocument();
+		expect(screen.getByText('Timeout')).toBeInTheDocument();
 		expect(screen.getAllByText(/1:00:00 AM/).length).toBeGreaterThan(0);
 		await waitFor(() => expect(readMock).toHaveBeenCalledWith('task-1'));
 	});
@@ -99,7 +99,7 @@ describe('/scheduled/[id]', () => {
 				id: 3,
 				state: 'pending',
 				scheduledFor: '2026-07-25T08:00:00Z',
-				error: '',
+				errorCode: '',
 				unread: false
 			}
 		];
@@ -128,7 +128,7 @@ describe('/scheduled/[id]', () => {
 				id: 3,
 				state: 'pending',
 				scheduledFor: '2026-07-25T08:00:00Z',
-				error: '',
+				errorCode: '',
 				unread: true
 			}
 		];
@@ -219,7 +219,7 @@ describe('/scheduled/[id]', () => {
 				id: 0,
 				state: 'running',
 				scheduledFor: '2026-07-22T08:00:00Z',
-				error: '',
+				errorCode: '',
 				unread: false
 			}
 		];

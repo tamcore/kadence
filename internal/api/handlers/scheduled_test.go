@@ -455,6 +455,39 @@ func TestDetailExposesDeliveryConversationID(t *testing.T) {
 	}
 }
 
+func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	fake := &fakeScheduledLifecycle{detailResult: scheduled.Detail{
+		Task: model.ScheduledTask{ID: scheduledTestTask1, ConversationID: scheduledTestConv1, CreatedAt: now, UpdatedAt: now},
+		Runs: []model.ScheduledTaskRun{{
+			ID: 1, TaskID: scheduledTestTask1, OccurrenceKey: "manual:1", ScheduledFor: now,
+			State: model.ScheduledTaskRunStateFailed, Error: "provider_unavailable", CreatedAt: now,
+		}},
+	}}
+	rec := httptest.NewRecorder()
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/"+scheduledTestTask1, nil), 7), "id", scheduledTestTask1)
+
+	handlers.NewScheduled(fake).Detail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Runs []map[string]any `json:"runs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data.Runs) != 1 || response.Data.Runs[0]["errorCode"] != "provider_unavailable" {
+		t.Fatalf("runs=%v, want one safe provider_unavailable code", response.Data.Runs)
+	}
+	if _, ok := response.Data.Runs[0]["error"]; ok || strings.Contains(rec.Body.String(), "provider response") {
+		t.Fatalf("scheduled detail exposed a raw failure: %s", rec.Body.String())
+	}
+}
+
 func TestScheduledDetailMapsOwnerMissToNotFound(t *testing.T) {
 	h := handlers.NewScheduled(&fakeScheduledLifecycle{detailErr: store.ErrNotFound})
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/x", nil), 7), "id", "x")

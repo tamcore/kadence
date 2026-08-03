@@ -310,7 +310,7 @@ describe('ChatView', () => {
 		expect(screen.getByText(/✓/)).toBeInTheDocument();
 	});
 
-	it('renders durable scheduled cards and never exposes the scheduling built-in as a generic tool chip', () => {
+	it('renders durable scheduled cards without current or legacy handoff chips', () => {
 		(messages as unknown as { set: (v: unknown[]) => void }).set([
 			{
 				id: 12,
@@ -318,6 +318,7 @@ describe('ChatView', () => {
 				content: 'I delegated this.',
 				parts: [
 					{ kind: 'text', content: 'I delegated this.' },
+					{ kind: 'tool', tool: 'garmin__get_activities', status: 'done' },
 					{
 							kind: 'scheduled',
 							artifact: {
@@ -331,6 +332,8 @@ describe('ChatView', () => {
 		render(ChatView, { props: {} });
 		expect(screen.getByText('Delegated work order')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+		expect(screen.getByText(/garmin · get_activities/)).toBeInTheDocument();
+		expect(screen.queryByText(/kadence · draft_future_unattended_task/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/kadence · draft_scheduled_task/)).not.toBeInTheDocument();
 	});
 

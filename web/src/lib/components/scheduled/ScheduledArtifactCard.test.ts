@@ -66,6 +66,35 @@ describe('ScheduledArtifactCard', () => {
 		}
 	});
 
+	it('renders stable categories for failed handoff diagnostics and keeps retry available', () => {
+		const failures: Array<[string, string, boolean]> = [
+			['provider_unavailable', 'Provider unavailable', true],
+			['provider_timeout', 'Timeout', true],
+			['invalid_definition', 'Invalid task definition', false],
+			['internal_error', 'Internal error', true]
+		];
+		for (const [errorCode, label, retryable] of failures) {
+			const result = render(ScheduledArtifactCard, {
+				props: {
+					artifact: artifact({
+						artifactState: 'failed',
+						errorCode,
+						retryable,
+						proposal: undefined
+					})
+				}
+			});
+
+			expect(within(result.container).getByRole('alert')).toHaveTextContent(label);
+			if (retryable) {
+				expect(within(result.container).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+			} else {
+				expect(within(result.container).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+			}
+			result.unmount();
+		}
+	});
+
 	it('keeps question controls unfocused, proposes the exact version, and links to task detail', async () => {
 		confirmMock.mockResolvedValueOnce({ id: 'task-1', state: 'active' });
 		render(ScheduledArtifactCard, {
