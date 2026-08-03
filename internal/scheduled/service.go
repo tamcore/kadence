@@ -533,6 +533,9 @@ func definitionMessages(history []model.Message, projection *handoffDefinitionPr
 				out = append(out, DefinitionMessage{Role: message.Role, Text: instruction})
 				continue
 			}
+			if isHandoffDefinitionCandidate(message.Content) {
+				continue
+			}
 		}
 		text, question := definitionMessageContent(message.Content)
 		out = append(out, DefinitionMessage{Role: message.Role, Text: text, Question: question})

@@ -53,6 +53,10 @@ func ExtractHandoffInstruction(content string) (string, bool) {
 	return extractLegacyHandoffInstruction(content)
 }
 
+func isHandoffDefinitionCandidate(content string) bool {
+	return strings.HasPrefix(content, handoffEnvelopeMarkerPrefix) || strings.HasPrefix(content, "Instruction:\n")
+}
+
 func decodeHandoffEnvelope(content string) (handoffEnvelope, bool) {
 	body, ok := strings.CutPrefix(content, handoffEnvelopeBegin+"\n")
 	if !ok {

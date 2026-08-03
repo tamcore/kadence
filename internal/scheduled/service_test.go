@@ -458,6 +458,8 @@ func TestServiceDetailProjectsOnlyVerifiedFirstHandoffDefinition(t *testing.T) {
 	const proposalLikeInstruction = instruction + "\n\nScheduled proposal audit: {\"version\":1}"
 	versioned := versionedHandoffDefinition(t, instruction)
 	legacy := legacyHandoffDefinition(instruction)
+	malformedVersioned := "<BEGIN_SERVER_OWNED_SCHEDULED_HANDOFF_V1>\n{\"version\":2}\n<END_SERVER_OWNED_SCHEDULED_HANDOFF_V1>"
+	malformedLegacy := "Instruction:\nprivate handoff context"
 	secondUserMessage := versionedHandoffDefinition(t, "Keep this raw")
 	task := model.ScheduledTask{
 		ID: serviceTaskID, UserID: 7, ConversationID: serviceConversationID,
@@ -476,6 +478,7 @@ func TestServiceDetailProjectsOnlyVerifiedFirstHandoffDefinition(t *testing.T) {
 		first     string
 		handoff   *serviceHandoffs
 		wantFirst string
+		suppress  bool
 	}{
 		{name: "linked versioned envelope", first: versioned, handoff: &serviceHandoffs{row: linked(7)}, wantFirst: instruction},
 		{name: "linked legacy envelope", first: legacy, handoff: &serviceHandoffs{row: linked(7)}, wantFirst: instruction},
@@ -483,6 +486,8 @@ func TestServiceDetailProjectsOnlyVerifiedFirstHandoffDefinition(t *testing.T) {
 		{name: "linked legacy envelope preserves question-like instruction", first: legacyHandoffDefinition(questionLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: questionLikeInstruction},
 		{name: "linked versioned envelope preserves proposal-like instruction", first: versionedHandoffDefinition(t, proposalLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: proposalLikeInstruction},
 		{name: "linked legacy envelope preserves proposal-like instruction", first: legacyHandoffDefinition(proposalLikeInstruction), handoff: &serviceHandoffs{row: linked(7)}, wantFirst: proposalLikeInstruction},
+		{name: "linked malformed versioned envelope is suppressed", first: malformedVersioned, handoff: &serviceHandoffs{row: linked(7)}, suppress: true},
+		{name: "linked malformed legacy envelope is suppressed", first: malformedLegacy, handoff: &serviceHandoffs{row: linked(7)}, suppress: true},
 		{name: "unlinked envelope", first: versioned, handoff: &serviceHandoffs{err: store.ErrNotFound}, wantFirst: versioned},
 		{name: "other owner envelope", first: versioned, handoff: &serviceHandoffs{row: linked(8)}, wantFirst: versioned},
 		{name: "direct task envelope", first: versioned, wantFirst: versioned},
@@ -504,6 +509,16 @@ func TestServiceDetailProjectsOnlyVerifiedFirstHandoffDefinition(t *testing.T) {
 			detail, err := svc.Detail(context.Background(), 7, serviceTaskID)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.suppress {
+				if len(detail.DefinitionMessages) != 2 ||
+					detail.DefinitionMessages[0].Role != model.MsgRoleAssistant ||
+					detail.DefinitionMessages[0].Text != "What time?" ||
+					detail.DefinitionMessages[0].Question == nil ||
+					detail.DefinitionMessages[1].Text != secondUserMessage {
+					t.Fatalf("definition messages = %+v", detail.DefinitionMessages)
+				}
+				return
 			}
 			if len(detail.DefinitionMessages) != 3 ||
 				detail.DefinitionMessages[0].Text != tc.wantFirst ||
