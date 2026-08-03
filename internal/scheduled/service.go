@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -85,17 +86,24 @@ type ServiceDeps struct {
 	ToolsForUser  ToolResolver
 	ChatHandoffs  ChatHandoffStore
 	Now           func() time.Time
+	Log           *slog.Logger
 }
 
 // Service owns definition/refinement and lifecycle transitions. Execution is
 // intentionally outside this service and is introduced by the worker phase.
-type Service struct{ deps ServiceDeps }
+type Service struct {
+	deps ServiceDeps
+	log  *slog.Logger
+}
 
 func NewService(deps ServiceDeps) *Service {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Service{deps: deps}
+	if deps.Log == nil {
+		deps.Log = slog.Default()
+	}
+	return &Service{deps: deps, log: deps.Log}
 }
 
 type Actor struct {
@@ -186,7 +194,8 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 		return result, err
 	}
 	if err != nil {
-		if markErr := s.deps.ChatHandoffs.MarkTaskFailed(ctx, actor.ID, task.ID, "compiler_failed", true); markErr != nil {
+		failure := classifyPreparationError(err)
+		if markErr := s.deps.ChatHandoffs.MarkTaskFailed(ctx, actor.ID, task.ID, failure.code, retryablePreparationFailure(failure)); markErr != nil {
 			return DefinitionResult{}, fmt.Errorf("scheduled: persist chat handoff failure: %w", markErr)
 		}
 		return DefinitionResult{}, err

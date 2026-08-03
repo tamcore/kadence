@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	openai "github.com/openai/openai-go/v3"
 
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -27,6 +31,62 @@ const (
 )
 
 var errCompilerResponseTooLarge = errors.New("scheduled: compiler response exceeds 64 KiB")
+
+const (
+	preparationCodeProviderTimeout     = "provider_timeout"
+	preparationCodeProviderUnavailable = "provider_unavailable"
+	preparationCodeInvalidDefinition   = "invalid_definition"
+	preparationCodeInternalError       = "internal_error"
+)
+
+type preparationError struct {
+	code  string
+	cause error
+}
+
+func (e *preparationError) Error() string {
+	return "scheduled: preparation failed: " + e.code
+}
+
+func (e *preparationError) Unwrap() error {
+	return e.cause
+}
+
+func (e *preparationError) Code() string {
+	return e.code
+}
+
+func newPreparationError(code string, cause error) error {
+	return &preparationError{code: code, cause: cause}
+}
+
+func classifyPreparationError(err error) *preparationError {
+	if err == nil {
+		return nil
+	}
+	var existing *preparationError
+	if errors.As(err, &existing) {
+		return existing
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &preparationError{code: preparationCodeProviderTimeout, cause: err}
+	}
+	var transportError net.Error
+	if errors.As(err, &transportError) {
+		if transportError.Timeout() {
+			return &preparationError{code: preparationCodeProviderTimeout, cause: err}
+		}
+		return &preparationError{code: preparationCodeProviderUnavailable, cause: err}
+	}
+	var providerError *openai.Error
+	if errors.As(err, &providerError) && (providerError.StatusCode == http.StatusTooManyRequests || providerError.StatusCode >= http.StatusInternalServerError) {
+		return &preparationError{code: preparationCodeProviderUnavailable, cause: err}
+	}
+	if errors.Is(err, errCompilerResponseTooLarge) {
+		return &preparationError{code: preparationCodeInvalidDefinition, cause: err}
+	}
+	return &preparationError{code: preparationCodeInternalError, cause: err}
+}
 
 // QuestionKind controls how a Scheduled clarification is rendered.
 type QuestionKind string
@@ -141,22 +201,22 @@ func NewCompiler(p provider.Provider, cfg CompilerConfig) *Compiler {
 // validates its single structured refinement response.
 func (c *Compiler) Refine(ctx context.Context, history []provider.Message, available []provider.ToolDefinition, nextVersion int) (Refinement, error) {
 	if c == nil || c.provider == nil {
-		return Refinement{}, errors.New("scheduled: compiler provider is required")
+		return Refinement{}, newPreparationError(preparationCodeInternalError, errors.New("scheduled: compiler provider is required"))
 	}
 	if nextVersion <= 0 {
-		return Refinement{}, errors.New("scheduled: proposal version must be positive")
+		return Refinement{}, newPreparationError(preparationCodeInternalError, errors.New("scheduled: proposal version must be positive"))
 	}
 	if c.cfg.MaxTokens > maxCompilerMaxTokens {
-		return Refinement{}, fmt.Errorf("scheduled: compiler max tokens must not exceed %d", maxCompilerMaxTokens)
+		return Refinement{}, newPreparationError(preparationCodeInternalError, fmt.Errorf("scheduled: compiler max tokens must not exceed %d", maxCompilerMaxTokens))
 	}
 
 	tools, err := availableToolMap(available)
 	if err != nil {
-		return Refinement{}, err
+		return Refinement{}, newPreparationError(preparationCodeInternalError, err)
 	}
 	toolMetadata, err := compilerToolMetadata(tools)
 	if err != nil {
-		return Refinement{}, err
+		return Refinement{}, newPreparationError(preparationCodeInternalError, err)
 	}
 	req := provider.ChatRequest{
 		Messages:    make([]provider.Message, 0, len(history)+1),
@@ -178,27 +238,24 @@ func (c *Compiler) Refine(ctx context.Context, history []provider.Message, avail
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, errCompilerResponseTooLarge) {
-			return Refinement{}, errCompilerResponseTooLarge
-		}
-		return Refinement{}, fmt.Errorf("scheduled: refine task: %w", err)
+		return Refinement{}, classifyPreparationError(fmt.Errorf("scheduled: refine task: %w", err))
 	}
 	if streamedBytes > maxCompilerResponseBytes || len(response) > maxCompilerResponseBytes {
-		return Refinement{}, errCompilerResponseTooLarge
+		return Refinement{}, newPreparationError(preparationCodeInvalidDefinition, errCompilerResponseTooLarge)
 	}
 
 	decoded, err := decodeRefinement(response)
 	if err != nil {
-		return Refinement{}, err
+		return Refinement{}, newPreparationError(preparationCodeInvalidDefinition, err)
 	}
 	if decoded.Question != nil {
 		if err := validateQuestion(decoded.Question); err != nil {
-			return Refinement{}, err
+			return Refinement{}, newPreparationError(preparationCodeInvalidDefinition, err)
 		}
 		return decoded, nil
 	}
 	if err := validateProposal(decoded.Proposal, tools, nextVersion, c.cfg.Now()); err != nil {
-		return Refinement{}, err
+		return Refinement{}, newPreparationError(preparationCodeInvalidDefinition, err)
 	}
 	return decoded, nil
 }

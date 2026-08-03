@@ -1,11 +1,14 @@
 package scheduled
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -321,14 +324,33 @@ func TestDraftFromChatReusesExistingAndPersistsSafeFailure(t *testing.T) {
 			t.Fatalf("artifact=%+v compiler=%d err=%v", artifact, compiler.calls, err)
 		}
 	})
-	t.Run("compiler failure becomes retryable card", func(t *testing.T) {
-		handoffs, compiler := &handoffStore{fresh: true}, &handoffCompiler{err: errors.New("provider detail")}
-		svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: compiler, ChatHandoffs: handoffs})
-		artifact, err := svc.DraftFromChat(context.Background(), actor, req)
-		if err != nil || artifact.ArtifactState != model.ScheduledHandoffStateFailed || artifact.ErrorCode != handoffCompilerFailed || !artifact.Retryable || handoffs.failedCalls != 1 || handoffs.failedCode != handoffCompilerFailed || !handoffs.failedRetry {
-			t.Fatalf("artifact=%+v handoffs=%+v err=%v", artifact, handoffs, err)
-		}
-	})
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantCode  string
+		wantRetry bool
+	}{
+		{name: "deadline", err: context.DeadlineExceeded, wantCode: "provider_timeout", wantRetry: true},
+		{name: "transport unavailable", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, wantCode: "provider_unavailable", wantRetry: true},
+		{name: "invalid definition", err: errCompilerResponseTooLarge, wantCode: "invalid_definition", wantRetry: false},
+		{name: "unexpected failure", err: errors.New("internal provider detail"), wantCode: "internal_error", wantRetry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			handoffs, compiler := &handoffStore{fresh: true}, &handoffCompiler{err: tc.err}
+			svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: compiler, ChatHandoffs: handoffs, Log: slog.New(slog.NewTextHandler(&logs, nil))})
+			artifact, err := svc.DraftFromChat(context.Background(), actor, req)
+			if err != nil || artifact.ArtifactState != model.ScheduledHandoffStateFailed || artifact.ErrorCode != tc.wantCode || artifact.Retryable != tc.wantRetry || handoffs.failedCalls != 1 || handoffs.failedCode != tc.wantCode || handoffs.failedRetry != tc.wantRetry {
+				t.Fatalf("artifact=%+v handoffs=%+v err=%v", artifact, handoffs, err)
+			}
+			if !strings.Contains(logs.String(), "task_id=task-handoff") || !strings.Contains(logs.String(), "handoff_id=handoff-1") || !strings.Contains(logs.String(), "error_code="+tc.wantCode) {
+				t.Fatalf("log=%q", logs.String())
+			}
+			if strings.Contains(logs.String(), tc.err.Error()) {
+				t.Fatalf("log leaked raw failure: %q", logs.String())
+			}
+		})
+	}
 }
 
 func TestRefineUpdatesOnlyLinkedChatHandoffState(t *testing.T) {
@@ -348,7 +370,7 @@ func TestRefineUpdatesOnlyLinkedChatHandoffState(t *testing.T) {
 	if _, err := svc.Refine(context.Background(), actor, handoffTestTaskID, "retry"); err == nil {
 		t.Fatal("compiler failure succeeded")
 	}
-	if failing.readyCalls != 0 || failing.failedCalls != 1 || failing.failedCode != handoffCompilerFailed || !failing.failedRetry {
+	if failing.readyCalls != 0 || failing.failedCalls != 1 || failing.failedCode != "internal_error" || !failing.failedRetry {
 		t.Fatalf("ready=%d failed=%d code=%q retryable=%t", failing.readyCalls, failing.failedCalls, failing.failedCode, failing.failedRetry)
 	}
 }

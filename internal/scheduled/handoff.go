@@ -104,12 +104,12 @@ func (s *Service) DraftFromChat(ctx context.Context, actor Actor, req HandoffReq
 	}
 	task, err := s.deps.Tasks.BeginDraftRevision(ctx, row.Task.ID, actor.ID, row.Task.Version)
 	if err != nil {
-		return s.failChatHandoff(ctx, actor.ID, row)
+		return s.failChatHandoff(ctx, actor.ID, row, err)
 	}
 	definition := boundedHandoffEnvelope(s.deps.Now().UTC(), handoffTimezone(actor.Timezone), instruction, req.RecentMessages, visible)
 	result, err := s.compileDraft(ctx, actor, task, definition, visible)
 	if err != nil {
-		return s.failChatHandoff(ctx, actor.ID, row)
+		return s.failChatHandoff(ctx, actor.ID, row, err)
 	}
 	row.Task = &result.Task
 	if err := s.deps.ChatHandoffs.MarkTaskReady(ctx, actor.ID, row.Task.ID); err != nil {
@@ -119,15 +119,34 @@ func (s *Service) DraftFromChat(ctx context.Context, actor Actor, req HandoffReq
 	return chatArtifact(row, false)
 }
 
-func (s *Service) failChatHandoff(ctx context.Context, userID int64, row store.HydratedChatHandoff) (ChatArtifact, error) {
+func (s *Service) failChatHandoff(ctx context.Context, userID int64, row store.HydratedChatHandoff, cause error) (ChatArtifact, error) {
 	if row.Task == nil {
 		return ChatArtifact{}, errors.New("scheduled: chat handoff draft has no task")
 	}
-	if err := s.deps.ChatHandoffs.MarkTaskFailed(ctx, userID, row.Task.ID, handoffCompilerFailed, true); err != nil {
+	failure := classifyPreparationError(cause)
+	retryable := retryablePreparationFailure(failure)
+	s.log.Warn("scheduled handoff preparation failed",
+		"task_id", row.Task.ID,
+		"handoff_id", row.Handoff.ID,
+		"error_code", failure.code,
+		"err", redactedPreparationCause(failure),
+	)
+	if err := s.deps.ChatHandoffs.MarkTaskFailed(ctx, userID, row.Task.ID, failure.code, retryable); err != nil {
 		return ChatArtifact{}, fmt.Errorf("scheduled: persist chat handoff failure: %w", err)
 	}
-	row.Handoff.ArtifactState, row.Handoff.ErrorCode, row.Handoff.Retryable = model.ScheduledHandoffStateFailed, handoffCompilerFailed, true
+	row.Handoff.ArtifactState, row.Handoff.ErrorCode, row.Handoff.Retryable = model.ScheduledHandoffStateFailed, failure.code, retryable
 	return chatArtifact(row, false)
+}
+
+func retryablePreparationFailure(failure *preparationError) bool {
+	return failure == nil || failure.code != preparationCodeInvalidDefinition
+}
+
+func redactedPreparationCause(failure *preparationError) error {
+	if failure == nil {
+		return errors.New("scheduled preparation failed")
+	}
+	return fmt.Errorf("scheduled preparation %s: %w", failure.code, errors.New("redacted"))
 }
 
 // HydrateChatArtifacts batch-loads persisted cards by their source assistant message.

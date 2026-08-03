@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -13,9 +14,10 @@ import (
 )
 
 const (
-	credentialsTool  = "kadence__request_credentials"
-	weatherTool      = "weather"
-	compilerUserRole = "user"
+	credentialsTool           = "kadence__request_credentials"
+	weatherTool               = "weather"
+	compilerUserRole          = "user"
+	compilerInvalidDefinition = "invalid_definition"
 )
 
 var compilerNow = time.Date(2026, 7, 24, 18, 0, 0, 0, time.UTC)
@@ -28,6 +30,18 @@ type refinementProvider struct {
 	tokens            []string
 	ignoreTokenError  bool
 	skipTokenCallback bool
+}
+
+type preparationCoded interface {
+	Code() string
+}
+
+func preparationErrorCode(err error) string {
+	var coded preparationCoded
+	if errors.As(err, &coded) {
+		return coded.Code()
+	}
+	return ""
 }
 
 func (p *refinementProvider) StreamChat(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (string, error) {
@@ -115,8 +129,8 @@ func TestCompilerRejectsOversizedStreamedResponse(t *testing.T) {
 		tokens: []string{strings.Repeat("x", 64*1024+1)},
 	}
 	c := scheduled.NewCompiler(p, scheduled.CompilerConfig{})
-	if got, err := c.Refine(context.Background(), nil, nil, 1); err == nil || got.Question != nil || got.Proposal != nil || !strings.Contains(err.Error(), "response exceeds") {
-		t.Fatalf("Refine() = %+v, %v; want bounded stream error and no refinement", got, err)
+	if got, err := c.Refine(context.Background(), nil, nil, 1); err == nil || got.Question != nil || got.Proposal != nil || preparationErrorCode(err) != compilerInvalidDefinition {
+		t.Fatalf("Refine() = %+v, %v; want invalid definition and no refinement", got, err)
 	}
 }
 
@@ -126,8 +140,8 @@ func TestCompilerRejectsOversizedDirectResponse(t *testing.T) {
 		skipTokenCallback: true,
 	}
 	c := scheduled.NewCompiler(p, scheduled.CompilerConfig{})
-	if got, err := c.Refine(context.Background(), nil, nil, 1); err == nil || got.Question != nil || got.Proposal != nil || !strings.Contains(err.Error(), "response exceeds") {
-		t.Fatalf("Refine() = %+v, %v; want bounded direct-response error and no refinement", got, err)
+	if got, err := c.Refine(context.Background(), nil, nil, 1); err == nil || got.Question != nil || got.Proposal != nil || preparationErrorCode(err) != compilerInvalidDefinition {
+		t.Fatalf("Refine() = %+v, %v; want invalid definition and no refinement", got, err)
 	}
 }
 
@@ -499,9 +513,58 @@ func TestCompilerPromptOmitsBlankToolsAndDescriptions(t *testing.T) {
 }
 
 func TestCompilerRefineReturnsProviderError(t *testing.T) {
-	p := &refinementProvider{err: errors.New("provider unavailable")}
+	providerFailure := errors.New("provider unavailable")
+	p := &refinementProvider{err: providerFailure}
 	c := scheduled.NewCompiler(p, scheduled.CompilerConfig{})
-	if _, err := c.Refine(context.Background(), nil, nil, 1); err == nil || !strings.Contains(err.Error(), "provider unavailable") {
-		t.Fatalf("Refine() error = %v, want provider error", err)
+	if _, err := c.Refine(context.Background(), nil, nil, 1); err == nil || !errors.Is(err, providerFailure) || preparationErrorCode(err) != "internal_error" {
+		t.Fatalf("Refine() error = %v, want wrapped internal provider failure", err)
+	}
+}
+
+func TestCompilerRefineClassifiesPreparationFailures(t *testing.T) {
+	unavailable := errors.New("connection refused")
+	for _, tc := range []struct {
+		name      string
+		provider  *refinementProvider
+		wantCode  string
+		wantCause error
+	}{
+		{
+			name:      "deadline",
+			provider:  &refinementProvider{err: fmt.Errorf("provider request: %w", context.DeadlineExceeded)},
+			wantCode:  "provider_timeout",
+			wantCause: context.DeadlineExceeded,
+		},
+		{
+			name:      "transport unavailable",
+			provider:  &refinementProvider{err: &net.OpError{Op: "dial", Net: "tcp", Err: unavailable}},
+			wantCode:  "provider_unavailable",
+			wantCause: unavailable,
+		},
+		{
+			name:     "malformed definition",
+			provider: &refinementProvider{reply: `{"assistantText":`},
+			wantCode: compilerInvalidDefinition,
+		},
+		{
+			name:      "unexpected failure",
+			provider:  &refinementProvider{err: errors.New("unexpected compiler failure")},
+			wantCode:  "internal_error",
+			wantCause: nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler := scheduled.NewCompiler(tc.provider, scheduled.CompilerConfig{})
+			_, err := compiler.Refine(context.Background(), nil, nil, 1)
+			if err == nil {
+				t.Fatal("Refine() error = nil")
+			}
+			if got := preparationErrorCode(err); got != tc.wantCode {
+				t.Fatalf("preparation error code = %q, want %q (error: %v)", got, tc.wantCode, err)
+			}
+			if tc.wantCause != nil && !errors.Is(err, tc.wantCause) {
+				t.Fatalf("errors.Is(%v) = false", tc.wantCause)
+			}
+		})
 	}
 }
