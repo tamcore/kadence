@@ -57,8 +57,11 @@ func (f *handoffStore) CreateOrGetDraft(_ context.Context, in store.CreateChatHa
 	}
 	return f.row, f.fresh, nil
 }
-func (*handoffStore) GetByTask(context.Context, int64, string) (store.HydratedChatHandoff, error) {
-	return store.HydratedChatHandoff{}, store.ErrNotFound
+func (f *handoffStore) GetByTask(context.Context, int64, string) (store.HydratedChatHandoff, error) {
+	if f.row.Handoff.ID == "" {
+		return store.HydratedChatHandoff{}, store.ErrNotFound
+	}
+	return f.row, nil
 }
 func (f *handoffStore) MarkTaskReady(context.Context, int64, string) error {
 	f.readyCalls++
@@ -365,13 +368,20 @@ func TestRefineUpdatesOnlyLinkedChatHandoffState(t *testing.T) {
 		t.Fatalf("ready=%d failed=%d", handoffs.readyCalls, handoffs.failedCalls)
 	}
 
-	failing := &handoffStore{}
-	svc = NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: tasks, Compiler: &handoffCompiler{err: errors.New("compiler detail")}, ChatHandoffs: failing})
+	var logs bytes.Buffer
+	failing := &handoffStore{row: handoffRow(1, model.ScheduledHandoffStateCreating)}
+	svc = NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: tasks, Compiler: &handoffCompiler{err: errors.New("compiler detail")}, ChatHandoffs: failing, Log: slog.New(slog.NewTextHandler(&logs, nil))})
 	if _, err := svc.Refine(context.Background(), actor, handoffTestTaskID, "retry"); err == nil {
 		t.Fatal("compiler failure succeeded")
 	}
 	if failing.readyCalls != 0 || failing.failedCalls != 1 || failing.failedCode != "internal_error" || !failing.failedRetry {
 		t.Fatalf("ready=%d failed=%d code=%q retryable=%t", failing.readyCalls, failing.failedCalls, failing.failedCode, failing.failedRetry)
+	}
+	if !strings.Contains(logs.String(), "task_id=task-handoff") || !strings.Contains(logs.String(), "handoff_id=handoff-1") || !strings.Contains(logs.String(), "error_code=internal_error") {
+		t.Fatalf("log=%q", logs.String())
+	}
+	if strings.Contains(logs.String(), "compiler detail") {
+		t.Fatalf("log leaked raw failure: %q", logs.String())
 	}
 }
 

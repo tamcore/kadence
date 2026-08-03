@@ -195,6 +195,9 @@ func (s *Service) Refine(ctx context.Context, actor Actor, taskID, message strin
 	}
 	if err != nil {
 		failure := classifyPreparationError(err)
+		if handoff, handoffErr := s.deps.ChatHandoffs.GetByTask(ctx, actor.ID, task.ID); handoffErr == nil {
+			s.logChatHandoffFailure(handoff, failure)
+		}
 		if markErr := s.deps.ChatHandoffs.MarkTaskFailed(ctx, actor.ID, task.ID, failure.code, retryablePreparationFailure(failure)); markErr != nil {
 			return DefinitionResult{}, fmt.Errorf("scheduled: persist chat handoff failure: %w", markErr)
 		}

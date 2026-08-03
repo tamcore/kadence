@@ -125,17 +125,24 @@ func (s *Service) failChatHandoff(ctx context.Context, userID int64, row store.H
 	}
 	failure := classifyPreparationError(cause)
 	retryable := retryablePreparationFailure(failure)
+	s.logChatHandoffFailure(row, failure)
+	if err := s.deps.ChatHandoffs.MarkTaskFailed(ctx, userID, row.Task.ID, failure.code, retryable); err != nil {
+		return ChatArtifact{}, fmt.Errorf("scheduled: persist chat handoff failure: %w", err)
+	}
+	row.Handoff.ArtifactState, row.Handoff.ErrorCode, row.Handoff.Retryable = model.ScheduledHandoffStateFailed, failure.code, retryable
+	return chatArtifact(row, false)
+}
+
+func (s *Service) logChatHandoffFailure(row store.HydratedChatHandoff, failure *preparationError) {
+	if row.Task == nil {
+		return
+	}
 	s.log.Warn("scheduled handoff preparation failed",
 		"task_id", row.Task.ID,
 		"handoff_id", row.Handoff.ID,
 		"error_code", failure.code,
 		"err", redactedPreparationCause(failure),
 	)
-	if err := s.deps.ChatHandoffs.MarkTaskFailed(ctx, userID, row.Task.ID, failure.code, retryable); err != nil {
-		return ChatArtifact{}, fmt.Errorf("scheduled: persist chat handoff failure: %w", err)
-	}
-	row.Handoff.ArtifactState, row.Handoff.ErrorCode, row.Handoff.Retryable = model.ScheduledHandoffStateFailed, failure.code, retryable
-	return chatArtifact(row, false)
 }
 
 func retryablePreparationFailure(failure *preparationError) bool {
