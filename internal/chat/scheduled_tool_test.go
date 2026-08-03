@@ -24,9 +24,20 @@ func (scheduledHandoffStub) ConfirmSoleChatDraft(context.Context, scheduled.Acto
 func (scheduledHandoffStub) CleanupChatDrafts(context.Context, int64, []string) error { return nil }
 
 func TestScheduledToolDefinitionContract(t *testing.T) {
-	definition := draftScheduledTaskToolDefinition()
-	if definition.Name != draftScheduledTaskToolName {
-		t.Fatalf("name = %q, want %q", definition.Name, draftScheduledTaskToolName)
+	definition := draftFutureUnattendedTaskToolDefinition()
+	if definition.Name != "kadence__draft_future_unattended_task" {
+		t.Fatalf("name = %q, want future unattended task tool", definition.Name)
+	}
+	if definition.Name == "kadence__draft_scheduled_task" {
+		t.Fatal("definition exposed legacy scheduled task tool")
+	}
+	for _, want := range []string{
+		"future unattended task", "retry", "follow-up",
+		"do not use it to execute or schedule work now", "direct calendar or domain operation",
+	} {
+		if !strings.Contains(strings.ToLower(definition.Description), want) {
+			t.Errorf("description missing %q: %s", want, definition.Description)
+		}
 	}
 	parameters := string(definition.Parameters)
 	for _, want := range []string{
@@ -63,29 +74,37 @@ func TestParseDraftScheduledTaskArgsRejectsInvalidJSON(t *testing.T) {
 
 func TestAssembleToolsOffersScheduledToolOnlyWhenEnabled(t *testing.T) {
 	disabled := NewService(nil, ServiceConfig{}, Deps{})
-	if hasToolNamed(disabled.assembleTools(t.Context(), nil), draftScheduledTaskToolName) {
+	if hasToolNamed(disabled.assembleTools(t.Context(), nil), draftFutureUnattendedTaskToolName) {
 		t.Fatal("disabled service offered scheduled tool")
 	}
 
 	enabled := NewService(nil, ServiceConfig{}, Deps{Scheduled: scheduledHandoffStub{}})
-	if !hasToolNamed(enabled.assembleTools(t.Context(), nil), draftScheduledTaskToolName) {
+	tools := enabled.assembleTools(t.Context(), nil)
+	if !hasToolNamed(tools, draftFutureUnattendedTaskToolName) {
 		t.Fatal("enabled service did not offer scheduled tool")
+	}
+	if hasToolNamed(tools, legacyDraftScheduledTaskToolName) {
+		t.Fatal("enabled service offered legacy scheduled tool")
 	}
 }
 
 func TestSystemPromptAddsSchedulingGuidanceOnlyWhenEnabled(t *testing.T) {
 	disabled := NewService(nil, ServiceConfig{}, Deps{})
-	if strings.Contains(disabled.systemPrompt(UserContext{}), draftScheduledTaskToolName) {
+	if strings.Contains(disabled.systemPrompt(UserContext{}), draftFutureUnattendedTaskToolName) {
 		t.Fatal("disabled system prompt included scheduling guidance")
 	}
 	enabled := NewService(nil, ServiceConfig{}, Deps{Scheduled: scheduledHandoffStub{}})
 	prompt := enabled.systemPrompt(UserContext{})
 	for _, want := range []string{
-		draftScheduledTaskToolName, "explicitly requests scheduling in the current user turn", "independently confirmable", "Delegate data work", "never claim activation",
+		draftFutureUnattendedTaskToolName, "future unattended task", "retry", "follow-up",
+		"execute or schedule work now", "direct calendar or domain operation", "does not imply creating a handoff",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("scheduling guidance missing %q: %s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, legacyDraftScheduledTaskToolName) {
+		t.Fatal("system prompt included legacy scheduled tool")
 	}
 }
 
@@ -96,7 +115,7 @@ func TestScheduledToolResultAndSSEDoNotExposeInstructionOrHistory(t *testing.T) 
 	message := service.handleDraftScheduledTask(
 		t.Context(), "conversation", scheduled.Actor{ID: 7}, "source history must stay private", 11,
 		[]model.Message{{Role: model.MsgRoleAssistant, Content: "prior history must stay private"}}, state,
-		provider.ToolCall{ID: "call", Name: draftScheduledTaskToolName, Arguments: `{"instruction":"instruction must stay private"}`}, sink,
+		provider.ToolCall{ID: "call", Name: draftFutureUnattendedTaskToolName, Arguments: `{"instruction":"instruction must stay private"}`}, sink,
 	)
 	for _, secret := range []string{"instruction must stay private", "source history must stay private", "prior history must stay private"} {
 		if strings.Contains(message.Content, secret) {

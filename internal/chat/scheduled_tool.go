@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	draftScheduledTaskToolName = "kadence__draft_scheduled_task"
-	maxScheduledDraftCalls     = 5
+	draftFutureUnattendedTaskToolName = "kadence__draft_future_unattended_task"
+	legacyDraftScheduledTaskToolName  = "kadence__draft_scheduled_task"
+	maxScheduledDraftCalls            = 5
 )
 
 var draftScheduledTaskParameters = json.RawMessage(`{
@@ -36,10 +37,10 @@ type draftScheduledTaskArgs struct {
 	Instruction string `json:"instruction"`
 }
 
-func draftScheduledTaskToolDefinition() provider.ToolDefinition {
+func draftFutureUnattendedTaskToolDefinition() provider.ToolDefinition {
 	return provider.ToolDefinition{
-		Name:        draftScheduledTaskToolName,
-		Description: "Draft one independently confirmable unattended task from an explicit request in the current user turn. This only creates a draft: never claim the task is activated.",
+		Name:        draftFutureUnattendedTaskToolName,
+		Description: "Draft one independently confirmable future unattended task from an explicit request in the current user turn. Use it for a future retry or follow-up. Do not use it to execute or schedule work now, or to perform a direct calendar or domain operation. It only creates a draft: never claim the task is activated.",
 		Parameters:  draftScheduledTaskParameters,
 	}
 }

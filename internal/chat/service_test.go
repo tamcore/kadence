@@ -57,8 +57,9 @@ func (f fakeProvider) StreamChatWithTools(ctx context.Context, req provider.Chat
 // each result's content through onToken, so tests can exercise multi-call
 // flows like truncation-continuation.
 type scriptedProvider struct {
-	results []provider.StreamResult
-	calls   int
+	results  []provider.StreamResult
+	calls    int
+	requests []provider.ChatRequest
 }
 
 type scheduledFailingProvider struct {
@@ -94,7 +95,8 @@ func (p *scriptedProvider) StreamChat(ctx context.Context, req provider.ChatRequ
 	return r.Content, err
 }
 
-func (p *scriptedProvider) StreamChatWithTools(_ context.Context, _ provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+func (p *scriptedProvider) StreamChatWithTools(_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc) (provider.StreamResult, error) {
+	p.requests = append(p.requests, req)
 	if p.calls >= len(p.results) {
 		return provider.StreamResult{FinishReason: "stop"}, nil
 	}
@@ -434,7 +436,7 @@ const (
 	testConvID                 = "conv-uuid-1"
 	testNewConvID              = "conv-uuid-new"
 	testConvTitle              = "test"
-	testScheduledToolName      = "kadence__draft_scheduled_task"
+	testScheduledToolName      = "kadence__draft_future_unattended_task"
 	testScheduledArtifactReady = "ready"
 	testScheduledCallID        = "call"
 	testScheduledArguments     = `{"instruction":"check recovery"}`
@@ -532,6 +534,39 @@ func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testi
 	if len(artifacts) != 2 || artifacts[0].ScheduledArtifact == nil || artifacts[0].ScheduledArtifact.Ordinal != 1 ||
 		artifacts[1].ScheduledArtifact == nil || artifacts[1].ScheduledArtifact.Ordinal != 2 {
 		t.Fatalf("artifact events = %+v", artifacts)
+	}
+}
+
+func TestServiceRejectsLegacyScheduledToolCallWithoutMCPOrHandoff(t *testing.T) {
+	handoff := &fakeScheduledHandoff{}
+	mcp := &fakeMCPTools{enabled: true}
+	provider := &scriptedProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{
+			ID: testScheduledCallID, Name: "kadence__draft_scheduled_task", Arguments: testScheduledArguments,
+		}}},
+		{Content: "I cannot create that handoff."},
+	}}
+	convs := &fakeConvs{byID: map[string]model.Conversation{testConvID: {ID: testConvID, UserID: testUserID}}}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
+		Convs: convs, Msgs: msgs, Scheduled: handoff, MCP: mcp,
+	})
+
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(handoff.requests) != 0 {
+		t.Fatalf("DraftFromChat requests = %+v, want none", handoff.requests)
+	}
+	if mcp.callInvoked {
+		t.Fatalf("legacy tool call reached MCP: tool=%q args=%q", mcp.gotToolName, mcp.gotArgsJSON)
+	}
+	if len(provider.requests) != 2 || len(provider.requests[1].Messages) == 0 {
+		t.Fatalf("provider requests = %+v, want tool result in second request", provider.requests)
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != toolMsgRole || last.Content != "error: legacy scheduled handoff tool is unavailable" {
+		t.Fatalf("legacy tool result = %+v, want rejection", last)
 	}
 }
 
