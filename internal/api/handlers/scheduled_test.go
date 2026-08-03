@@ -527,6 +527,34 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 	}
 }
 
+func TestScheduledDetailExposesFailedHandoffDiagnosticsWithoutRawCause(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	fake := &fakeScheduledLifecycle{detailResult: scheduled.Detail{
+		Task:             model.ScheduledTask{ID: scheduledTestTask1, ConversationID: scheduledTestConv1, CreatedAt: now, UpdatedAt: now},
+		HandoffErrorCode: "provider_failed",
+		HandoffRetryable: true,
+	}}
+	rec := httptest.NewRecorder()
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/"+scheduledTestTask1, nil), 7), "id", scheduledTestTask1)
+
+	handlers.NewScheduled(fake).Detail(rec, req)
+
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "provider response") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Handoff map[string]any `json:"handoff"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Data.Handoff["errorCode"] != "provider_unavailable" || response.Data.Handoff["retryable"] != true {
+		t.Fatalf("handoff=%v, want provider_unavailable and retryable", response.Data.Handoff)
+	}
+}
+
 func TestScheduledDetailMapsOwnerMissToNotFound(t *testing.T) {
 	h := handlers.NewScheduled(&fakeScheduledLifecycle{detailErr: store.ErrNotFound})
 	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/x", nil), 7), "id", "x")

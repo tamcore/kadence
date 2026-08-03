@@ -71,7 +71,8 @@ describe('ScheduledArtifactCard', () => {
 			['provider_unavailable', 'Provider unavailable', true],
 			['provider_timeout', 'Timeout', true],
 			['invalid_definition', 'Invalid task definition', false],
-			['internal_error', 'Internal error', true]
+			['internal_error', 'Internal error', true],
+			['compiler_failed', 'This delegated task could not be prepared.', true]
 		];
 		for (const [errorCode, label, retryable] of failures) {
 			const result = render(ScheduledArtifactCard, {

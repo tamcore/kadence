@@ -51,6 +51,23 @@ func TestExtractHandoffInstructionRejectsMalformedVersionedEnvelope(t *testing.T
 	}
 }
 
+func TestExtractHandoffInstructionRejectsOversizedEncodedVersionedEnvelope(t *testing.T) {
+	now := time.Date(2026, 8, 3, 10, 30, 0, 0, time.UTC)
+	instruction := strings.Repeat(`"`, maxHandoffInstructionBytes/2)
+	recent := make([]model.Message, maxHandoffMessages)
+	for i := range recent {
+		recent[i] = model.Message{Role: model.MsgRoleUser, Content: strings.Repeat("context", 5000)}
+	}
+	context := boundedHandoffDefinitionLimit(now, "UTC", instruction, recent, nil, maxHandoffContextBytes)
+	envelope := encodeHandoffEnvelope(instruction, context)
+	if len(envelope) <= maxHandoffContextBytes {
+		t.Fatalf("test envelope=%d, want encoded envelope over %d bytes", len(envelope), maxHandoffContextBytes)
+	}
+	if got, ok := ExtractHandoffInstruction(envelope); ok || got != "" {
+		t.Fatalf("ExtractHandoffInstruction() = %q, %t; want oversized envelope rejected", got, ok)
+	}
+}
+
 func TestExtractHandoffInstructionReadsRecognizedLegacyHandoff(t *testing.T) {
 	legacy := boundedHandoffDefinition(
 		time.Date(2026, 8, 3, 10, 30, 0, 0, time.UTC),

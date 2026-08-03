@@ -121,6 +121,8 @@ type Detail struct {
 	Task               model.ScheduledTask
 	Runs               []model.ScheduledTaskRun
 	DefinitionMessages []DefinitionMessage
+	HandoffErrorCode   string
+	HandoffRetryable   bool
 }
 
 type ListResult struct {
@@ -351,10 +353,18 @@ func (s *Service) Detail(ctx context.Context, userID int64, taskID string) (Deta
 	if err != nil {
 		return Detail{}, err
 	}
-	return Detail{Task: task, Runs: runs, DefinitionMessages: definitionMessages(history, projection)}, nil
+	detail := Detail{Task: task, Runs: runs, DefinitionMessages: definitionMessages(history, projection)}
+	if projection != nil {
+		detail.HandoffErrorCode = projection.ErrorCode
+		detail.HandoffRetryable = projection.Retryable
+	}
+	return detail, nil
 }
 
-type handoffDefinitionProjection struct{}
+type handoffDefinitionProjection struct {
+	ErrorCode string
+	Retryable bool
+}
 
 func (s *Service) handoffDefinitionProjection(
 	ctx context.Context, userID int64, task model.ScheduledTask,
@@ -374,7 +384,7 @@ func (s *Service) handoffDefinitionProjection(
 		handoff.Task.ID != task.ID || handoff.Task.UserID != userID || handoff.Task.ConversationID != task.ConversationID {
 		return nil, nil
 	}
-	return &handoffDefinitionProjection{}, nil
+	return &handoffDefinitionProjection{ErrorCode: handoff.Handoff.ErrorCode, Retryable: handoff.Handoff.Retryable}, nil
 }
 
 func (s *Service) Pause(ctx context.Context, userID int64, taskID string) (model.ScheduledTask, error) {

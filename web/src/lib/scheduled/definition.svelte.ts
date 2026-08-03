@@ -66,6 +66,8 @@ export class ScheduledDefinitionController {
 	questionIndex = $state(-1);
 	question = $state<ScheduledQuestion | null>(null);
 	proposal = $state<ScheduledProposal | null>(null);
+	handoffErrorCode = $state<string | null>(null);
+	handoffRetryable = $state(false);
 	coachText = $state('');
 	sending = $state(false);
 	error = $state('');
@@ -82,6 +84,8 @@ export class ScheduledDefinitionController {
 		this.turns = [...this.turns, { role: 'user', content: message }];
 		this.sending = true;
 		this.error = '';
+		this.handoffErrorCode = null;
+		this.handoffRetryable = false;
 		this.stale = false;
 		this.question = null;
 		this.proposal = null;
@@ -201,6 +205,8 @@ export class ScheduledDefinitionController {
 		this.sending = false;
 		this.error = '';
 		this.stale = false;
+		this.handoffErrorCode = null;
+		this.handoffRetryable = false;
 		this.notify();
 	};
 
@@ -225,6 +231,8 @@ export class ScheduledDefinitionController {
 		if (!this.taskId) return;
 		const loaded = await getScheduledTask(this.taskId);
 		this.task = loaded.task;
+		this.handoffErrorCode = loaded.handoff?.errorCode ?? null;
+		this.handoffRetryable = loaded.handoff?.retryable ?? false;
 		this.turns = loaded.definitionMessages.map((message) => ({
 			role: message.role,
 			content: message.text

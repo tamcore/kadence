@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	serviceTaskID         = "task-1"
-	serviceConversationID = "conv-1"
-	serviceCompiledPrompt = "prompt"
-	serviceUsernameAlice  = "alice"
-	serviceTimezoneBerlin = "Europe/Berlin"
-	serviceTimezoneUTC    = "UTC"
+	serviceTaskID          = "task-1"
+	serviceConversationID  = "conv-1"
+	serviceCompiledPrompt  = "prompt"
+	serviceUsernameAlice   = "alice"
+	serviceTimezoneBerlin  = "Europe/Berlin"
+	serviceTimezoneUTC     = "UTC"
+	serviceProviderTimeout = "provider_timeout"
 )
 
 type serviceConversations struct {
@@ -531,6 +532,34 @@ func TestServiceDetailProjectsOnlyVerifiedFirstHandoffDefinition(t *testing.T) {
 				t.Fatalf("handoff calls=%d, want 1", tc.handoff.calls)
 			}
 		})
+	}
+}
+
+func TestServiceDetailProjectsVerifiedHandoffDiagnostics(t *testing.T) {
+	taskID := serviceTaskID
+	task := model.ScheduledTask{
+		ID: serviceTaskID, UserID: 7, ConversationID: serviceConversationID,
+		State: model.ScheduledTaskStateDraft, Timezone: serviceTimezoneUTC,
+	}
+	handoff := &serviceHandoffs{row: store.HydratedChatHandoff{
+		Handoff: model.ScheduledHandoff{
+			UserID: 7, SourceConversationID: "chat-1", SourceUserMessageID: 42,
+			ScheduledTaskID: &taskID, ArtifactState: model.ScheduledHandoffStateFailed,
+			ErrorCode: serviceProviderTimeout, Retryable: true,
+		},
+		Task: &task,
+	}}
+	svc := scheduled.NewService(scheduled.ServiceDeps{
+		Conversations: &serviceConversations{}, Messages: &serviceMessages{},
+		Tasks: &serviceTasks{task: task}, Compiler: &serviceCompiler{}, ChatHandoffs: handoff,
+	})
+
+	detail, err := svc.Detail(context.Background(), 7, serviceTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.HandoffErrorCode != "provider_timeout" || !detail.HandoffRetryable {
+		t.Fatalf("handoff diagnostics=%q retryable=%t", detail.HandoffErrorCode, detail.HandoffRetryable)
 	}
 }
 

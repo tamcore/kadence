@@ -353,7 +353,7 @@ func TestExecutorBoundsIterationTimeoutAndBytesWithSafeCodes(t *testing.T) {
 			code: failureIterationLimit,
 		},
 		{
-			name: "timeout", worker: &executorProvider{block: true},
+			name: failureTimeout, worker: &executorProvider{block: true},
 			snap: &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}},
 			config: func(e *Executor) {
 				e.cfg.WorkerTimeout = time.Millisecond

@@ -328,15 +328,17 @@ func TestDraftFromChatReusesExistingAndPersistsSafeFailure(t *testing.T) {
 		}
 	})
 	for _, tc := range []struct {
-		name      string
-		err       error
-		wantCode  string
-		wantRetry bool
+		name       string
+		err        error
+		wantCode   string
+		wantRetry  bool
+		wantType   string
+		wantStatus string
 	}{
-		{name: "deadline", err: context.DeadlineExceeded, wantCode: "provider_timeout", wantRetry: true},
-		{name: "transport unavailable", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, wantCode: "provider_unavailable", wantRetry: true},
-		{name: "invalid definition", err: errCompilerResponseTooLarge, wantCode: "invalid_definition", wantRetry: false},
-		{name: "unexpected failure", err: errors.New("internal provider detail"), wantCode: "internal_error", wantRetry: true},
+		{name: "deadline", err: context.DeadlineExceeded, wantCode: preparationCodeProviderTimeout, wantRetry: true, wantType: preparationFailureTypeProvider, wantStatus: preparationFailureStatusTimeout},
+		{name: "transport unavailable", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, wantCode: preparationCodeProviderUnavailable, wantRetry: true, wantType: preparationFailureTypeProvider, wantStatus: preparationFailureStatusUnavailable},
+		{name: "invalid definition", err: errCompilerResponseTooLarge, wantCode: preparationCodeInvalidDefinition, wantRetry: false, wantType: preparationFailureTypeDefinition, wantStatus: preparationFailureStatusRejected},
+		{name: "unexpected failure", err: errors.New("internal provider detail"), wantCode: preparationCodeInternalError, wantRetry: true, wantType: preparationFailureTypeInternal, wantStatus: preparationFailureStatusFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
@@ -348,6 +350,9 @@ func TestDraftFromChatReusesExistingAndPersistsSafeFailure(t *testing.T) {
 			}
 			if !strings.Contains(logs.String(), "task_id=task-handoff") || !strings.Contains(logs.String(), "handoff_id=handoff-1") || !strings.Contains(logs.String(), "error_code="+tc.wantCode) {
 				t.Fatalf("log=%q", logs.String())
+			}
+			if !strings.Contains(logs.String(), "failure_type="+tc.wantType) || !strings.Contains(logs.String(), "failure_status="+tc.wantStatus) || !strings.Contains(logs.String(), "operation=handoff_compile") {
+				t.Fatalf("log metadata=%q", logs.String())
 			}
 			if strings.Contains(logs.String(), tc.err.Error()) {
 				t.Fatalf("log leaked raw failure: %q", logs.String())

@@ -136,8 +136,10 @@
 				return 'Timeout';
 			case 'invalid_definition':
 				return 'Invalid task definition';
-			default:
+			case 'internal_error':
 				return 'Internal error';
+			default:
+				return 'This delegated task could not be prepared.';
 		}
 	}
 

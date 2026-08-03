@@ -157,6 +157,25 @@
 	function runInProgress(state?: string): boolean {
 		return state === 'pending' || state === 'running';
 	}
+
+	function handoffFailureLabel(code: string): string {
+		switch (code) {
+			case 'provider_unavailable':
+				return 'Provider unavailable';
+			case 'provider_timeout':
+				return 'Timeout';
+			case 'invalid_definition':
+				return 'Invalid task definition';
+			case 'internal_error':
+				return 'Internal error';
+			default:
+				return 'This delegated task could not be prepared.';
+		}
+	}
+
+	async function retryHandoff(): Promise<void> {
+		await send('Please retry preparing this delegated task.');
+	}
 </script>
 
 <svelte:head><title>Scheduled · Kadence</title></svelte:head>
@@ -213,6 +232,12 @@
 					{/each}
 					{#if definition.coachText}<p class="coach" aria-live="polite">{definition.coachText}</p>{/if}
 					{#if definition.error}<div class="error" role="alert">{definition.error}</div>{/if}
+					{#if definition.handoffErrorCode}
+						<div class="error" role="alert">{handoffFailureLabel(definition.handoffErrorCode)}</div>
+						{#if definition.handoffRetryable}
+							<button disabled={definition.sending} onclick={() => void retryHandoff()}>Retry</button>
+						{/if}
+					{/if}
 					{#if definition.question}
 						{#key definition.question.id}
 							<ScheduledQuestionCard

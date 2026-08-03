@@ -96,6 +96,11 @@ type scheduledDefinitionMessageDTO struct {
 	Question *scheduled.QuestionCard `json:"question,omitempty"`
 }
 
+type scheduledHandoffDTO struct {
+	ErrorCode string `json:"errorCode,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+}
+
 func taskDTO(task model.ScheduledTask) scheduledTaskDTO {
 	delivery := ""
 	if task.DeliveryConversationID != nil {
@@ -375,9 +380,11 @@ func (h *Scheduled) Detail(w http.ResponseWriter, r *http.Request) {
 			Role: message.Role, Text: message.Text, Question: message.Question,
 		})
 	}
-	RespondJSON(w, http.StatusOK, map[string]any{
-		"task": taskDTO(result.Task), "runs": runs, "definitionMessages": messages,
-	})
+	data := map[string]any{"task": taskDTO(result.Task), "runs": runs, "definitionMessages": messages}
+	if code := publicScheduledRunErrorCode(result.HandoffErrorCode); code != "" {
+		data["handoff"] = scheduledHandoffDTO{ErrorCode: code, Retryable: result.HandoffRetryable}
+	}
+	RespondJSON(w, http.StatusOK, data)
 }
 
 func (h *Scheduled) Confirm(w http.ResponseWriter, r *http.Request) {

@@ -18,6 +18,7 @@ const (
 	weatherTool               = "weather"
 	compilerUserRole          = "user"
 	compilerInvalidDefinition = "invalid_definition"
+	compilerProviderTimeout   = "provider_timeout"
 )
 
 var compilerNow = time.Date(2026, 7, 24, 18, 0, 0, 0, time.UTC)
@@ -532,7 +533,7 @@ func TestCompilerRefineClassifiesPreparationFailures(t *testing.T) {
 		{
 			name:      "deadline",
 			provider:  &refinementProvider{err: fmt.Errorf("provider request: %w", context.DeadlineExceeded)},
-			wantCode:  "provider_timeout",
+			wantCode:  compilerProviderTimeout,
 			wantCause: context.DeadlineExceeded,
 		},
 		{

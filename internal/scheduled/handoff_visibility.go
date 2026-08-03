@@ -58,6 +58,9 @@ func isHandoffDefinitionCandidate(content string) bool {
 }
 
 func decodeHandoffEnvelope(content string) (handoffEnvelope, bool) {
+	if len(content) > maxHandoffContextBytes {
+		return handoffEnvelope{}, false
+	}
 	body, ok := strings.CutPrefix(content, handoffEnvelopeBegin+"\n")
 	if !ok {
 		return handoffEnvelope{}, false

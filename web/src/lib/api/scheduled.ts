@@ -206,6 +206,12 @@ export interface ScheduledDetail {
 	task: ScheduledTask;
 	runs: ScheduledRun[];
 	definitionMessages: ScheduledDefinitionMessage[];
+	handoff?: ScheduledHandoffDetail;
+}
+
+export interface ScheduledHandoffDetail {
+	errorCode: string;
+	retryable: boolean;
 }
 
 export interface ScheduledDefinitionMessage {

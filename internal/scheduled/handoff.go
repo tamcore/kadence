@@ -17,6 +17,17 @@ import (
 )
 
 const (
+	preparationFailureTypeProvider      = "provider"
+	preparationFailureTypeDefinition    = "definition"
+	preparationFailureTypeInternal      = "internal"
+	preparationFailureStatusTimeout     = "timeout"
+	preparationFailureStatusUnavailable = "unavailable"
+	preparationFailureStatusRejected    = "rejected"
+	preparationFailureStatusFailed      = "failed"
+	preparationFailureOperation         = "handoff_compile"
+)
+
+const (
 	maxHandoffInstructionBytes  = 4 << 10
 	maxHandoffMessages          = 16
 	maxHandoffContextBytes      = 32 << 10
@@ -137,12 +148,32 @@ func (s *Service) logChatHandoffFailure(row store.HydratedChatHandoff, failure *
 	if row.Task == nil {
 		return
 	}
+	failureType, failureStatus := preparationFailureMetadata(failure)
 	s.log.Warn("scheduled handoff preparation failed",
 		"task_id", row.Task.ID,
 		"handoff_id", row.Handoff.ID,
 		"error_code", failure.code,
+		"failure_type", failureType,
+		"failure_status", failureStatus,
+		"operation", preparationFailureOperation,
 		"err", redactedPreparationCause(failure),
 	)
+}
+
+func preparationFailureMetadata(failure *preparationError) (string, string) {
+	if failure == nil {
+		return preparationFailureTypeInternal, preparationFailureStatusFailed
+	}
+	switch failure.code {
+	case preparationCodeProviderTimeout:
+		return preparationFailureTypeProvider, preparationFailureStatusTimeout
+	case preparationCodeProviderUnavailable:
+		return preparationFailureTypeProvider, preparationFailureStatusUnavailable
+	case preparationCodeInvalidDefinition:
+		return preparationFailureTypeDefinition, preparationFailureStatusRejected
+	default:
+		return preparationFailureTypeInternal, preparationFailureStatusFailed
+	}
 }
 
 func retryablePreparationFailure(failure *preparationError) bool {

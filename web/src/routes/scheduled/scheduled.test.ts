@@ -69,6 +69,29 @@ describe('/scheduled', () => {
 		expect(screen.getByText(/feedback after my next run/i)).toBeInTheDocument();
 	});
 
+	it('renders a safe failed-handoff category and preserves retry affordance', async () => {
+		(page as unknown as { set: (value: unknown) => void }).set({
+			params: {},
+			url: new URL('http://localhost/scheduled?task=task-failed')
+		});
+		detailMock.mockResolvedValue({
+			task: {
+				id: 'task-failed', state: 'draft', version: 1, name: 'Failed task', kind: 'data',
+				compiledPrompt: '', executionMode: 'data', timezone: 'UTC', authorizedTools: [],
+				deliveryPolicy: 'always', initialRun: 'wait'
+			},
+			runs: [],
+			definitionMessages: [],
+			handoff: { errorCode: 'provider_unavailable', retryable: true }
+		});
+
+		render(Page);
+
+		expect(await screen.findByRole('alert')).toHaveTextContent('Provider unavailable');
+		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+		expect(screen.queryByText(/provider response/i)).not.toBeInTheDocument();
+	});
+
 	it('refines one question at a time and confirms the versioned proposal', async () => {
 		streamMock
 			.mockImplementationOnce(() =>
