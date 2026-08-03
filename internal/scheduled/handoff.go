@@ -27,6 +27,8 @@ const (
 	preparationFailureOperation         = "handoff_compile"
 )
 
+var errHandoffEnvelopeTooLarge = errors.New("scheduled: encoded handoff envelope exceeds 32 KiB")
+
 const (
 	maxHandoffInstructionBytes  = 4 << 10
 	maxHandoffMessages          = 16
@@ -118,6 +120,9 @@ func (s *Service) DraftFromChat(ctx context.Context, actor Actor, req HandoffReq
 		return s.failChatHandoff(ctx, actor.ID, row, err)
 	}
 	definition := boundedHandoffEnvelope(s.deps.Now().UTC(), handoffTimezone(actor.Timezone), instruction, req.RecentMessages, visible)
+	if definition == "" {
+		return s.failChatHandoff(ctx, actor.ID, row, errHandoffEnvelopeTooLarge)
+	}
 	result, err := s.compileDraft(ctx, actor, task, definition, visible)
 	if err != nil {
 		return s.failChatHandoff(ctx, actor.ID, row, err)

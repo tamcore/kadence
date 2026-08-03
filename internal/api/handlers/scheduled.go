@@ -98,7 +98,7 @@ type scheduledDefinitionMessageDTO struct {
 
 type scheduledHandoffDTO struct {
 	ErrorCode string `json:"errorCode,omitempty"`
-	Retryable bool   `json:"retryable,omitempty"`
+	Retryable bool   `json:"retryable"`
 }
 
 func taskDTO(task model.ScheduledTask) scheduledTaskDTO {

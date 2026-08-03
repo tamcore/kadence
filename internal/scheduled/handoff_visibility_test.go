@@ -63,6 +63,9 @@ func TestExtractHandoffInstructionRejectsOversizedEncodedVersionedEnvelope(t *te
 	if len(envelope) <= maxHandoffContextBytes {
 		t.Fatalf("test envelope=%d, want encoded envelope over %d bytes", len(envelope), maxHandoffContextBytes)
 	}
+	if produced := boundedHandoffEnvelope(now, "UTC", instruction, recent, nil); len(produced) > maxHandoffContextBytes {
+		t.Fatalf("boundedHandoffEnvelope() returned %d bytes, want at most %d", len(produced), maxHandoffContextBytes)
+	}
 	if got, ok := ExtractHandoffInstruction(envelope); ok || got != "" {
 		t.Fatalf("ExtractHandoffInstruction() = %q, %t; want oversized envelope rejected", got, ok)
 	}

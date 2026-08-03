@@ -37,6 +37,7 @@ const (
 	scheduledTestPaused               = `{"state":"paused"}`
 	scheduledTestMorning              = "Morning"
 	scheduledErrorProviderUnavailable = "provider_unavailable"
+	scheduledErrorInvalidDefinition   = "invalid_definition"
 )
 
 type fakeScheduledLifecycle struct {
@@ -517,7 +518,7 @@ func TestScheduledDetailExposesSafeRunErrorCodesOnly(t *testing.T) {
 	for runIndex, wantCode := range map[int]string{
 		3: scheduledErrorProviderUnavailable,
 		4: "provider_timeout",
-		5: "invalid_definition",
+		5: scheduledErrorInvalidDefinition,
 		6: "internal_error",
 		7: "internal_error",
 	} {
@@ -552,6 +553,30 @@ func TestScheduledDetailExposesFailedHandoffDiagnosticsWithoutRawCause(t *testin
 	}
 	if response.Data.Handoff["errorCode"] != "provider_unavailable" || response.Data.Handoff["retryable"] != true {
 		t.Fatalf("handoff=%v, want provider_unavailable and retryable", response.Data.Handoff)
+	}
+}
+
+func TestScheduledDetailIncludesFalseHandoffRetryability(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	fake := &fakeScheduledLifecycle{detailResult: scheduled.Detail{
+		Task:             model.ScheduledTask{ID: scheduledTestTask1, ConversationID: scheduledTestConv1, CreatedAt: now, UpdatedAt: now},
+		HandoffErrorCode: scheduledErrorInvalidDefinition,
+		HandoffRetryable: false,
+	}}
+	rec := httptest.NewRecorder()
+	req := withChiParam(withUser(httptest.NewRequest(http.MethodGet, "/api/scheduled/tasks/"+scheduledTestTask1, nil), 7), "id", scheduledTestTask1)
+	handlers.NewScheduled(fake).Detail(rec, req)
+
+	var response struct {
+		Data struct {
+			Handoff map[string]any `json:"handoff"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Data.Handoff["errorCode"] != scheduledErrorInvalidDefinition || response.Data.Handoff["retryable"] != false {
+		t.Fatalf("handoff=%v, want invalid_definition and retryable=false", response.Data.Handoff)
 	}
 }
 

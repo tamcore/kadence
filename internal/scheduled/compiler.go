@@ -85,6 +85,9 @@ func classifyPreparationError(err error) *preparationError {
 	if errors.Is(err, errCompilerResponseTooLarge) {
 		return &preparationError{code: preparationCodeInvalidDefinition, cause: err}
 	}
+	if errors.Is(err, errHandoffEnvelopeTooLarge) {
+		return &preparationError{code: preparationCodeInvalidDefinition, cause: err}
+	}
 	return &preparationError{code: preparationCodeInternalError, cause: err}
 }
 

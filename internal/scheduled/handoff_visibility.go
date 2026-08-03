@@ -28,8 +28,11 @@ func boundedHandoffEnvelope(now time.Time, timezone, instruction string, recent 
 	for {
 		context := boundedHandoffDefinitionLimit(now, timezone, instruction, recent, visible, contextLimit)
 		envelope := encodeHandoffEnvelope(instruction, context)
-		if len(envelope) <= maxHandoffContextBytes || contextLimit == 0 {
+		if len(envelope) <= maxHandoffContextBytes {
 			return envelope
+		}
+		if contextLimit == 0 {
+			return ""
 		}
 		contextLimit = max(contextLimit-(len(envelope)-maxHandoffContextBytes), 0)
 	}
