@@ -61,8 +61,7 @@ also reject staged paths matched by `.gitignore`, including ones force-added wit
 - **Immutability:** return new values; avoid mutating shared state.
 - **Migrations:** additive and reversible; they auto-run on startup. Check a table's
   original migration before adding an index (don't recreate an existing one).
-- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/). Do **not**
-  add a `Co-authored-by` trailer.
+- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## Hard constraints
 

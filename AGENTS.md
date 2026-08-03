@@ -30,7 +30,7 @@ charts/kadence/        Helm chart
 - **Logging:** `log/slog`. Never log secrets.
 - **Frontend:** embedded only under `-tags prodfrontend`; `go test ./...` works without an npm build.
 - **DB tests:** testcontainers (need Docker) — the real gate for migrations/repos; run in CI.
-- **Commits:** Conventional Commits. **No `Co-authored-by` trailer.**
+- **Commits:** Conventional Commits.
 - **TDD:** write the failing test first; keep files small and focused; wrap errors with `%w`.
 
 ## Common commands
