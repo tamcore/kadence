@@ -221,9 +221,9 @@ func TestBoundedHandoffDefinitionIsSafeAndBounded(t *testing.T) {
 		switch record["type"] {
 		case handoffContextMessage:
 			messages++
-		case "prior_safe_tool_name":
+		case handoffContextPriorSafeTool:
 			priorSafe++
-		case "current_visible_tool_name":
+		case handoffContextVisibleTool:
 			currentVisible++
 		}
 	}
@@ -271,7 +271,7 @@ func TestBoundedHandoffDefinitionFramesHostileContextAsJSON(t *testing.T) {
 		t.Fatalf("hostile content escaped server framing: %q", definition)
 	}
 	records := handoffContextRecords(t, definition)
-	if len(records) != 3 || records[0]["type"] != handoffContextMessage || records[0]["content"] != hostile || records[1]["type"] != "prior_safe_tool_name" || records[2]["type"] != "current_visible_tool_name" {
+	if len(records) != 3 || records[0]["type"] != handoffContextMessage || records[0]["content"] != hostile || records[1]["type"] != handoffContextPriorSafeTool || records[2]["type"] != handoffContextVisibleTool {
 		t.Fatalf("records=%v", records)
 	}
 	if strings.Contains(definition, "never-copy") || strings.Contains(definition, "secret") {

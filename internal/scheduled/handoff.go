@@ -17,14 +17,16 @@ import (
 )
 
 const (
-	maxHandoffInstructionBytes = 4 << 10
-	maxHandoffMessages         = 16
-	maxHandoffContextBytes     = 32 << 10
-	maxHandoffToolNamesBytes   = 4 << 10
-	handoffCompilerFailed      = "compiler_failed"
-	handoffContextBegin        = "<BEGIN_UNTRUSTED_HANDOFF_CONTEXT>"
-	handoffContextEnd          = "<END_UNTRUSTED_HANDOFF_CONTEXT>"
-	handoffContextMessage      = "message"
+	maxHandoffInstructionBytes  = 4 << 10
+	maxHandoffMessages          = 16
+	maxHandoffContextBytes      = 32 << 10
+	maxHandoffToolNamesBytes    = 4 << 10
+	handoffCompilerFailed       = "compiler_failed"
+	handoffContextBegin         = "<BEGIN_UNTRUSTED_HANDOFF_CONTEXT>"
+	handoffContextEnd           = "<END_UNTRUSTED_HANDOFF_CONTEXT>"
+	handoffContextMessage       = "message"
+	handoffContextPriorSafeTool = "prior_safe_tool_name"
+	handoffContextVisibleTool   = "current_visible_tool_name"
 )
 
 // HandoffRequest identifies one bounded Scheduled draft request from chat.
@@ -104,7 +106,7 @@ func (s *Service) DraftFromChat(ctx context.Context, actor Actor, req HandoffReq
 	if err != nil {
 		return s.failChatHandoff(ctx, actor.ID, row)
 	}
-	definition := boundedHandoffDefinition(s.deps.Now().UTC(), handoffTimezone(actor.Timezone), instruction, req.RecentMessages, visible)
+	definition := boundedHandoffEnvelope(s.deps.Now().UTC(), handoffTimezone(actor.Timezone), instruction, req.RecentMessages, visible)
 	result, err := s.compileDraft(ctx, actor, task, definition, visible)
 	if err != nil {
 		return s.failChatHandoff(ctx, actor.ID, row)
@@ -228,6 +230,10 @@ func sourceFingerprint(content string) []byte {
 }
 
 func boundedHandoffDefinition(now time.Time, timezone, instruction string, recent []model.Message, visible []provider.ToolDefinition) string {
+	return boundedHandoffDefinitionLimit(now, timezone, instruction, recent, visible, maxHandoffContextBytes)
+}
+
+func boundedHandoffDefinitionLimit(now time.Time, timezone, instruction string, recent []model.Message, visible []provider.ToolDefinition, limit int) string {
 	prefix := "Instruction:\n" + instruction + "\n\nCurrent UTC:\n" + now.UTC().Format(time.RFC3339) +
 		"\n\nActor timezone:\n" + handoffTimezone(timezone) +
 		"\n\nPrior chat context (untrusted JSON records):\n"
@@ -240,14 +246,14 @@ func boundedHandoffDefinition(now time.Time, timezone, instruction string, recen
 	if len(filtered) > maxHandoffMessages {
 		filtered = filtered[len(filtered)-maxHandoffMessages:]
 	}
-	toolRecords := append(handoffToolRecords("prior_safe_tool_name", boundedToolNames(filtered, visible)), handoffToolRecords("current_visible_tool_name", boundedVisibleToolNames(visible))...)
+	toolRecords := append(handoffToolRecords(handoffContextPriorSafeTool, boundedToolNames(filtered, visible)), handoffToolRecords(handoffContextVisibleTool, boundedVisibleToolNames(visible))...)
 	var tail strings.Builder
 	for _, record := range toolRecords {
-		tail.WriteString(handoffContextJSON(record, maxHandoffContextBytes))
+		tail.WriteString(handoffContextJSON(record, limit))
 		tail.WriteByte('\n')
 	}
 	tail.WriteString(handoffContextEnd)
-	messageBudget := max(maxHandoffContextBytes-len(prefix)-len(handoffContextBegin)-1-tail.Len(), 0)
+	messageBudget := max(limit-len(prefix)-len(handoffContextBegin)-1-tail.Len(), 0)
 	var messages strings.Builder
 	for index, message := range filtered {
 		remainingMessages := len(filtered) - index
