@@ -27,3 +27,26 @@ if (typeof localStorage === 'undefined') {
 		writable: false
 	});
 }
+
+// jsdom does not implement matchMedia. Theme resolution reads
+// prefers-color-scheme, so every test that renders the layout, the sidebar or
+// the profile page needs this. Defaults to light.
+// `configurable: true` is REQUIRED: defineProperty defaults it to false, and
+// store.test.ts re-defines matchMedia per case. Without it those tests throw
+// "TypeError: Cannot redefine property: matchMedia".
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+	Object.defineProperty(window, 'matchMedia', {
+		configurable: true,
+		writable: true,
+		value: (query: string) => ({
+			matches: false,
+			media: query,
+			onchange: null,
+			addEventListener: () => {},
+			removeEventListener: () => {},
+			addListener: () => {},
+			removeListener: () => {},
+			dispatchEvent: () => false
+		})
+	});
+}
