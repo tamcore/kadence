@@ -29,7 +29,7 @@ Values shown are the built-in defaults; `—` means unset/empty.
 | `KADENCE_WEBAUTHN_RP_ID` | — | WebAuthn Relying Party ID = the site's effective domain (e.g. `kadence.example.com`). Empty disables passkeys. Also requires `KADENCE_TRUSTED_ORIGINS` + a valid `KADENCE_ENCRYPTION_KEY`. |
 | `KADENCE_ADMIN_USERNAME` | — | First-run admin bootstrap (created only when the users table is empty). |
 | `KADENCE_ADMIN_EMAIL` | — | First-run admin email. |
-| `KADENCE_ADMIN_PASSWORD` | — | First-run admin password (bcrypt-hashed at insert). |
+| `KADENCE_ADMIN_PASSWORD` | — | First-run admin password (bcrypt-hashed at insert). Minimum **12 characters** — shorter values fail startup, but only on a first boot that actually creates the admin. On an already-bootstrapped install the value is never read, so a shorter legacy value does not block an upgrade. |
 
 ## Rate limiting
 

@@ -21,15 +21,20 @@ func BootstrapAdmin(ctx context.Context, users BootstrapRepo, cfg config.Config)
 	if cfg.AdminUsername == "" || cfg.AdminEmail == "" || cfg.AdminPassword == "" {
 		return nil
 	}
-	if len(cfg.AdminPassword) < MinPasswordLen {
-		return fmt.Errorf("KADENCE_ADMIN_PASSWORD must be at least %d characters", MinPasswordLen)
-	}
 	n, err := users.Count(ctx)
 	if err != nil {
 		return err
 	}
 	if n > 0 {
 		return nil
+	}
+	// Checked only on the path that actually consumes the value. An existing
+	// install keeps KADENCE_ADMIN_PASSWORD in its config long after first boot,
+	// where it has no effect — failing startup (serve.Run exits on this error)
+	// over a value that is never read would brick upgrades whenever the minimum
+	// rises.
+	if len(cfg.AdminPassword) < MinPasswordLen {
+		return fmt.Errorf("KADENCE_ADMIN_PASSWORD must be at least %d characters", MinPasswordLen)
 	}
 	hash, err := HashPassword(cfg.AdminPassword)
 	if err != nil {

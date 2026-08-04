@@ -58,7 +58,7 @@ func TestBootstrapNoOpWhenUnconfigured(t *testing.T) {
 	}
 }
 
-func TestBootstrapFailsOnShortPassword(t *testing.T) {
+func TestBootstrapFailsOnShortPasswordOnFirstBoot(t *testing.T) {
 	r := &bootRepo{count: 0}
 	cfg := config.Config{AdminUsername: testAdminUsername, AdminEmail: testAdminEmail, AdminPassword: "short7c"}
 	err := auth.BootstrapAdmin(context.Background(), r, cfg)
@@ -67,5 +67,20 @@ func TestBootstrapFailsOnShortPassword(t *testing.T) {
 	}
 	if r.created != nil {
 		t.Fatalf("admin should not have been created on short password, got %+v", r.created)
+	}
+}
+
+// TestBootstrapIgnoresShortPasswordWhenAlreadyBootstrapped pins the upgrade
+// path: KADENCE_ADMIN_PASSWORD normally stays in an install's values forever and
+// has no effect after the first boot, so a value that was legal under an older
+// minimum must not fail startup (serve.Run exits on this error).
+func TestBootstrapIgnoresShortPasswordWhenAlreadyBootstrapped(t *testing.T) {
+	r := &bootRepo{count: 1}
+	cfg := config.Config{AdminUsername: testAdminUsername, AdminEmail: testAdminEmail, AdminPassword: "tenchars10"}
+	if err := auth.BootstrapAdmin(context.Background(), r, cfg); err != nil {
+		t.Fatalf("BootstrapAdmin on an already-bootstrapped install: %v", err)
+	}
+	if r.created != nil {
+		t.Fatalf("should not create an admin when users already exist, got %+v", r.created)
 	}
 }
