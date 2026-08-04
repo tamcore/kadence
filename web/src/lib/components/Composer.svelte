@@ -289,7 +289,7 @@
 
 <style>
 	.composer-shell {
-		--composer-control-h: 42px;
+		--composer-control-h: 46px;
 		display: grid;
 		width: 100%;
 		gap: 8px;
@@ -350,7 +350,7 @@
 		flex: 1;
 		min-width: 0;
 		min-height: var(--composer-control-h);
-		padding: 8px 12px;
+		padding: 10px 12px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		font: inherit;
