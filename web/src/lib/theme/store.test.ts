@@ -106,6 +106,15 @@ describe('theme stores', () => {
 		expect(document.documentElement.dataset.theme).toBe('dark');
 
 		setPreference('light');
+		// Flip systemPrefersDark twice (true -> false -> true) so both dispatches
+		// are genuine changes under writable's safe_not_equal (a repeated `matches`
+		// value is a no-op and would prove nothing recomputed). Ending back at
+		// prefersDark=true is deliberate: a broken implementation that resolves
+		// from systemPrefersDark regardless of the explicit preference would
+		// produce 'dark' here (matching darkVariant), not 'light' — whereas
+		// ending at prefersDark=false would coincidentally yield 'light' from
+		// either the correct or the broken formula, proving nothing.
+		mq.listeners.forEach((fn) => fn({ matches: false } as MediaQueryListEvent));
 		mq.listeners.forEach((fn) => fn({ matches: true } as MediaQueryListEvent));
 		expect(document.documentElement.dataset.theme).toBe('light');
 		teardown();
