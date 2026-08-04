@@ -1,18 +1,24 @@
 <script lang="ts">
 	interface Props {
 		online: boolean;
+		serverReachable: boolean;
 		updateAvailable: boolean;
 		applyingUpdate: boolean;
 		onReload: () => void;
 	}
 
-	let { online, updateAvailable, applyingUpdate, onReload }: Props = $props();
+	let { online, serverReachable, updateAvailable, applyingUpdate, onReload }: Props = $props();
 </script>
 
 {#if !online}
 	<div class="strip offline" role="status">
 		<span class="signal" aria-hidden="true"></span>
 		<span>You’re offline — server-backed features are unavailable.</span>
+	</div>
+{:else if !serverReachable}
+	<div class="strip offline" role="status">
+		<span class="signal" aria-hidden="true"></span>
+		<span>Can’t reach the server — retrying…</span>
 	</div>
 {/if}
 
