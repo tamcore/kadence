@@ -26,6 +26,10 @@ import (
 // within any reasonable request timeout.
 const dialTimeout = 15 * time.Second
 
+// dialClient is the seam onto newClient so tests can return fakes instead of
+// dialing a real transport. Production always uses newClient.
+var dialClient = newClient
+
 // UserServerSource supplies per-user, DB-backed MCP servers (credentials
 // decrypted) to merge with the env-configured ones. Implemented by the store.
 type UserServerSource interface {
@@ -390,7 +394,7 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 	noop := func() {}
 
 	if !r.isEnvServer(s) {
-		c, err := newClient(ctx, s, r.httpClient)
+		c, err := dialClient(ctx, s, r.httpClient)
 		if err != nil {
 			return nil, noop, err
 		}
@@ -406,7 +410,7 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 	v, err, _ := r.dial.Do(key, func() (any, error) {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dialTimeout)
 		defer cancel()
-		return newClient(dctx, s, r.httpClient)
+		return dialClient(dctx, s, r.httpClient)
 	})
 	if err != nil {
 		return nil, noop, err

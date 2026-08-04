@@ -911,3 +911,56 @@ func TestClientForReleaseIsNoOpForCachedEnvClient(t *testing.T) {
 		t.Fatalf("release closed a cached env client %d times, want 0", n)
 	}
 }
+
+func TestToolsForClosesEachUserDefinedClientPerIteration(t *testing.T) {
+	var mu sync.Mutex
+	var created []*fakeCloseClient
+	firstClosedBeforeSecondDial := false
+
+	restore := dialClient
+	dialClient = func(_ context.Context, s Server, _ *http.Client) (mcpClient, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(created) == 1 {
+			// The loop is about to dial the second server; the first must
+			// already have been released.
+			firstClosedBeforeSecondDial = created[0].closes.Load() == 1
+		}
+		c := &fakeCloseClient{tools: []ToolInfo{{Name: "tool_" + s.Name}}}
+		created = append(created, c)
+		return c, nil
+	}
+	t.Cleanup(func() { dialClient = restore })
+
+	reg := NewRegistry(nil, nil, &fakeUserSrc{perUser: map[string][]Server{
+		"owner": {
+			{Name: "u1", Scope: scopeGlobal, URL: "https://u1.invalid", Transport: transportStreamableHTTP},
+			{Name: "u2", Scope: scopeGlobal, URL: "https://u2.invalid", Transport: transportStreamableHTTP},
+		},
+	}})
+
+	defs, err := reg.ToolsFor(context.Background(), "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 2 {
+		t.Fatalf("tool defs = %d, want 2 (one per user-defined server)", len(defs))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(created) != 2 {
+		t.Fatalf("dialed %d clients, want 2", len(created))
+	}
+	if !firstClosedBeforeSecondDial {
+		t.Fatal("first user-defined client was still open when the second was dialed — release must fire per iteration, not at function return")
+	}
+	for i, c := range created {
+		if n := c.closes.Load(); n != 1 {
+			t.Fatalf("client %d closed %d times, want exactly 1", i, n)
+		}
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("user-defined clients must never be cached; cache size = %d", n)
+	}
+}
