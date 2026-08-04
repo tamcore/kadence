@@ -44,6 +44,7 @@ export class ReachabilityMonitor {
 
 	private schedule(delay: number): void {
 		if (this.stopped) return;
+		if (this.timer) clearTimeout(this.timer);
 		this.timer = setTimeout(() => void this.tick(), delay);
 	}
 

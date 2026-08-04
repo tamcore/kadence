@@ -81,6 +81,47 @@ describe('ReachabilityMonitor', () => {
 		m.stop();
 	});
 
+	it('cancels a stale timer when tick() and a concurrent probeNow() both reschedule', async () => {
+		let resolveSecondFetch: (response: Response) => void = () => {};
+		const secondFetch = new Promise<Response>((resolve) => {
+			resolveSecondFetch = resolve;
+		});
+		const fetchFn = vi
+			.fn()
+			.mockResolvedValueOnce(okResponse(true))
+			.mockReturnValueOnce(secondFetch)
+			.mockRejectedValueOnce(new TypeError('failed to fetch'));
+		const m = new ReachabilityMonitor(fetchFn, vi.fn(), () => true);
+
+		m.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchFn).toHaveBeenCalledTimes(1);
+
+		// Fire the 20s healthy timer; tick() calls fetchFn and suspends on the
+		// still-pending second fetch before it gets to reschedule itself.
+		await vi.advanceTimersByTimeAsync(HEALTHY_INTERVAL_MS);
+		expect(fetchFn).toHaveBeenCalledTimes(2);
+
+		// Concurrent probeNow() call (as the client/stream would issue on a
+		// network failure) flips to unhealthy and reschedules at 5s while
+		// tick() is still suspended.
+		await m.probeNow();
+		expect(fetchFn).toHaveBeenCalledTimes(3);
+
+		// Let the suspended tick() resume: it resolves healthy and reschedules
+		// onto the 20s cadence, which must not leak the 5s timer probeNow armed.
+		resolveSecondFetch(okResponse(true));
+		await vi.advanceTimersByTimeAsync(0);
+
+		fetchFn.mockResolvedValue(okResponse(true));
+		await vi.advanceTimersByTimeAsync(UNHEALTHY_INTERVAL_MS);
+
+		// The 5s timer probeNow armed must have been cancelled by tick()'s
+		// reschedule, so no extra probe fires at the +5s mark.
+		expect(fetchFn).toHaveBeenCalledTimes(3);
+		m.stop();
+	});
+
 	it('does not start a timer from probeNow after stop()', async () => {
 		const fetchFn = vi.fn().mockResolvedValueOnce(okResponse(true));
 		const m = new ReachabilityMonitor(fetchFn, vi.fn(), () => true);
