@@ -1,15 +1,19 @@
 package serve
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"flag"
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 const (
@@ -17,6 +21,7 @@ const (
 	defaultFileBridgeMaxBytes = 32 << 20
 	fileBridgeHealthPath      = "/healthz"
 	fileBridgePathPrefix      = "/files/"
+	fileBridgeShutdownTimeout = 30 * time.Second
 )
 
 // FileBridgeConfig configures the file bridge's private fetch-and-delete
@@ -38,6 +43,12 @@ func RunFileBridge() error {
 }
 
 func runFileBridge(args []string, getenv func(string) string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runFileBridgeContext(ctx, args, getenv)
+}
+
+func runFileBridgeContext(ctx context.Context, args []string, getenv func(string) string) error {
 	maxBytes, err := fileBridgeMaxBytes(getenv("KADENCE_FILE_BRIDGE_MAX_BYTES"))
 	if err != nil {
 		return err
@@ -63,13 +74,34 @@ func runFileBridge(args []string, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	if closer, ok := handler.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
+	}
 
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
-	return srv.ListenAndServe()
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+
+	// fetchAndDelete removes the file only after streaming it, so a hard kill
+	// mid-response loses the file entirely. Drain in-flight downloads first.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), fileBridgeShutdownTimeout)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
 }
 
 func fileBridgeMaxBytes(raw string) (int64, error) {
@@ -130,6 +162,9 @@ type fileBridgeHandler struct {
 	password string
 	maxBytes int64
 }
+
+// Close releases the os.Root handle opened for the shared FIT directory.
+func (h *fileBridgeHandler) Close() error { return h.root.Close() }
 
 func (h *fileBridgeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

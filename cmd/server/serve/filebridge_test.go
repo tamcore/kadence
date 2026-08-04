@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const bridgeTestMaxBytes int64 = 1024
@@ -128,6 +130,59 @@ func TestFileBridgeRejectsOversizeFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("oversize request removed file: %v", err)
+	}
+}
+
+func TestFileBridgeHandlerClosesRoot(t *testing.T) {
+	dir := t.TempDir()
+	handler, err := NewFileBridgeHandler(FileBridgeConfig{
+		Root: dir, Username: "u", Password: "p", MaxBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closer, ok := handler.(io.Closer)
+	if !ok {
+		t.Fatal("file bridge handler must implement io.Closer so its os.Root is released")
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestRunFileBridgeShutsDownGracefullyOnContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.fit"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(key string) string {
+		switch key {
+		case "KADENCE_FILE_BRIDGE_ROOT":
+			return dir
+		case "KADENCE_FILE_BRIDGE_AUTH_USER":
+			return "u"
+		case "KADENCE_FILE_BRIDGE_AUTH_PASS":
+			return "p"
+		case "KADENCE_FILE_BRIDGE_ADDR":
+			return "127.0.0.1:0"
+		}
+		return ""
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- runFileBridgeContext(ctx, nil, getenv) }()
+
+	time.Sleep(50 * time.Millisecond) // let the listener bind
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("graceful shutdown returned %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runFileBridgeContext did not return after ctx cancel")
 	}
 }
 
