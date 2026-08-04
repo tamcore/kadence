@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,6 +83,81 @@ func TestStreamToolLoopStopsGrowingPastContextBudget(t *testing.T) {
 	last := msgs.added[len(msgs.added)-1]
 	if last.Role != model.MsgRoleAssistant || last.Content != testReply {
 		t.Fatalf("final answer not persisted: %+v", last)
+	}
+}
+
+// TestStreamToolLoopShedsContextAndKeepsLooping pins the shed-and-continue
+// behaviour: when the appended tool results breach the budget but there is prior
+// context to shed, the loop drops the oldest context and runs another tool round
+// instead of collapsing the whole turn to a single round. The forced final call
+// must then be a SMALLER request than the one that breached — withdrawing the
+// tools while re-sending the same oversized messages would just be rejected
+// again.
+func TestStreamToolLoopShedsContextAndKeepsLooping(t *testing.T) {
+	const (
+		maxIter = 5
+		budget  = 2000
+	)
+	convs := &fakeConvs{byID: map[string]model.Conversation{
+		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
+	}}
+	msgs := &fakeMsgs{}
+	// Three prior turns (~125 tokens per message) as sheddable history.
+	for i := range 3 {
+		msgs.added = append(msgs.added,
+			model.Message{Role: model.MsgRoleUser, Content: strings.Repeat("u", 500) + strconv.Itoa(i)},
+			model.Message{Role: model.MsgRoleAssistant, Content: strings.Repeat("a", 500) + strconv.Itoa(i)},
+		)
+	}
+	oldestHistory := msgs.added[0].Content
+
+	prov := &budgetToolProvider{finalReply: testReply}
+	mcp := &fakeMCPTools{
+		enabled: true,
+		tools:   []provider.ToolDefinition{{Name: testToolName}},
+		// ~1300 tokens per result: one round fits, two do not.
+		callResult: strings.Repeat("x", 5<<10),
+	}
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens, SystemPrompt: "sp",
+			MCPMaxIterations: maxIter, ContextBudgetTokens: budget,
+		},
+		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp},
+	)
+
+	sink := &capturingSink{}
+	if err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
+		"call the big tool", sink,
+	); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	// Two tool rounds, then the forced tool-free answer — not one round.
+	if len(prov.toolsOffered) != 3 || !prov.toolsOffered[0] || !prov.toolsOffered[1] || prov.toolsOffered[2] {
+		t.Fatalf("tools offered per call = %v, want [true true false] (shed and keep looping)", prov.toolsOffered)
+	}
+	breaching, final := prov.gotMessages[1], prov.gotMessages[2]
+	if len(final) >= len(breaching) {
+		t.Fatalf("forced final request has %d messages, want fewer than the breaching %d", len(final), len(breaching))
+	}
+	for _, message := range final {
+		if strings.Contains(message.Content, oldestHistory) {
+			t.Fatalf("oldest history survived into the final request: %+v", final)
+		}
+	}
+	// Shedding must keep the surviving tool result paired with its request.
+	for i, message := range final {
+		if message.Role != "tool" {
+			continue
+		}
+		if i == 0 || len(final[i-1].ToolCalls) == 0 {
+			t.Fatalf("tool result at %d is not preceded by its assistant tool_calls message: %+v", i, final)
+		}
+	}
+	if sink.events[len(sink.events)-1].Type != chat.EventDone {
+		t.Fatalf("stream did not finish cleanly: %+v", sink.events[len(sink.events)-1])
 	}
 }
 

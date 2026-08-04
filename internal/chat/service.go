@@ -1856,6 +1856,12 @@ func (s *Service) runToolLoop(
 		return sink.Flush()
 	}
 
+	// keepFrom is the index of the current user turn in req.Messages: at entry
+	// the request is [system, RAG inserts…, history…, current turn], so
+	// everything at 1..keepFrom-1 is sheddable context and everything after it
+	// belongs to a tool round. It moves down as context is shed.
+	keepFrom := len(req.Messages) - 1
+
 	gated := make(map[string]bool)
 	for i := 0; i < maxIter; i++ {
 		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
@@ -1884,17 +1890,32 @@ func (s *Service) runToolLoop(
 		}
 
 		// The context budget is fitted once before the loop, but every round
-		// appends an assistant message plus one result per tool call. Stop
-		// growing the request as soon as it no longer fits instead of letting
-		// the provider reject a turn we already knew was oversized. Finishing
-		// with what we have beats dropping context we cannot safely choose
-		// between.
-		if used := requestTokenEstimate(req.Messages); used > s.contextBudget {
-			slog.Warn("tool loop exceeded context budget; forcing a final answer",
-				"conversation", conversationID, "iteration", i+1,
-				"estimated_tokens", used, "budget_tokens", s.contextBudget)
-			return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state)
+		// appends an assistant message plus one result per tool call. On a
+		// breach, shed the oldest context (RAG inserts, then oldest history) down
+		// to a target that leaves output headroom, and carry on: withdrawing the
+		// tools without shedding would both re-send an oversized request and
+		// collapse a multi-round tool sequence to a single round. Only when
+		// there is nothing left to shed does the turn finish early.
+		used := requestTokenEstimate(req.Messages)
+		if used <= s.contextBudget {
+			continue
 		}
+		var dropped int
+		req.Messages, dropped = shedOldestContext(req.Messages, keepFrom, s.shedTarget())
+		keepFrom -= dropped
+		remaining := requestTokenEstimate(req.Messages)
+		if remaining <= s.contextBudget {
+			slog.Warn("tool loop exceeded context budget; shed oldest context and continued",
+				"conversation", conversationID, "iteration", i+1,
+				"estimated_tokens", used, "estimated_tokens_after", remaining,
+				"dropped_messages", dropped, "budget_tokens", s.contextBudget)
+			continue
+		}
+		slog.Warn("tool loop exceeded context budget; forcing a final answer",
+			"conversation", conversationID, "iteration", i+1,
+			"estimated_tokens", used, "estimated_tokens_after", remaining,
+			"dropped_messages", dropped, "budget_tokens", s.contextBudget)
+		return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state, keepFrom)
 	}
 
 	// Iteration budget exhausted with tools still pending. Make one final
@@ -1902,7 +1923,7 @@ func (s *Service) runToolLoop(
 	// an empty response.
 	slog.Warn("tool loop hit iteration cap; forcing a final answer",
 		"conversation", conversationID, "maxIter", maxIter)
-	return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state)
+	return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state, keepFrom)
 }
 
 func (s *Service) redactAssistantContent(content string, redactor *turnRedactor, userID int64) string {
