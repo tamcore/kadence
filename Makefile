@@ -60,8 +60,8 @@ e2e-kind: ## Build image, KinD, helm install, smoke
 	kind load docker-image kadence:ci --name kadence-ci
 	helm install kadence charts/kadence -n kadence --create-namespace \
 		-f charts/kadence/values-ci.yaml \
-		--set image.repository=kadence \
-		--set image.tag=ci \
+		--set-string image.repository=kadence \
+		--set-string image.tag=ci \
 		--wait --timeout 5m
 	kubectl -n kadence rollout status deploy/kadence --timeout=180s
 	kubectl -n kadence port-forward svc/kadence 8080:8080 & \
@@ -82,10 +82,11 @@ dev-deploy-k8s: ## Build dev image, push to $(IMAGE_REGISTRY), deploy to K8s (ne
 	# whole release). kubectl apply reconciles each manifest in place.
 	kubectl $(_KUBECTL_CTX) create namespace kadence --dry-run=client -o yaml | kubectl $(_KUBECTL_CTX) apply -f -
 	T=$$(mktemp -d); \
+	: '--set-string, not --set: an all-digit IMAGE_TAG (~2.3% of `openssl rand -hex 8` values) parses as a number'; \
 	helm template kadence ./charts/kadence $(_HELM_CTX) -n kadence \
 		-f ./charts/kadence/values-dev.yaml \
-		--set image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
-		--set image.tag="$(IMAGE_TAG)" > $$T/all.yaml; \
+		--set-string image.repository="$(IMAGE_REGISTRY)/$(IMAGE_NAME)" \
+		--set-string image.tag="$(IMAGE_TAG)" > $$T/all.yaml; \
 	python3 -c "import sys; d=open('$$T/all.yaml').read().split(chr(10)+'---'+chr(10)); i=[x for x in d if 'kind: Ingress' in x]; r=[x for x in d if 'kind: Ingress' not in x]; open('$$T/rest.yaml','w').write((chr(10)+'---'+chr(10)).join(r)); open('$$T/ingress.yaml','w').write((chr(10)+'---'+chr(10)).join(i))"; \
 	kubectl $(_KUBECTL_CTX) -n kadence apply --server-side --force-conflicts -f $$T/rest.yaml; \
 	kubectl $(_KUBECTL_CTX) -n kadence apply --server-side --force-conflicts -f $$T/ingress.yaml \
