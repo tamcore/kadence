@@ -49,6 +49,7 @@ Selector labels
 */}}
 {{- define "kadence.selectorLabels" -}}
 app: {{ include "kadence.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*

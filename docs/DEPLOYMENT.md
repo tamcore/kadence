@@ -93,6 +93,28 @@ then re-run `helm upgrade`/`helm apply`. This causes a brief outage (pods are
 recreated) but does not touch the Service or PodDisruptionBudget, and no data
 is lost — Postgres and any persistent volumes are unaffected.
 
+**A later release adds `app.kubernetes.io/instance: <release-name>` to every
+workload's selector** (`kadence.selectorLabels`), so that two releases sharing
+a namespace can no longer cross-select each other's pods via the Service, PDB,
+or NetworkPolicy podSelectors. This is the same class of breaking change as
+above — `spec.selector.matchLabels` is immutable on Deployments and
+StatefulSets — and needs the same one-time delete before `helm upgrade`, this
+time across every workload the release renders:
+
+```bash
+kubectl delete deployment <release-name> -n kadence
+kubectl delete deployment <release-name>-markitdown -n kadence   # if markitdown.enabled
+kubectl delete deployment <release-name>-mcp-<name> -n kadence   # once per mcp.servers[] entry
+kubectl delete statefulset <release-name>-postgres -n kadence --cascade=orphan   # if postgres.enabled
+```
+
+`--cascade=orphan` on the StatefulSet is load-bearing: it deletes the
+StatefulSet object only and leaves its pod and PersistentVolumeClaim running
+and bound, so Postgres keeps serving and no data is lost. `helm upgrade`
+recreates the StatefulSet, which adopts the orphaned pod/PVC back once its
+selector matches again. The Deployments have no state to preserve, so a plain
+delete (as above) is enough for those.
+
 ## MCP servers
 
 Each entry under `mcp.servers[]` renders a full, isolated unit:
