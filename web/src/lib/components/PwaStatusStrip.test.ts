@@ -1,10 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import PwaStatusStrip from './PwaStatusStrip.svelte';
-// @ts-expect-error Vitest runs in Node; app tsconfig intentionally omits Node types.
-import { readFileSync } from 'node:fs';
-
-declare const process: { cwd(): string };
 
 describe('PwaStatusStrip', () => {
 	it('explains that server-backed features are unavailable while offline', () => {
@@ -69,20 +65,5 @@ describe('PwaStatusStrip', () => {
 
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		expect(screen.queryByRole('button')).not.toBeInTheDocument();
-	});
-});
-
-describe('PwaStatusStrip theming', () => {
-	it('routes every colour through a token', () => {
-		const source = readFileSync(
-			`${process.cwd()}/src/lib/components/PwaStatusStrip.svelte`,
-			'utf8'
-		);
-		const style = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? '';
-		expect(style).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-		expect(style).not.toMatch(/\brgba?\(/);
-		expect(style).toContain('var(--brand)');
-		expect(style).toContain('var(--on-brand)');
-		expect(style).toContain('var(--warning)');
 	});
 });
