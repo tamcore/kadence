@@ -10,6 +10,7 @@
 	import { clearAuth, setAuth } from '$lib/stores/auth';
 	import { PwaLifecycle, type PwaStatus } from '$lib/pwa/lifecycle';
 	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
+	import { initTheme } from '$lib/theme/store';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import ReindexStrip from '$lib/components/ReindexStrip.svelte';
 	import McpHealthStrip from '$lib/components/McpHealthStrip.svelte';
@@ -28,6 +29,7 @@
 	let warnedReindex = false;
 	let warnedMcp = false;
 	let pwaLifecycle: PwaLifecycle | undefined;
+	let stopTheme: (() => void) | undefined;
 	let pwaStatus = $state<PwaStatus>({
 		online: true,
 		updateAvailable: false,
@@ -93,6 +95,7 @@
 	});
 
 	onMount(async () => {
+		stopTheme = initTheme();
 		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
 		pwaLifecycle = new PwaLifecycle((status) => {
 			pwaStatus = status;
@@ -125,6 +128,7 @@
 		stopReindexPoll();
 		stopMcpPoll();
 		pwaLifecycle?.destroy();
+		stopTheme?.();
 	});
 </script>
 

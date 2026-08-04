@@ -6,6 +6,26 @@
 		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 		<link rel="manifest" href="/manifest.json" />
 		<meta name="theme-color" content="#021c46" />
+		<script>
+			(function () {
+				try {
+					var t = localStorage.getItem('kadence_theme');
+					if (t !== 'light' && t !== 'dark' && t !== 'amoled') t = 'auto';
+					var v = localStorage.getItem('kadence_theme_dark');
+					if (v !== 'amoled') v = 'dark';
+					var r = t;
+					if (t === 'auto') {
+						var m = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+						r = m && m.matches ? v : 'light';
+					}
+					document.documentElement.dataset.theme = r;
+					var meta = document.querySelector('meta[name="theme-color"]');
+					if (meta) meta.setAttribute('content', { light: '#021c46', dark: '#14171b', amoled: '#000000' }[r]);
+				} catch (e) {
+					/* storage blocked — fall through to the light default */
+				}
+			})();
+		</script>
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Kadence</title>
 		%sveltekit.head%
