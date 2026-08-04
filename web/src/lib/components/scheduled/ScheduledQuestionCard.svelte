@@ -205,7 +205,7 @@
 		font: inherit;
 	}
 	.choices button { cursor: pointer; }
-	.choices button:hover:not(:disabled) { border-color: var(--accent); background: #eef5f3; }
+	.choices button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-tint); }
 	.checks label { display: flex; align-items: center; gap: 10px; }
 	.checks .custom { display: grid; align-items: stretch; }
 	form, form label { display: grid; gap: 8px; }
@@ -225,7 +225,7 @@
 		font-weight: 600;
 		cursor: pointer;
 	}
-	.continue { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+	.continue { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); }
 	.skip { border: 1px solid var(--border); background: transparent; color: var(--text); }
 	button:disabled { opacity: 0.55; cursor: not-allowed; }
 	button:focus-visible, input:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }

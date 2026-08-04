@@ -329,19 +329,19 @@
 	.composer-wrap { width: 100%; }
 	.examples { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 	.examples button { display: grid; gap: 3px; text-align: left; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
-	.examples button:hover { background: #eef5f3; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+	.examples button:hover { background: var(--accent-tint); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 	.examples span { color: var(--text-muted); font-size: 0.82rem; }
 	.definition-thread { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 18px; margin: 52px auto 0; max-width: 720px; }
 	.rail { position: relative; display: flex; flex-direction: column; justify-content: space-between; align-items: center; min-height: 310px; padding: 8px 0 22px; }
 	.rail::before { content: ''; position: absolute; top: 13px; bottom: 27px; width: 1px; background: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 	.node { position: relative; width: 9px; height: 9px; border: 2px solid var(--border); border-radius: 50%; background: var(--surface); }
-	.node.complete { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 4px #eef5f3; }
+	.node.complete { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 4px var(--accent-tint); }
 	.thread { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
-	.bubble { align-self: flex-end; max-width: 82%; padding: 11px 14px; border-radius: 16px 16px 4px 16px; background: #eef5f3; }
+	.bubble { align-self: flex-end; max-width: 82%; padding: 11px 14px; border-radius: 16px 16px 4px 16px; background: var(--accent-tint); }
 	.answer { color: var(--text-muted); font-size: 0.92rem; }
 	.coach { margin: 0; font-size: 1.04rem; }
 	.thinking { color: var(--text-muted); }
-	.error { border-left: 3px solid #b66a2c; padding: 9px 12px; background: #fff8f1; color: #754019; border-radius: 0 var(--radius) var(--radius) 0; }
+	.error { border-left: 3px solid var(--warning); padding: 9px 12px; background: var(--warning-bg); color: var(--warning-fg); border-radius: 0 var(--radius) var(--radius) 0; }
 	.task-section { border-top: 1px solid var(--border); padding-top: 22px; }
 	.section-head { display: flex; align-items: baseline; gap: 8px; }
 	.section-head h2 { font-size: 1rem; margin: 0; }
@@ -351,12 +351,12 @@
 	.task-list a { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 14px 4px; text-decoration: none; color: var(--text); }
 	.task-name { font-weight: 600; }
 	.task-title { display: flex; align-items: center; min-width: 0; gap: 7px; }
-	.task-unread { min-width: 1.25rem; height: 1.25rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--accent); color: #fff; font: 600 0.68rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
-	.status { align-self: start; padding: 2px 7px; border-radius: 999px; background: #eef5f3; color: var(--accent); font: 0.7rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
-	.status.paused, .status.failed { background: #fff3e8; color: #b66a2c; }
+	.task-unread { min-width: 1.25rem; height: 1.25rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--accent); color: var(--on-accent); font: 600 0.68rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+	.status { align-self: start; padding: 2px 7px; border-radius: 999px; background: var(--accent-tint); color: var(--accent); font: 0.7rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+	.status.paused, .status.failed { background: var(--warning-bg); color: var(--warning); }
 	.next { grid-column: 1 / -1; color: var(--text-muted); font: 0.78rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 	.recent { grid-column: 1 / -1; color: var(--text-muted); font-size: 0.78rem; }
-	.refresh-error { color: #b66a2c; }
+	.refresh-error { color: var(--warning); }
 	.task-list-actions { display: flex; justify-content: center; padding-top: 14px; }
 	.task-list-actions button {
 		padding: 8px 16px;

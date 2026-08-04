@@ -249,7 +249,7 @@
 	header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; }
 	h1 { margin: 5px 0 0; font-size: 1.9rem; letter-spacing: -0.03em; }
 	.state, .run-state { color: var(--accent); font: 600 0.72rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; text-transform: uppercase; letter-spacing: 0.06em; }
-	.state.paused, .state.failed, .run-state.failed { color: #b66a2c; }
+	.state.paused, .state.failed, .run-state.failed { color: var(--warning); }
 	.controls { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
 	.execution-note { margin: 12px 0 0; color: var(--text-muted); font-size: 0.84rem; text-align: right; }
 	button { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
@@ -264,13 +264,13 @@
 	.history h2 { font-size: 1rem; margin: 0 0 10px; }
 	ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
 	li { padding: 17px 4px; border-bottom: 1px solid var(--border); }
-	li.unread { border-left: 3px solid var(--accent); padding-left: 12px; background: linear-gradient(90deg, #eef5f3, transparent 55%); }
+	li.unread { border-left: 3px solid var(--accent); padding-left: 12px; background: linear-gradient(90deg, var(--accent-tint), transparent 55%); }
 	.run-head { display: flex; justify-content: space-between; gap: 16px; }
 	time { color: var(--text-muted); font: 0.76rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 	li p { margin: 10px 0 0; white-space: pre-wrap; }
 	.run-body { margin-top: 10px; }
-	.run-error, .error { color: #8a4c18; }
-	.error { margin-bottom: 16px; border-left: 3px solid #b66a2c; background: #fff8f1; padding: 9px 12px; }
+	.run-error, .error { color: var(--warning-fg); }
+	.error { margin-bottom: 16px; border-left: 3px solid var(--warning); background: var(--warning-bg); padding: 9px 12px; }
 	.muted, .empty, .loading { color: var(--text-muted); }
 	button:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
 	@media (max-width: 680px) {

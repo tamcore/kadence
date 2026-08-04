@@ -200,7 +200,7 @@
 		padding: 22px;
 		border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
 		border-radius: calc(var(--radius) + 4px);
-		background: #eef5f3;
+		background: var(--accent-tint);
 	}
 	.eyebrow {
 		color: var(--accent);
@@ -228,7 +228,7 @@
 		border: 1px solid var(--accent);
 		border-radius: var(--radius);
 		background: var(--accent);
-		color: #fff;
+		color: var(--on-accent);
 		font: inherit;
 		font-weight: 650;
 		cursor: pointer;
