@@ -1,39 +1,84 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "kadence chart values",
-  "description": "MINIMAL schema (D11): types and required-ness on the critical keys only. Not exhaustive — most values.yaml keys are intentionally left unvalidated here. String-typed keys an operator commonly passes via --set also accept \"number\", because helm parses an all-digit --set value as int64 (e.g. an all-digit image tag or generated password) and a string-only schema would hard-fail that render; the templates quote these values anyway.",
+  "description": "MINIMAL schema (D11): types and required-ness on the critical keys only. Not exhaustive \u2014 most values.yaml keys are intentionally left unvalidated here. String-typed keys an operator commonly passes via --set also accept \"number\", because helm parses an all-digit --set value as int64 (e.g. an all-digit image tag or generated password) and a string-only schema would hard-fail that render; the templates quote these values anyway.",
   "type": "object",
-  "required": ["image", "replicaCount", "resources", "postgres", "secrets", "networkPolicy"],
   "properties": {
     "image": {
       "type": "object",
-      "required": ["repository"],
+      "required": [
+        "repository"
+      ],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": ["string", "number"] },
-        "digest": { "type": ["string", "number"] },
-        "pullPolicy": { "type": "string" }
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "digest": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "pullPolicy": {
+          "type": "string"
+        }
       }
     },
-    "replicaCount": { "type": "integer", "minimum": 0 },
-    "resources": { "type": "object" },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "resources": {
+      "type": "object"
+    },
     "postgres": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "image": { "type": ["string", "number"] },
-        "password": { "type": ["string", "number"] },
-        "port": { "type": "integer" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "password": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "port": {
+          "type": "integer"
+        }
       }
     },
-    "secrets": { "type": "object" },
+    "secrets": {
+      "type": "object"
+    },
     "networkPolicy": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "defaultDeny": { "type": "boolean" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "defaultDeny": {
+          "type": "boolean"
+        }
       }
     }
   }

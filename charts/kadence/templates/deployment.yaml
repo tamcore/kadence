@@ -173,7 +173,7 @@ spec:
           timeoutSeconds: 3
           failureThreshold: 3
         resources:
-          {{- toYaml .Values.resources | nindent 10 }}
+          {{- toYaml (.Values.resources | default dict) | nindent 10 }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp
