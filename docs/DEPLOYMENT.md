@@ -17,6 +17,13 @@ secret. All non-secret settings go under `config:` (rendered into a ConfigMap); 
 secrets go under `secrets:` (rendered into a Secret). The keys map 1:1 to the
 environment variables in [CONFIGURATION.md](CONFIGURATION.md).
 
+Set `secrets.existingSecret` to a pre-existing Secret's name to mount it via `envFrom`
+instead — the chart then renders no Secret of its own, and the `secrets.KADENCE_*`
+keys are ignored. Your existing Secret must supply every key your config needs; if
+`postgres.enabled=true`, or `externalDatabase.url` is set without its own
+`existingSecret`, it must also supply `POSTGRES_PASSWORD` / `KADENCE_DATABASE_URL`
+respectively — this chart has nowhere else to render them.
+
 ## Database
 
 Two options:
@@ -250,12 +257,21 @@ multipart chat turns. Set your host and issuer in `ingress:`.
   overridden.
 - Each MCP/markitdown workload is basic-auth protected in front of nginx, and its
   `NetworkPolicy` restricts **ingress** to the main app pod only.
-- MCP NetworkPolicies also restrict egress to DNS plus public TCP 80/443 by default,
-  excluding private and link-local ranges. `mcp.servers[].egress` replaces that
-  default for a server that needs another destination.
+- MCP and markitdown NetworkPolicies both restrict egress to DNS plus public TCP
+  80/443 by default, excluding private and link-local ranges. `mcp.servers[].egress`
+  replaces that default for an MCP server that needs another destination.
 - The optional FIT bridge uses a read-only root filesystem, drops all capabilities,
   has liveness/readiness probes, and is reachable only from the app on port 8081.
 - `KADENCE_CSRF_SECRET` must be shared across replicas (set it explicitly in prod).
+- Every workload (app, postgres, mcp, markitdown) runs under a dedicated
+  per-release ServiceAccount (`serviceAccount.create`, default `true`) with
+  `automountServiceAccountToken: false`, instead of the namespace's `default` SA.
+- `imagePullSecrets` applies to all four workloads, for a private registry.
+- postgres and mcp get a generous, explicitly-tunable memory limit in addition to
+  their default CPU/memory requests (`postgres.resources`, `mcp.resources`,
+  `markitdown.resources`); mcp/markitdown limits are deliberately generous because
+  those images are 3rd-party with unpredictable memory ceilings — tighten per
+  deployment once you know a given image's real footprint.
 
 ### Known gaps in MCP/markitdown sidecar hardening (current state)
 
@@ -265,10 +281,6 @@ Remaining gaps are narrower:
   with the current images. The nginx liveness/readiness probe proves the proxy is
   running, not that the upstream MCP process can complete a request.
 - Upstream MCP/markitdown root filesystems remain writable for image compatibility.
-- Workloads have default resource requests but no default CPU/memory limits; set
-  `mcp.servers[].resources` or `markitdown.resources` for production limits.
-- The markitdown NetworkPolicy currently restricts ingress only; unlike MCP servers,
-  markitdown egress is not restricted by the chart.
 
 ## Local / cluster dev deploy
 

@@ -25,22 +25,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "kadence.serviceAccountName" . }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 310 }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
       - name: wait-for-db
         securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop: ["ALL"]
+          {{- toYaml .Values.securityContext | nindent 10 }}
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ with .Values.image.digest }}@{{ . }}{{ end }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         command: ["/kadence", "wait-for-db"]
@@ -56,16 +49,13 @@ spec:
       containers:
       - name: kadence
         securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop: ["ALL"]
+          {{- toYaml .Values.securityContext | nindent 10 }}
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ with .Values.image.digest }}@{{ . }}{{ end }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
-        - containerPort: 8080
+        - containerPort: {{ .Values.ports.http }}
           name: http
-        - containerPort: 8081
+        - containerPort: {{ .Values.ports.health }}
           name: health
         env:
         {{- include "kadence.dbEnv" . | nindent 8 }}
@@ -131,7 +121,7 @@ spec:
         - configMapRef:
             name: {{ include "kadence.fullname" . }}-config
         - secretRef:
-            name: {{ include "kadence.fullname" . }}-secret
+            name: {{ include "kadence.appSecretName" . }}
         # Generous ~300s budget (periodSeconds * failureThreshold) absorbs a
         # slow first boot (migrations + reindex) so it can't crash-loop
         # against livenessProbe's initialDelaySeconds: 30. While this probe

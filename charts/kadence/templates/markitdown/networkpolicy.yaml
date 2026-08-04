@@ -13,6 +13,7 @@ spec:
       app.kubernetes.io/component: markitdown
   policyTypes:
   - Ingress
+  - Egress
   ingress:
   - from:
     - podSelector:
@@ -22,4 +23,7 @@ spec:
     ports:
     - protocol: TCP
       port: 8080
+  egress:
+  {{- include "kadence.netpol.dnsEgress" . | nindent 2 }}
+  {{- include "kadence.netpol.httpsEgress" . | nindent 2 }}
 {{- end }}

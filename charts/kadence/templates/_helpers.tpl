@@ -190,10 +190,10 @@ Context: the root context (.).
 - name: POSTGRES_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ include "kadence.fullname" . }}-secret
+      name: {{ include "kadence.appSecretName" . }}
       key: POSTGRES_PASSWORD
 - name: KADENCE_DATABASE_URL
-  value: "postgres://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ include "kadence.fullname" . }}-postgres:5432/{{ .Values.postgres.database }}?sslmode=disable"
+  value: "postgres://{{ .Values.postgres.username }}:$(POSTGRES_PASSWORD)@{{ include "kadence.fullname" . }}-postgres:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}?sslmode={{ .Values.postgres.sslMode }}"
 {{- else if .Values.externalDatabase.existingSecret }}
 - name: KADENCE_DATABASE_URL
   valueFrom:
@@ -204,7 +204,28 @@ Context: the root context (.).
 - name: KADENCE_DATABASE_URL
   valueFrom:
     secretKeyRef:
-      name: {{ include "kadence.fullname" . }}-secret
+      name: {{ include "kadence.appSecretName" . }}
       key: KADENCE_DATABASE_URL
 {{- end }}
+{{- end -}}
+
+{{/*
+Name of the Secret providing the app's KADENCE_* and POSTGRES_PASSWORD env
+vars: the operator-supplied secrets.existingSecret when set (D6), else the
+chart's own rendered <fullname>-secret. Context: the root context (.).
+*/}}
+{{- define "kadence.appSecretName" -}}
+{{- .Values.secrets.existingSecret | default (printf "%s-secret" (include "kadence.fullname" .)) -}}
+{{- end -}}
+
+{{/*
+Name of the ServiceAccount used by every workload in this release (D9).
+Context: the root context (.).
+*/}}
+{{- define "kadence.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "kadence.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
 {{- end -}}

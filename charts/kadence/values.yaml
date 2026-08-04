@@ -14,7 +14,40 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# Dedicated ServiceAccount per release (D9), replacing the namespace's
+# implicit "default" SA. automountServiceAccountToken is always false: no
+# workload in this chart talks to the Kubernetes API.
+serviceAccount:
+  create: true
+  name: "" # defaults to the fullname
+  annotations: {}
+
 replicaCount: 2
+
+# App container ports. KADENCE_LISTEN_ADDR / KADENCE_HEALTH_ADDR (image-side)
+# must be kept in sync with these if you change them — see the note atop
+# this file about upgrading chart and image together.
+ports:
+  http: 8080
+  health: 8081
+
+# Pod- and container-level securityContext for the app Deployment (not
+# sidecars/other workloads — see mcp.podSecurityContext, markitdown.
+# podSecurityContext, postgres.podSecurityContext for those). Defaults are
+# byte-identical to the previously-hardcoded values; override for a use case
+# that genuinely needs a different uid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
 
 # terminationGracePeriodSeconds must cover the app's shutdown drain window.
 # When Scheduled is enabled, that includes the longest worker occurrence:
@@ -162,6 +195,14 @@ config:
 
 # Secret app config (rendered into a Secret -> envFrom). Empty here; set in values-dev.yaml.
 secrets:
+  # Optional: mount a pre-existing Secret via envFrom instead of rendering one
+  # from the KADENCE_* keys below. When set, this chart renders NO Secret of
+  # its own — the KADENCE_* keys below are ignored, and your existingSecret
+  # must supply every key your config needs. If postgres.enabled is also
+  # true, or externalDatabase.url is set without its own existingSecret, your
+  # existingSecret must ALSO supply POSTGRES_PASSWORD / KADENCE_DATABASE_URL
+  # respectively — this chart has nowhere else to render them.
+  existingSecret: ""
   KADENCE_CSRF_SECRET: ""
   KADENCE_LLM_API_KEY: ""
   # Optional Scheduled worker-provider key. Empty falls back to
@@ -190,6 +231,10 @@ postgres:
   database: kadence
   username: kadence
   password: "" # required when enabled; set in values-dev.yaml
+  # sslmode and port for the app -> bundled-postgres DSN. Defaults unchanged;
+  # override port only if you also change the container/Service port below.
+  sslMode: disable
+  port: 5432
   resources:
     requests:
       cpu: 100m
@@ -198,6 +243,21 @@ postgres:
     # images below), so a normal limit is appropriate here.
     limits:
       memory: 512Mi
+  # Pod- and container-level securityContext, same treatment as the app's
+  # (see podSecurityContext/securityContext above). Defaults byte-identical
+  # to the previously-hardcoded uid/gid 999.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: ["ALL"]
 
 # External database. Used only when postgres.enabled=false.
 # IMPORTANT: with networkPolicy.enabled (or defaultDeny) on, the chart's

@@ -16,24 +16,21 @@ spec:
       labels:
         {{- include "kadence.postgres.selectorLabels" . | nindent 8 }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kadence.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
-        seccompProfile:
-          type: RuntimeDefault
+        {{- toYaml .Values.postgres.podSecurityContext | nindent 8 }}
       containers:
       - name: postgres
         securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: false
-          capabilities:
-            drop: ["ALL"]
+          {{- toYaml .Values.postgres.securityContext | nindent 10 }}
         image: {{ .Values.postgres.image }}
         ports:
-        - containerPort: 5432
+        - containerPort: {{ .Values.postgres.port }}
           name: postgres
         env:
         - name: POSTGRES_DB
@@ -43,7 +40,7 @@ spec:
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: {{ include "kadence.fullname" . }}-secret
+              name: {{ include "kadence.appSecretName" . }}
               key: POSTGRES_PASSWORD
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata

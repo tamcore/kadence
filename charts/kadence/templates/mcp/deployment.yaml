@@ -33,6 +33,11 @@ spec:
         app.kubernetes.io/component: mcp
         kadence.io/mcp-server: {{ $server.name }}
     spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kadence.serviceAccountName" $root }}
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml ($server.securityContext | default $root.Values.mcp.podSecurityContext) | nindent 8 }}

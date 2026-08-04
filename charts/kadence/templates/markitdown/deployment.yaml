@@ -20,6 +20,11 @@ spec:
         {{- include "kadence.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: markitdown
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kadence.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.markitdown.podSecurityContext | nindent 8 }}
