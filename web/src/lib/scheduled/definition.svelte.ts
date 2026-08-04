@@ -218,8 +218,9 @@ export class ScheduledDefinitionController {
 	private recordQuestion(nextQuestion: ScheduledQuestion): void {
 		const current = this.questionHistory[this.questionIndex];
 		if (current && current.question.id === nextQuestion.id && current.answer === undefined) {
-			this.questionHistory[this.questionIndex] = { ...current, question: nextQuestion };
-			this.questionHistory = [...this.questionHistory];
+			this.questionHistory = this.questionHistory.map((entry, index) =>
+				index === this.questionIndex ? { ...entry, question: nextQuestion } : entry
+			);
 		} else {
 			this.questionHistory = [...this.questionHistory, { question: nextQuestion }];
 			this.questionIndex = this.questionHistory.length - 1;
