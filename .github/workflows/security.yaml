@@ -49,7 +49,20 @@ jobs:
         # Review whenever gorilla/csrf ships a fix or we migrate off it.
         run: |
           set -o pipefail
-          go tool govulncheck -format json ./... > govulncheck.json || true
+          set +e
+          go tool govulncheck -format json ./... > govulncheck.json
+          rc=$?
+          set -e
+          # govulncheck exits 0 (no vulnerabilities) or 3 (vulnerabilities
+          # found — the Python step below decides pass/fail against the
+          # allowlist). Any other exit code means the tool itself failed
+          # (build error, panic, etc.) and govulncheck.json is not a
+          # trustworthy findings report.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+            echo "govulncheck exited $rc — treating as a tool failure, not a clean scan"
+            cat govulncheck.json
+            exit 1
+          fi
           python3 - <<'PY'
           import json, sys
 
