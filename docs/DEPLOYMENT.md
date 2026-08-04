@@ -105,15 +105,31 @@ time across every workload the release renders:
 kubectl delete deployment <release-name> -n kadence
 kubectl delete deployment <release-name>-markitdown -n kadence   # if markitdown.enabled
 kubectl delete deployment <release-name>-mcp-<name> -n kadence   # once per mcp.servers[] entry
-kubectl delete statefulset <release-name>-postgres -n kadence --cascade=orphan   # if postgres.enabled
+kubectl delete statefulset <release-name>-postgres -n kadence    # if postgres.enabled
 ```
 
-`--cascade=orphan` on the StatefulSet is load-bearing: it deletes the
-StatefulSet object only and leaves its pod and PersistentVolumeClaim running
-and bound, so Postgres keeps serving and no data is lost. `helm upgrade`
-recreates the StatefulSet, which adopts the orphaned pod/PVC back once its
-selector matches again. The Deployments have no state to preserve, so a plain
-delete (as above) is enough for those.
+**Do not use `--cascade=orphan` on the StatefulSet here.** It sounds safer, but
+it wedges the upgrade: the orphaned pod keeps its old labels, which lack the new
+`app.kubernetes.io/instance`, so the recreated StatefulSet can neither adopt it
+(the selector no longer matches) nor create its own replacement (the pod name
+`<release-name>-postgres-0` is already taken). The StatefulSet then sits unable
+to converge.
+
+A plain delete is safe because the chart sets
+`persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}`
+on the StatefulSet, so the PersistentVolumeClaim survives. The recreated
+StatefulSet binds the existing PVC and Postgres comes back with its data intact.
+Verify before you start:
+
+```bash
+kubectl get statefulset <release-name>-postgres -n kadence \
+  -o jsonpath='{.spec.persistentVolumeClaimRetentionPolicy}'   # expect Retain/Retain
+kubectl get pvc -n kadence                                     # note the postgres PVC
+```
+
+The cost is a brief Postgres outage while the pod is recreated, which the app
+tolerates — it gates on DB readiness at startup. The Deployments have no state
+to preserve, so a plain delete is enough for those too.
 
 **Every user is logged out by this upgrade.** Migration
 `00023_hashed_session_ids.sql` runs `DELETE FROM sessions`: session ids are now
