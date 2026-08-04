@@ -21,6 +21,7 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import ThemeCycleButton from '$lib/components/ThemeCycleButton.svelte';
 
 	const PINNED_EXPANDED_KEY = 'kadence_sidebar_pinned_expanded';
 	const RECENTS_EXPANDED_KEY = 'kadence_sidebar_recents_expanded';
@@ -234,31 +235,34 @@
 	</div>
 
 	<footer class="sidebar-footer">
-		<ActionMenu
-			label="Account actions"
-			items={[
-				{ label: 'Profile', href: '/profile', onSelect: closeSidebar },
-				{ separator: true },
-				{ label: 'Log out', danger: true, onSelect: handleLogout }
-			]}
-		>
-			{#snippet trigger(menu: ActionMenuTrigger)}
-				<button
-					type="button"
-					class="account-trigger"
-					data-action-menu-trigger
-					aria-label="Account actions"
-					aria-haspopup="menu"
-					aria-expanded={menu.expanded}
-					aria-controls={menu.expanded ? menu.menuId : undefined}
-					onclick={menu.open}
-				>
-					<span class="avatar" aria-hidden="true">{initials}</span>
-					<span class="account-name">{userName}</span>
-					<svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1" /><circle cx="8" cy="8" r="1" /><circle cx="13" cy="8" r="1" /></svg>
-				</button>
-			{/snippet}
-		</ActionMenu>
+		<div class="footer-account">
+			<ActionMenu
+				label="Account actions"
+				items={[
+					{ label: 'Profile', href: '/profile', onSelect: closeSidebar },
+					{ separator: true },
+					{ label: 'Log out', danger: true, onSelect: handleLogout }
+				]}
+			>
+				{#snippet trigger(menu: ActionMenuTrigger)}
+					<button
+						type="button"
+						class="account-trigger"
+						data-action-menu-trigger
+						aria-label="Account actions"
+						aria-haspopup="menu"
+						aria-expanded={menu.expanded}
+						aria-controls={menu.expanded ? menu.menuId : undefined}
+						onclick={menu.open}
+					>
+						<span class="avatar" aria-hidden="true">{initials}</span>
+						<span class="account-name">{userName}</span>
+						<svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1" /><circle cx="8" cy="8" r="1" /><circle cx="13" cy="8" r="1" /></svg>
+					</button>
+				{/snippet}
+			</ActionMenu>
+		</div>
+		<ThemeCycleButton />
 	</footer>
 </div>
 
@@ -346,7 +350,8 @@
 	.icon-button svg circle, .account-trigger svg circle { fill: currentColor; stroke: none; }
 	.empty, .refresh-hint, .action-error { margin: 0; color: var(--text-muted); font-size: .85rem; padding: 2px 8px; }
 	.action-error { color: var(--danger); }
-	.sidebar-footer { border-top: 1px solid var(--border); }
+	.sidebar-footer { border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+	.footer-account { flex: 1; min-width: 0; }
 	.account-trigger { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; font: inherit; padding: 4px; text-align: left; }
 	.account-trigger:hover, .account-trigger:focus-visible { background: var(--bg); }
 	.avatar { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent) 18%, var(--surface)); color: var(--accent); font-size: .72rem; font-weight: 700; }

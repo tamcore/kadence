@@ -333,4 +333,22 @@ describe('Sidebar', () => {
 		]);
 		expect(screen.getAllByRole('separator', { hidden: true })).toHaveLength(2);
 	});
+
+	it('puts a theme control in the footer beside the account menu', () => {
+		const { container } = render(Sidebar, { props: {} });
+		const footer = container.querySelector('.sidebar-footer');
+		expect(footer).toBeInTheDocument();
+		expect(
+			within(footer as HTMLElement).getByRole('button', { name: /^Switch theme to / })
+		).toBeInTheDocument();
+		expect(
+			within(footer as HTMLElement).getByRole('button', { name: 'Account actions' })
+		).toBeInTheDocument();
+	});
+
+	it('does not add menu items or separators to the document', () => {
+		render(Sidebar, { props: {} });
+		expect(screen.queryAllByRole('menuitem', { hidden: true })).toHaveLength(0);
+		expect(screen.queryAllByRole('separator', { hidden: true })).toHaveLength(0);
+	});
 });
