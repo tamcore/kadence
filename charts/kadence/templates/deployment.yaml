@@ -27,6 +27,30 @@ spec:
       {{- end }}
       serviceAccountName: {{ include "kadence.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+      - maxSkew: {{ .Values.topologySpreadConstraints.maxSkew }}
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: {{ .Values.topologySpreadConstraints.whenUnsatisfiable }}
+        labelSelector:
+          matchLabels:
+            {{- include "kadence.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: app
+      # Soft (preferred, not required) pod anti-affinity alongside the spread
+      # constraint above: same "don't crowd a single node, but never block
+      # scheduling" intent, using the mechanism kube-linter's no-anti-affinity
+      # check specifically looks for.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "kadence.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: app
+      {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 310 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}

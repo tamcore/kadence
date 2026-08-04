@@ -61,6 +61,19 @@ terminationGracePeriodSeconds: 635
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
+  # AlwaysAllow (vs. the k8s default IfHealthyBudget) lets the eviction API
+  # evict already-unhealthy pods even when doing so would violate
+  # minAvailable — an unhealthy pod isn't contributing to availability
+  # anyway, so blocking its eviction only blocks draining/upgrades.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
+# Soft (not hard) topology spread across nodes for the app Deployment.
+# whenUnsatisfiable: ScheduleAnyway (not DoNotSchedule) is deliberate — a
+# hard requirement would leave pods Pending on a small single-node cluster.
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
 
 service:
   type: ClusterIP
