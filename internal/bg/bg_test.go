@@ -158,8 +158,36 @@ func TestRunForeverDoesNotRestartAfterCancelDuringBackoff(t *testing.T) {
 	}
 }
 
+// TestRunForeverToleratesNilLogger forces one panic-and-restart cycle with a
+// nil logger, so the nil check in RunForever is actually on the path being
+// exercised: if that defaulting were removed, the subsequent log.Error call
+// on a nil *slog.Logger would panic outside of Guard's recover and this test
+// would hang until it times out, rather than passing vacuously.
 func TestRunForeverToleratesNilLogger(t *testing.T) {
+	restoreBackoff := restartBackoff
+	restartBackoff = time.Millisecond
+	t.Cleanup(func() { restartBackoff = restoreBackoff })
+
+	var calls atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	RunForever(ctx, nil, "testsub", func(context.Context) {})
+	done := make(chan struct{})
+	go func() {
+		RunForever(ctx, nil, "testsub", func(context.Context) {
+			if calls.Add(1) == 1 {
+				panic("boom")
+			}
+			cancel()
+			<-ctx.Done()
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("RunForever did not return; calls = %d", calls.Load())
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("fn ran %d times, want 2 (one panic + one restart)", got)
+	}
 }

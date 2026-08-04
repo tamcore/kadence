@@ -82,14 +82,20 @@ type scheduledRunnerFunc func(context.Context)
 func (f scheduledRunnerFunc) Run(ctx context.Context) { f(ctx) }
 
 func TestStartScheduledWorkerSurvivesPanickingWorker(t *testing.T) {
+	// panicked is a size-1 buffer, not a one-shot latch: the send below only
+	// blocks (falling through to default) while the buffer is still full,
+	// i.e. before the test's `<-panicked` drains it. In practice that drain,
+	// plus the immediate cancel() that follows it, race bg.RunForever's
+	// restartBackoff (5s, not shortened here): ctx.Done() fires and
+	// RunForever returns during that wait, so this worker is never invoked a
+	// second time and the default branch below is not reached in this test.
+	// It exists only so worker.Run stays safe if that timing ever changes.
 	panicked := make(chan struct{}, 1)
 	worker := scheduledRunnerFunc(func(ctx context.Context) {
 		select {
 		case panicked <- struct{}{}:
 			panic("worker exploded")
 		default:
-			// Second and later invocations (post-restart) just park until
-			// shutdown, so wg.Wait below cannot hang.
 			<-ctx.Done()
 		}
 	})
