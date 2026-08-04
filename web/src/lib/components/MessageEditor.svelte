@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
+	import { canReachServer } from '$lib/stores/connection';
 
 	const TEXTAREA_MAX_HEIGHT_PX = 200;
 
@@ -77,7 +78,7 @@
 	></textarea>
 	<div class="editor-actions">
 		<Button variant="ghost" onclick={onCancel} {disabled}>Cancel</Button>
-		<Button type="submit" {disabled}>Save edit</Button>
+		<Button type="submit" disabled={disabled || !$canReachServer}>Save edit</Button>
 	</div>
 </form>
 

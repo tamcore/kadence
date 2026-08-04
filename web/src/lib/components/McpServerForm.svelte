@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { McpInput } from '$lib/api/mcp';
 	import Button from '$lib/components/Button.svelte';
+	import { canReachServer } from '$lib/stores/connection';
 
 	let {
 		initial,
@@ -70,7 +71,7 @@
 	</label>
 	{#if formError}<p class="error" role="alert">{formError}</p>{/if}
 	<div class="actions">
-		<Button type="submit" variant="primary" disabled={submitting}>{submitLabel}</Button>
+		<Button type="submit" variant="primary" disabled={submitting || !$canReachServer}>{submitLabel}</Button>
 		{#if onCancel}
 			<Button type="button" variant="ghost" disabled={submitting} onclick={onCancel}>Cancel</Button>
 		{/if}

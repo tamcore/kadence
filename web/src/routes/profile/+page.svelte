@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { currentUser, setAuth } from '$lib/stores/auth';
+	import { canReachServer } from '$lib/stores/connection';
 	import { updateProfile, changePassword } from '$lib/api/profile';
 	import { listSessions, revokeSession, revokeOtherSessions, type Session } from '$lib/api/sessions';
 	import {
@@ -252,7 +253,7 @@
 					bind:value={form.aboutMe}
 				></textarea>
 			</label>
-			<Button type="submit" variant="primary">Save account</Button>
+			<Button type="submit" variant="primary" disabled={!$canReachServer}>Save account</Button>
 		</form>
 	</section>
 
@@ -286,7 +287,7 @@
 					Imperial
 				</label>
 			</fieldset>
-			<Button type="submit" variant="primary">Save preferences</Button>
+			<Button type="submit" variant="primary" disabled={!$canReachServer}>Save preferences</Button>
 		</form>
 	</section>
 
@@ -311,7 +312,7 @@
 				<input type="checkbox" bind:checked={pw.logoutOthers} />
 				Log out other devices
 			</label>
-			<Button type="submit" variant="primary">Change password</Button>
+			<Button type="submit" variant="primary" disabled={!$canReachServer}>Change password</Button>
 		</form>
 	</section>
 
@@ -393,7 +394,7 @@
 		<Input label="Name" name="passkeyName" required bind:value={passkeyNameValue} />
 		<div class="modal-actions">
 			<Button type="button" variant="ghost" onclick={closePasskeyNameModal}>Cancel</Button>
-			<Button type="submit" variant="primary">Save</Button>
+			<Button type="submit" variant="primary" disabled={!$canReachServer}>Save</Button>
 		</div>
 	</form>
 </Modal>

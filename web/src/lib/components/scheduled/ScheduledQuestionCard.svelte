@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ScheduledQuestion } from '$lib/api/scheduled';
+	import { canReachServer } from '$lib/stores/connection';
 
 	let {
 		question,
@@ -112,7 +113,7 @@
 					<span>Something else</span>
 					<input id={customInputID} bind:value={custom} disabled={disabled} />
 				</label>
-				<button class="continue" type="submit" disabled={disabled || !custom.trim()}>Continue</button>
+				<button class="continue" type="submit" disabled={disabled || !custom.trim() || !$canReachServer}>Continue</button>
 			</form>
 		{/if}
 		{#if question.optional}
@@ -168,7 +169,7 @@
 						>Skip</button
 					>
 				{/if}
-				<button class="continue" type="submit" disabled={disabled || !text.trim()}>Continue</button>
+				<button class="continue" type="submit" disabled={disabled || !text.trim() || !$canReachServer}>Continue</button>
 			</div>
 		</form>
 	{/if}

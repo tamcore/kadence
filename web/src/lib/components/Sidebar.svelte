@@ -13,6 +13,7 @@
 		renameConversation
 	} from '$lib/stores/chat';
 	import { clearAuth, currentUser, isAdmin } from '$lib/stores/auth';
+	import { canReachServer } from '$lib/stores/connection';
 	import { refreshScheduled, scheduledUnreadCount } from '$lib/stores/scheduled';
 	import { closeSidebar } from '$lib/stores/ui';
 	import { onMount } from 'svelte';
@@ -314,7 +315,7 @@
 		<Input label="Title" name="title" required bind:value={renameValue} />
 		<div class="rename-actions">
 			<Button type="button" variant="ghost" onclick={closeRename}>Cancel</Button>
-			<Button type="submit" variant="primary">Save</Button>
+			<Button type="submit" variant="primary" disabled={!$canReachServer}>Save</Button>
 		</div>
 	</form>
 </Modal>

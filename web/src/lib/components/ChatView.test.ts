@@ -13,6 +13,15 @@ vi.mock('$lib/api/scheduled', async (importOriginal) => ({
 	streamScheduledDefinition: (...args: unknown[]) => streamScheduledDefinitionMock(...args)
 }));
 
+vi.mock('$lib/api/documents', () => ({
+	getDocumentUploadCapabilities: vi.fn().mockResolvedValue({
+		max_bytes: 10 * 1024 * 1024,
+		rich_extraction: true,
+		accept: 'application/pdf,.pdf,text/markdown,.md'
+	}),
+	listDocumentReferences: vi.fn().mockResolvedValue({ own: [], public: [] })
+}));
+
 vi.mock('$lib/stores/chat', async () => {
 	const { writable } = await import('svelte/store');
 	return {

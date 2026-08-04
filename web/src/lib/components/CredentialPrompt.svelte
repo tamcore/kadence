@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { submitCredentials } from '$lib/api/credentials';
 	import { credentialRequest } from '$lib/stores/chat';
+	import { canReachServer } from '$lib/stores/connection';
 	import type { CredentialRequest } from '$lib/types';
 	import Button from '$lib/components/Button.svelte';
 
@@ -50,7 +51,7 @@
 	{/each}
 	{#if error}<div class="error" role="alert">{error}</div>{/if}
 	<div class="actions">
-		<Button type="submit" variant="primary" disabled={submitting}>Submit</Button>
+		<Button type="submit" variant="primary" disabled={submitting || !$canReachServer}>Submit</Button>
 		<Button type="button" variant="ghost" disabled={submitting} onclick={handleCancel}>Cancel</Button>
 	</div>
 </form>

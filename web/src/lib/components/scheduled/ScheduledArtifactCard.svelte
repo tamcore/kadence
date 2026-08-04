@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { discardScheduledDraft } from '$lib/api/scheduled';
+	import { canReachServer } from '$lib/stores/connection';
 	import ScheduledProposal from '$lib/components/scheduled/ScheduledProposal.svelte';
 	import ScheduledQuestionCard from '$lib/components/scheduled/ScheduledQuestionCard.svelte';
 	import { ScheduledDefinitionController } from '$lib/scheduled/definition.svelte';
@@ -194,7 +195,7 @@
 					<button type="button" class="secondary" disabled={pending} onclick={() => (adjusting = false)}
 						>Cancel</button
 					>
-					<button type="submit" disabled={pending || !adjustment.trim()}>Save adjustment</button>
+					<button type="submit" disabled={pending || !adjustment.trim() || !$canReachServer}>Save adjustment</button>
 				</div>
 			</form>
 		{/if}

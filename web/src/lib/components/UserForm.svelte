@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { User } from '$lib/types';
+	import { canReachServer } from '$lib/stores/connection';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 
@@ -72,7 +73,7 @@
 
 	<div class="actions">
 		<Button type="button" variant="ghost" onclick={onCancel}>Cancel</Button>
-		<Button type="submit" variant="primary" loading={saving}>
+		<Button type="submit" variant="primary" loading={saving} disabled={!$canReachServer}>
 			{mode === 'create' ? 'Create user' : 'Save changes'}
 		</Button>
 	</div>

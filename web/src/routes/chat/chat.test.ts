@@ -19,6 +19,14 @@ vi.mock('$lib/stores/chat', async () => {
 	};
 });
 vi.mock('$app/navigation', () => ({ goto: (...a: unknown[]) => gotoMock(...a) }));
+vi.mock('$lib/api/documents', () => ({
+	getDocumentUploadCapabilities: vi.fn().mockResolvedValue({
+		max_bytes: 10 * 1024 * 1024,
+		rich_extraction: true,
+		accept: 'application/pdf,.pdf,text/markdown,.md'
+	}),
+	listDocumentReferences: vi.fn().mockResolvedValue({ own: [], public: [] })
+}));
 vi.mock('$app/stores', async () => {
 	const { writable } = await import('svelte/store');
 	return {
