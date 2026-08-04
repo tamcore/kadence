@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1156,5 +1157,160 @@ func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
 	}
 	if n := len(reg.clients); n != 1 {
 		t.Fatalf("env server did not cache independently; cache size = %d", n)
+	}
+}
+
+// TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient drives the ACTUAL
+// singleflight fan-out race instead of injecting lease records by hand (which
+// is why the other lease tests missed this): two concurrent clientFor calls
+// share one dial, the first returns, evicts and releases — closing the shared
+// client — and only then does the second waiter run its post-dial insert.
+//
+// With the lease record created per-waiter after the dial, the second waiter
+// found an empty map and cached a SECOND record wrapping the now-closed
+// client, so every later cache hit got a dead transport. With the record
+// created inside the singleflight, both waiters share one record: nothing is
+// re-cached after the eviction, and the client is closed exactly once.
+//
+// GOMAXPROCS(1) plus channel handoffs pin the interleaving: the second waiter
+// only becomes runnable when the leader's dial returns, and the leader then
+// runs its insert/evict/release without a yield point. Rounds where the two
+// callers did not actually share one dial are skipped as non-reproductions.
+func TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient(t *testing.T) {
+	prev := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+
+	restore := dialClient
+	t.Cleanup(func() { dialClient = restore })
+
+	const rounds = 50
+	shared := 0
+	for round := range rounds {
+		s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
+		reg := NewRegistry([]Server{s}, nil, nil)
+
+		client := &fakeCloseClient{}
+		var dials atomic.Int32
+		dialStarted := make(chan struct{})
+		releaseDial := make(chan struct{})
+		dialClient = func(context.Context, Server, *http.Client) (mcpClient, error) {
+			if dials.Add(1) == 1 {
+				dialStarted <- struct{}{}
+				<-releaseDial
+			}
+			return client, nil
+		}
+
+		// Leader: dials, then immediately evicts and drops its lease — the
+		// eviction path every failing ListTools/CallTool takes.
+		type result struct {
+			c   mcpClient
+			err error
+		}
+		leaderDone := make(chan result, 1)
+		go func() {
+			c, release, err := reg.clientFor(context.Background(), s)
+			if err == nil {
+				reg.evictClient(s)
+				release()
+			}
+			leaderDone <- result{c, err}
+		}()
+		<-dialStarted
+
+		followerReady := make(chan struct{})
+		followerDone := make(chan struct {
+			result
+			release func()
+		}, 1)
+		go func() {
+			followerReady <- struct{}{}
+			c, release, err := reg.clientFor(context.Background(), s)
+			followerDone <- struct {
+				result
+				release func()
+			}{result{c, err}, release}
+		}()
+		<-followerReady
+
+		close(releaseDial)
+		leader := <-leaderDone
+		follower := <-followerDone
+
+		if leader.err != nil {
+			t.Fatalf("round %d: leader clientFor: %v", round, leader.err)
+		}
+		if follower.err != nil {
+			t.Fatalf("round %d: follower clientFor: %v", round, follower.err)
+		}
+		if dials.Load() != 1 || follower.c != leader.c {
+			// The follower missed the in-flight dial and dialed on its own;
+			// this round does not exercise the fan-out. Try again.
+			follower.release()
+			continue
+		}
+		shared++
+
+		if n := len(reg.clients); n != 0 {
+			t.Fatalf("round %d: cache holds %d record(s) for a client the leader already evicted and closed; a later cache hit would get a dead transport", round, n)
+		}
+		follower.release()
+		if got := client.closes.Load(); got != 1 {
+			t.Fatalf("round %d: shared client closed %d times, want exactly 1", round, got)
+		}
+	}
+
+	if shared == 0 {
+		t.Fatalf("no round observed two callers sharing one dial; the race was never exercised")
+	}
+}
+
+// TestRegistry_DialCompletingAfterCloseIsNotCached covers the shutdown edge of
+// the same window: a dial that lands after Registry.Close must not re-populate
+// the cache (nothing would ever close it), and its release must close it.
+func TestRegistry_DialCompletingAfterCloseIsNotCached(t *testing.T) {
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
+	reg := NewRegistry([]Server{s}, nil, nil)
+
+	client := &fakeCloseClient{}
+	dialStarted := make(chan struct{})
+	releaseDial := make(chan struct{})
+	restore := dialClient
+	dialClient = func(context.Context, Server, *http.Client) (mcpClient, error) {
+		dialStarted <- struct{}{}
+		<-releaseDial
+		return client, nil
+	}
+	t.Cleanup(func() { dialClient = restore })
+
+	type result struct {
+		release func()
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, release, err := reg.clientFor(context.Background(), s)
+		done <- result{release, err}
+	}()
+	<-dialStarted
+
+	if err := reg.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(releaseDial)
+
+	got := <-done
+	if got.err != nil {
+		t.Fatalf("clientFor: %v", got.err)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("a dial completing after Close cached %d client(s); nothing would ever close them", n)
+	}
+	if n := client.closes.Load(); n != 0 {
+		t.Fatalf("client closed %d times while still leased by its caller, want 0", n)
+	}
+	got.release()
+	if n := client.closes.Load(); n != 1 {
+		t.Fatalf("client closed %d times after its last release, want exactly 1", n)
 	}
 }

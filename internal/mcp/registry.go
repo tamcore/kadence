@@ -61,6 +61,7 @@ type Registry struct {
 
 	mu      sync.Mutex
 	clients map[string]*leasedClient // keyed by Name+"/"+Scope; env servers only
+	closed  bool                     // set by Close; stops a late dial re-caching
 
 	// dial deduplicates concurrent first-time dials to the same env server:
 	// callers racing on a cache miss for the same key share one in-flight
@@ -428,34 +429,64 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 		return c, release, nil
 	}
 
+	// The lease record is created ONCE, inside the singleflight, so every
+	// waiter in a fan-out shares the same record. Creating it per-waiter after
+	// the dial is unsound: if the first waiter returns, fails its call and
+	// evicts before a later waiter runs its insert, that later waiter finds an
+	// empty map and caches a SECOND record wrapping the same client — while the
+	// first record's release closes it. The cache then holds a closed transport.
 	v, err, _ := r.dial.Do(key, func() (any, error) {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dialTimeout)
 		defer cancel()
-		return dialClient(dctx, s, r.httpClient)
+		c, dErr := dialClient(dctx, s, r.httpClient)
+		if dErr != nil {
+			return nil, dErr
+		}
+		return &leasedClient{client: c}, nil
 	})
 	if err != nil {
 		return nil, noop, err
 	}
-	c := v.(mcpClient) //nolint:forcetypeassert // dial's fn always returns mcpClient
+	lc := v.(*leasedClient) //nolint:forcetypeassert // dial's fn always returns *leasedClient
 
 	r.mu.Lock()
-	if existing, ok := r.clients[key]; ok && existing.client != c {
+	if existing, ok := r.clients[key]; ok && existing != lc {
 		// Another goroutine cached a different client for this key while we
-		// dialed. Keep theirs, take a lease on it, and close ours.
+		// dialed. Keep theirs and take a lease on it; discard ours.
 		existing.leases++
 		r.mu.Unlock()
-		_ = c.Close()
+		r.discard(lc)
 		return existing.client, func() { r.release(existing) }, nil
 	}
-	lc, ok := r.clients[key]
-	if !ok {
-		lc = &leasedClient{client: c}
-		r.clients[key] = lc
+	if lc.evicted || r.closed {
+		// Evicted (or the whole registry was closed) while this dial was
+		// fanning out. Still usable for this caller, but must not be re-cached;
+		// the last releaser closes it.
+		lc.evicted = true
+		lc.leases++
+		r.mu.Unlock()
+		return lc.client, func() { r.release(lc) }, nil
 	}
+	r.clients[key] = lc
 	lc.leases++
 	r.mu.Unlock()
 
 	return lc.client, func() { r.release(lc) }, nil
+}
+
+// discard drops a dial result that lost a cache race, closing it if nobody took
+// a lease on it.
+func (r *Registry) discard(lc *leasedClient) {
+	r.mu.Lock()
+	lc.evicted = true
+	shouldClose := lc.leases <= 0 && !lc.closed
+	if shouldClose {
+		lc.closed = true
+	}
+	r.mu.Unlock()
+	if shouldClose {
+		_ = lc.client.Close()
+	}
 }
 
 // leaseCached takes a lease on key's cached client without dialing.
@@ -519,6 +550,9 @@ func (r *Registry) evictClient(s Server) {
 // deferred call at construction time in cmd/server/serve.
 func (r *Registry) Close() error {
 	r.mu.Lock()
+	// closed makes a dial that completes AFTER Close refuse to re-cache its
+	// result, so it cannot leak past shutdown.
+	r.closed = true
 	var toClose []*leasedClient
 	for key, lc := range r.clients {
 		delete(r.clients, key)
