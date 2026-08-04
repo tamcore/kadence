@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
 	"github.com/tamcore/kadence/internal/store/testutil"
@@ -167,8 +170,10 @@ func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 	if err != nil || len(list) != 2 {
 		t.Fatalf("ListByUser len=%d err=%v", len(list), err)
 	}
-	if list[0].ID != "s2" {
-		t.Fatalf("order: want s2 first, got %s", list[0].ID)
+	// ListByUser cannot recover the raw id (only its hash is stored), so
+	// compare against the hash of the raw id used at Create time.
+	if list[0].ID != store.HashSessionID("s2") {
+		t.Fatalf("order: want s2 (hashed) first, got %s", list[0].ID)
 	}
 	if list[0].IP != "9.9.9.9" {
 		t.Fatalf("touch ip not applied: %q", list[0].IP)
@@ -186,5 +191,80 @@ func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 	}
 	if l2, _ := repo.ListByUser(ctx, uid); len(l2) != 1 {
 		t.Fatalf("after revoke len=%d want 1", len(l2))
+	}
+}
+
+// TestSessionCreateGetRoundTripsThroughHash creates a session with a raw id,
+// fetches it back by that same raw id, and verifies the row actually stored
+// in the sessions table is the sha256 hash of the raw id rather than the raw
+// value itself.
+func TestSessionCreateGetRoundTripsThroughHash(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+	ctx := context.Background()
+	u := newUser(t, users, "ivan")
+
+	const raw = "raw-session-token-abc123"
+	if err := sessions.Create(ctx, model.Session{ID: raw, UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := sessions.GetByID(ctx, raw)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.UserID != u.ID {
+		t.Fatalf("GetByID user mismatch: %+v", got)
+	}
+	if got.ID != raw {
+		t.Fatalf("GetByID should hand back the raw id it was given: got %q, want %q", got.ID, raw)
+	}
+
+	assertRawSessionIDAbsentButHashPresent(t, pool, raw)
+}
+
+// TestSessionRawTokenNeverStored is a second, more direct assertion that
+// looking up sessions.id by the raw token never matches: only the hash does.
+func TestSessionRawTokenNeverStored(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+	ctx := context.Background()
+	u := newUser(t, users, "judy")
+
+	const raw = "another-raw-session-token-xyz789"
+	if err := sessions.Create(ctx, model.Session{ID: raw, UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	assertRawSessionIDAbsentButHashPresent(t, pool, raw)
+}
+
+// assertRawSessionIDAbsentButHashPresent queries the sessions table directly
+// (bypassing SessionRepository's hashing) and asserts the raw token is not a
+// stored id, while its sha256 hash is.
+func assertRawSessionIDAbsentButHashPresent(t *testing.T, pool *pgxpool.Pool, raw string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id = $1`, raw).Scan(&count); err != nil {
+		t.Fatalf("query raw id: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("raw session token found stored in sessions.id: must only store the hash")
+	}
+
+	hash := store.HashSessionID(raw)
+	var stillCount int
+	err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id = $1`, hash).Scan(&stillCount)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("query hashed id: %v", err)
+	}
+	if stillCount != 1 {
+		t.Fatalf("expected exactly one row stored under the hashed id, got %d", stillCount)
 	}
 }

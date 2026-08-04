@@ -29,9 +29,9 @@ type Sessions struct{ store sessionStore }
 func NewSessions(s sessionStore) *Sessions { return &Sessions{store: s} }
 
 // sessionDTO is the wire representation of a session. It intentionally omits
-// the raw session id: only the opaque publicId is ever exposed. "current" is
-// computed server-side by comparing each row's raw id against the caller's
-// session cookie before the raw id is discarded.
+// the session id (raw or hashed): only the opaque publicId is ever exposed.
+// "current" is computed server-side by comparing each row's hashed id
+// against the sha256 of the caller's raw session cookie.
 type sessionDTO struct {
 	PublicID   string `json:"publicId"`
 	Device     string `json:"device"`
@@ -51,9 +51,12 @@ func (h *Sessions) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	currentID := ""
-	if c, cErr := r.Cookie(sessionCookie); cErr == nil {
-		currentID = c.Value
+	// ListByUser returns each session's hashed id (the raw id is never
+	// stored), so the caller's raw cookie value must be hashed the same way
+	// before comparison.
+	currentHash := ""
+	if c, cErr := r.Cookie(sessionCookie); cErr == nil && c.Value != "" {
+		currentHash = store.HashSessionID(c.Value)
 	}
 
 	out := make([]sessionDTO, 0, len(sessions))
@@ -64,7 +67,7 @@ func (h *Sessions) List(w http.ResponseWriter, r *http.Request) {
 			IP:         s.IP,
 			CreatedAt:  s.CreatedAt.Format(timeFormatRFC3339),
 			LastSeenAt: s.LastSeenAt.Format(timeFormatRFC3339),
-			Current:    s.ID == currentID,
+			Current:    currentHash != "" && s.ID == currentHash,
 		})
 	}
 	RespondJSON(w, http.StatusOK, out)

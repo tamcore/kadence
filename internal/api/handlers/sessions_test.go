@@ -75,9 +75,13 @@ func doAuthedPostNoCookie(t *testing.T, fn http.HandlerFunc) int {
 }
 
 func TestSessions_List_MarksCurrent_NoRawID(t *testing.T) {
+	// A real SessionRepository.ListByUser only ever returns the hashed id
+	// (the raw value is never stored); the handler must hash the caller's
+	// cookie the same way before comparing. The fake store mirrors that by
+	// storing hashes, not raw values.
 	store := &fakeSessionStore{list: []model.Session{
-		{ID: "SECRET-CURRENT", PublicID: "pub-1", UserAgent: "Mozilla/5.0 (Macintosh; Mac OS X) Chrome/120 Safari/537", IP: "1.1.1.1", CreatedAt: time.Now(), LastSeenAt: time.Now()},
-		{ID: "SECRET-OTHER", PublicID: "pub-2", UserAgent: "", IP: "2.2.2.2", CreatedAt: time.Now(), LastSeenAt: time.Now()},
+		{ID: storepkg.HashSessionID("SECRET-CURRENT"), PublicID: "pub-1", UserAgent: "Mozilla/5.0 (Macintosh; Mac OS X) Chrome/120 Safari/537", IP: "1.1.1.1", CreatedAt: time.Now(), LastSeenAt: time.Now()},
+		{ID: storepkg.HashSessionID("SECRET-OTHER"), PublicID: "pub-2", UserAgent: "", IP: "2.2.2.2", CreatedAt: time.Now(), LastSeenAt: time.Now()},
 	}}
 	h := handlers.NewSessions(store)
 	body := doAuthedGetWithCookie(t, h.List, "SECRET-CURRENT")

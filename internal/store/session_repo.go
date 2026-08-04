@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -11,6 +13,16 @@ import (
 
 	"github.com/tamcore/kadence/internal/model"
 )
+
+// HashSessionID returns the sha256 hex digest used as the sessions.id lookup
+// key. The raw session id (the cookie value) is never stored; only its hash
+// is. Exported so callers that need to compare a raw cookie value against a
+// previously-fetched Session.ID (e.g. detecting the caller's own session in
+// a list) can hash consistently without duplicating the algorithm.
+func HashSessionID(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
 
 // SessionRepository provides access to the sessions table.
 type SessionRepository struct {
@@ -22,35 +34,44 @@ func NewSessionRepository(pool *pgxpool.Pool) *SessionRepository {
 	return &SessionRepository{pool: pool}
 }
 
-// Create inserts a session row.
+// Create inserts a session row. s.ID must be the raw session id (as minted
+// by auth.NewSessionID); only its hash is persisted.
 func (r *SessionRepository) Create(ctx context.Context, s model.Session) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO sessions (id, user_id, remember_me, expires_at, user_agent, ip)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		s.ID, s.UserID, s.RememberMe, s.ExpiresAt, s.UserAgent, s.IP)
+		HashSessionID(s.ID), s.UserID, s.RememberMe, s.ExpiresAt, s.UserAgent, s.IP)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
 	}
 	return nil
 }
 
-// GetByID returns a live (non-expired) session or ErrNotFound.
+// GetByID returns a live (non-expired) session or ErrNotFound. id is the raw
+// session id (the cookie value); it is hashed before the lookup. The
+// returned Session.ID is set back to the raw id passed in, not the stored
+// hash, so callers keep working with the value they already hold.
 func (r *SessionRepository) GetByID(ctx context.Context, id string) (model.Session, error) {
 	var s model.Session
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, public_id, user_id, remember_me, user_agent, ip, created_at, last_seen_at, expires_at
-		 FROM sessions WHERE id = $1 AND expires_at > NOW()`, id).
-		Scan(&s.ID, &s.PublicID, &s.UserID, &s.RememberMe, &s.UserAgent, &s.IP, &s.CreatedAt, &s.LastSeenAt, &s.ExpiresAt)
+		`SELECT public_id, user_id, remember_me, user_agent, ip, created_at, last_seen_at, expires_at
+		 FROM sessions WHERE id = $1 AND expires_at > NOW()`, HashSessionID(id)).
+		Scan(&s.PublicID, &s.UserID, &s.RememberMe, &s.UserAgent, &s.IP, &s.CreatedAt, &s.LastSeenAt, &s.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Session{}, ErrNotFound
 	}
 	if err != nil {
 		return model.Session{}, fmt.Errorf("scan session: %w", err)
 	}
+	s.ID = id
 	return s, nil
 }
 
 // ListByUser returns a user's live sessions, most-recently-active first.
+// Since the raw session id is never stored, each returned Session.ID is the
+// hashed value from the id column, not the original raw id: use
+// HashSessionID on a raw value (e.g. the caller's own session cookie) before
+// comparing it against these results.
 func (r *SessionRepository) ListByUser(ctx context.Context, userID int64) ([]model.Session, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, public_id, user_id, remember_me, user_agent, ip, created_at, last_seen_at, expires_at
@@ -82,26 +103,29 @@ func (r *SessionRepository) DeleteByPublicIDForUser(ctx context.Context, publicI
 	return nil
 }
 
-// Touch updates a session's last-active time + IP (best-effort recency tracking).
+// Touch updates a session's last-active time + IP (best-effort recency
+// tracking). id is the raw session id; it is hashed before the lookup.
 func (r *SessionRepository) Touch(ctx context.Context, id string, ip string, at time.Time) error {
-	if _, err := r.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = $1, ip = $2 WHERE id = $3`, at, ip, id); err != nil {
+	if _, err := r.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = $1, ip = $2 WHERE id = $3`, at, ip, HashSessionID(id)); err != nil {
 		return fmt.Errorf("touch session: %w", err)
 	}
 	return nil
 }
 
-// UpdateExpiry extends a session's expiry.
+// UpdateExpiry extends a session's expiry. id is the raw session id; it is
+// hashed before the lookup.
 func (r *SessionRepository) UpdateExpiry(ctx context.Context, id string, expiresAt time.Time) error {
-	_, err := r.pool.Exec(ctx, `UPDATE sessions SET expires_at = $2 WHERE id = $1`, id, expiresAt)
+	_, err := r.pool.Exec(ctx, `UPDATE sessions SET expires_at = $2 WHERE id = $1`, HashSessionID(id), expiresAt)
 	if err != nil {
 		return fmt.Errorf("update session expiry: %w", err)
 	}
 	return nil
 }
 
-// Delete removes a single session.
+// Delete removes a single session. id is the raw session id; it is hashed
+// before the lookup.
 func (r *SessionRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, HashSessionID(id))
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
@@ -129,9 +153,10 @@ func (r *SessionRepository) DeleteExpired(ctx context.Context) (int64, error) {
 }
 
 // DeleteOthersByUser removes every session for userID except exceptID,
-// leaving the caller's current session untouched.
+// leaving the caller's current session untouched. exceptID is the raw
+// session id; it is hashed before comparison.
 func (r *SessionRepository) DeleteOthersByUser(ctx context.Context, userID int64, exceptID string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND id <> $2`, userID, exceptID)
+	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND id <> $2`, userID, HashSessionID(exceptID))
 	if err != nil {
 		return fmt.Errorf("delete other sessions by user: %w", err)
 	}
