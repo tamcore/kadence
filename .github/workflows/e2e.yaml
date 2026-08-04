@@ -18,7 +18,12 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        # Same pinned reference the chart deploys (charts/kadence/values.yaml:
+        # postgres.image) and the Go DB tests use
+        # (internal/store/testutil.PostgresImage). A floating tag here would let
+        # a pg-minor-specific migration problem pass e2e and still break a real
+        # install. Bump all three together.
+        image: pgvector/pgvector:0.8.6-pg17-bookworm
         env:
           POSTGRES_USER: kadence
           POSTGRES_PASSWORD: kadence

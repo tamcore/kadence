@@ -5,6 +5,11 @@ metadata:
   name: {{ include "kadence.fullname" . }}-postgres
   labels:
     {{- include "kadence.postgres.labels" . | nindent 4 }}
+  annotations:
+    # Scoped kube-linter suppression (this object only, not the whole render):
+    # the upstream pgvector/pgvector image writes its data directory, WAL and
+    # runtime files to its own filesystem, so a read-only root is not an option.
+    ignore-check.kube-linter.io/no-read-only-root-fs: "3rd-party postgres image writes to its own filesystem"
 spec:
   serviceName: {{ include "kadence.fullname" . }}-postgres
   replicas: 1

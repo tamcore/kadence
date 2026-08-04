@@ -4,23 +4,28 @@
 # combo (garmin), and a postgres+markitdown+mcp(garmin,cloakbrowser)
 # NetworkPolicy combo rendered with networkPolicy.defaultDeny both false and
 # true — see chart.yaml's lint-and-template and kube-linter jobs for the
-# exact commands), and any finding fails CI unless explicitly excluded below.
+# exact commands), and any finding fails CI.
 #
-# Only one check is excluded, and only for a documented reason:
-#   - no-read-only-root-fs: fires on the postgres StatefulSet's "postgres"
-#     container and on the mcp/markitdown Deployments' upstream containers.
-#     These are 3rd-party images (pgvector/pgvector, garmin-mcp,
-#     cloakbrowser-mcp, mcp/markitdown) that write to their own filesystem
-#     (Postgres data/WAL, garmin token cache, markitdown temp files); left
-#     read-write on purpose. The nginx sidecar in the mcp/markitdown pods IS
-#     read-only-root-fs.
+# There is deliberately NO `checks.exclude` here: a blanket exclude switches a
+# check off for every object in every render, including the kadence app
+# container. no-read-only-root-fs is instead suppressed PER OBJECT, via
+# `ignore-check.kube-linter.io/no-read-only-root-fs` annotations on the three
+# 3rd-party workloads that genuinely need a writable root filesystem:
+#   - templates/postgres/statefulset.yaml (pgvector: data dir, WAL)
+#   - templates/mcp/deployment.yaml       (garmin token cache, browser profile)
+#   - templates/markitdown/deployment.yaml (conversion temp files)
+# Those annotations are per-object, so they also cover the nginx sidecar in the
+# mcp/markitdown pods even though that container IS read-only-root-fs. The
+# kadence app Deployment carries no such annotation, so kube-linter still fails
+# CI if `securityContext` is overridden without readOnlyRootFilesystem: true.
 #
 # Every other finding previously documented here as advisory
 # (pdb-unhealthy-pod-eviction-policy, no-anti-affinity,
 # unset-memory-requirements, latest-tag) has since been fixed in the chart
 # and values defaults and is expected to stay clear. If a new finding
-# appears, fix it — do not add another exclude here without the same level
-# of written justification as above.
+# appears, fix it — or, if a 3rd-party workload genuinely cannot comply,
+# annotate THAT OBJECT with the same level of written justification as above.
+# Never add a blanket exclude.
 #
 # run-as-non-root and unset-cpu-requirements on the mcp/nginx containers were
 # fixed by giving both containers a pod-level securityContext
@@ -30,5 +35,3 @@
 # markitdown.nginx.resources).
 checks:
   doNotAutoAddDefaults: false
-  exclude:
-  - no-read-only-root-fs

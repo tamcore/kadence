@@ -8,6 +8,12 @@ metadata:
   labels:
     {{- include "kadence.labels" . | nindent 4 }}
     app.kubernetes.io/component: markitdown
+  annotations:
+    # Scoped kube-linter suppression (this object only, not the whole render):
+    # the upstream mcp/markitdown image writes conversion temp files to its own
+    # filesystem. Per-object, so it also covers the nginx sidecar in this pod —
+    # keep that container's readOnlyRootFilesystem: true regardless.
+    ignore-check.kube-linter.io/no-read-only-root-fs: "3rd-party markitdown image writes conversion temp files"
 spec:
   replicas: 1
   selector:

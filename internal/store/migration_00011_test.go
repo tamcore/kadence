@@ -15,6 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/tamcore/kadence/internal/store/migrations"
+	"github.com/tamcore/kadence/internal/store/testutil"
 )
 
 // TestMigration00011ConvertsWideEmbeddingsAndDropsNarrowOnes exercises the
@@ -38,7 +39,7 @@ func TestMigration00011ConvertsWideEmbeddingsAndDropsNarrowOnes(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, "pgvector/pgvector:pg17",
+	container, err := postgres.Run(ctx, testutil.PostgresImage,
 		postgres.WithDatabase("kadence_test"),
 		postgres.WithUsername("kadence"),
 		postgres.WithPassword("kadence"),

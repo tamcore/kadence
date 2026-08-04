@@ -11,6 +11,13 @@ metadata:
     {{- include "kadence.labels" $root | nindent 4 }}
     app.kubernetes.io/component: mcp
     kadence.io/mcp-server: {{ $server.name }}
+  annotations:
+    # Scoped kube-linter suppression (this object only, not the whole render):
+    # mcp.servers[] images are 3rd-party (token caches, browser profiles, temp
+    # files) and are left read-write on purpose. The annotation is per-object,
+    # so it also covers the nginx sidecar in this pod — keep that container's
+    # readOnlyRootFilesystem: true regardless.
+    ignore-check.kube-linter.io/no-read-only-root-fs: "3rd-party mcp server images write to their own filesystem"
 spec:
   replicas: 1
   {{- if and $server.persistence $server.persistence.enabled }}

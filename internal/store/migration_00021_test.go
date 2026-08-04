@@ -14,6 +14,7 @@ import (
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store/migrations"
+	"github.com/tamcore/kadence/internal/store/testutil"
 )
 
 // TestMigration00021DeliveryConversation exercises 00021's schema addition and
@@ -28,7 +29,7 @@ func TestMigration00021DeliveryConversation(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, "pgvector/pgvector:pg17",
+	container, err := postgres.Run(ctx, testutil.PostgresImage,
 		postgres.WithDatabase("kadence_test"),
 		postgres.WithUsername("kadence"),
 		postgres.WithPassword("kadence"),

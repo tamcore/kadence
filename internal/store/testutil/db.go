@@ -16,7 +16,11 @@ import (
 	"github.com/tamcore/kadence/internal/store"
 )
 
-const pgImage = "pgvector/pgvector:pg17" // pgvector-enabled; reused by later RAG phase
+// PostgresImage is the pgvector-enabled Postgres image every DB-backed test
+// runs against. Pinned to the same release the chart deploys
+// (charts/kadence/values.yaml: postgres.image) so a pg-minor-specific migration
+// problem cannot pass the tests and still break a real install. Bump together.
+const PostgresImage = "pgvector/pgvector:0.8.6-pg17-bookworm"
 
 var (
 	once sync.Once
@@ -32,7 +36,7 @@ func SetupTestDB(t *testing.T) *pgxpool.Pool {
 	}
 	once.Do(func() {
 		ctx := context.Background()
-		container, err := postgres.Run(ctx, pgImage,
+		container, err := postgres.Run(ctx, PostgresImage,
 			postgres.WithDatabase("kadence_test"),
 			postgres.WithUsername("kadence"),
 			postgres.WithPassword("kadence"),
