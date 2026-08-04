@@ -215,7 +215,7 @@
 		place-items: center;
 		border-radius: 9px;
 		background: var(--accent);
-		color: white;
+		color: var(--on-accent);
 		font-size: 0.67rem;
 	}
 

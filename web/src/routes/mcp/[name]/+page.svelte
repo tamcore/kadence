@@ -66,7 +66,7 @@
 	}
 	pre {
 		overflow-x: auto;
-		background: var(--surface, rgba(0, 0, 0, 0.04));
+		background: var(--surface);
 		padding: 8px;
 		border-radius: var(--radius);
 	}

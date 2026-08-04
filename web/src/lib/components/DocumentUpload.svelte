@@ -269,7 +269,7 @@
 		display: grid;
 		place-items: center;
 		padding: 24px;
-		background: color-mix(in srgb, var(--accent) 15%, rgba(247, 248, 250, 0.92));
+		background: color-mix(in srgb, var(--accent) 15%, color-mix(in srgb, var(--bg) 92%, transparent));
 		pointer-events: none;
 		animation: veil-in 120ms ease-out;
 	}
@@ -300,7 +300,7 @@
 		margin-bottom: 5px;
 		border-radius: 50%;
 		background: var(--accent);
-		color: white;
+		color: var(--on-accent);
 		font-size: 1.35rem;
 		font-weight: 700;
 	}

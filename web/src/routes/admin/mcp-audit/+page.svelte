@@ -390,7 +390,7 @@
 		border: 0;
 		border-radius: 7px;
 		background: var(--accent);
-		color: white;
+		color: var(--on-accent);
 	}
 	.clear { padding: 8px 12px; }
 	.error {

@@ -332,7 +332,7 @@
 	.links { display: flex; flex-direction: column; gap: 2px; }
 	.links a { display: flex; align-items: center; justify-content: space-between; border-radius: 6px; color: var(--text); padding: 7px 8px; text-decoration: none; }
 	.links a:hover, .links a.active { background: var(--bg); color: var(--accent); font-weight: 600; }
-	.unread { display: inline-grid; min-width: 1.35rem; height: 1.35rem; place-items: center; border-radius: 999px; background: var(--accent); color: #fff; font: 600 .72rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+	.unread { display: inline-grid; min-width: 1.35rem; height: 1.35rem; place-items: center; border-radius: 999px; background: var(--accent); color: var(--on-accent); font: 600 .72rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 	.conversation-section { display: grid; gap: 6px; min-width: 0; }
 	.conversation-section > div, .section-toggle, .conversation-list { min-width: 0; }
 	.section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: 650 .72rem/1 var(--font); letter-spacing: .06em; padding: 7px 6px; text-align: left; text-transform: uppercase; }

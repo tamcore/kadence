@@ -37,7 +37,7 @@
 	.backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.4);
+		background: var(--overlay);
 		display: flex;
 		align-items: flex-start;
 		justify-content: center;
@@ -50,7 +50,7 @@
 		border-radius: var(--radius);
 		width: 100%;
 		max-width: 420px;
-		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+		box-shadow: 0 12px 32px color-mix(in srgb, var(--overlay) 45%, transparent);
 	}
 	.head {
 		display: flex;

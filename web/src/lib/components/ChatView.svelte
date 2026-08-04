@@ -273,7 +273,7 @@
 	}
 	.message-block.user { align-self: flex-end; align-items: flex-end; }
 	.message-block.assistant { align-self: stretch; align-items: stretch; max-width: 100%; }
-	.msg.user { background: var(--accent); color: #fff; }
+	.msg.user { background: var(--accent); color: var(--on-accent); }
 	.msg.user.editing {
 		width: 100%;
 		background: var(--surface);

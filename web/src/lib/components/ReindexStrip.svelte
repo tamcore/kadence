@@ -17,7 +17,7 @@
 <style>
 	.strip {
 		background: var(--accent);
-		color: #fff;
+		color: var(--on-accent);
 		padding: 6px 12px;
 		font-size: 0.85rem;
 		text-align: center;

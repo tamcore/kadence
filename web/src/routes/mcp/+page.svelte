@@ -227,7 +227,7 @@
 		min-width: 0;
 	}
 	.card:hover {
-		background: var(--surface-hover, rgba(0, 0, 0, 0.03));
+		background: var(--surface-hover);
 	}
 	.dot {
 		width: 10px;
@@ -237,7 +237,7 @@
 		flex-shrink: 0;
 	}
 	.dot.healthy {
-		background: #1a9e5c;
+		background: var(--success);
 	}
 	.dot.unhealthy {
 		background: var(--danger);

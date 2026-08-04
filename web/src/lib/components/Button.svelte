@@ -43,8 +43,8 @@
 	}
 	.btn:disabled { opacity: 0.6; cursor: not-allowed; }
 	.full-width { width: 100%; }
-	.primary { background: var(--accent); color: #fff; }
+	.primary { background: var(--accent); color: var(--on-accent); }
 	.primary:hover:not(:disabled) { background: var(--accent-hover); }
-	.danger { background: var(--danger); color: #fff; }
+	.danger { background: var(--danger); color: var(--on-accent); }
 	.ghost { background: transparent; border-color: var(--border); color: var(--text); }
 </style>

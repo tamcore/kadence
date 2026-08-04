@@ -16,13 +16,13 @@
 <style>
 	.strip {
 		background: var(--danger);
-		color: #fff;
+		color: var(--on-accent);
 		padding: 6px 12px;
 		font-size: 0.85rem;
 		text-align: center;
 	}
 	.strip a {
-		color: #fff;
+		color: var(--on-accent);
 		text-decoration: underline;
 	}
 </style>

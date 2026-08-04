@@ -7,7 +7,7 @@
 <div class="md">{@html html}</div>
 
 <style>
-	.md :global(pre) { overflow-x: auto; background: #f0f2f4; padding: 12px; border-radius: var(--radius); }
+	.md :global(pre) { overflow-x: auto; background: var(--code-bg); padding: 12px; border-radius: var(--radius); }
 	.md :global(code) { font-family: ui-monospace, monospace; }
 	.md :global(.table-scroll) { overflow-x: auto; }
 	.md :global(table) { border-collapse: collapse; }
