@@ -13,6 +13,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 )
 
 // mimeSniffLen is the number of leading bytes inspected by
@@ -228,6 +229,10 @@ func (d *Documents) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.repo.Delete(r.Context(), id, u.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "document not found")
+			return
+		}
 		RespondError(w, http.StatusInternalServerError, "could not delete document")
 		return
 	}
@@ -242,6 +247,10 @@ func (d *Documents) DeletePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.repo.DeletePublic(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			RespondError(w, http.StatusNotFound, "document not found")
+			return
+		}
 		RespondError(w, http.StatusInternalServerError, "could not delete document")
 		return
 	}

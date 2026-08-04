@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -61,6 +62,48 @@ func TestDocumentCreateListDeleteScoped(t *testing.T) {
 	}
 	if got, _ := docs.ListByOwner(ctx, u.ID); len(got) != 0 {
 		t.Fatalf("doc should be gone: %+v", got)
+	}
+}
+
+func TestDocumentDeleteNotFound(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	docs := store.NewDocumentRepository(pool)
+	ctx := context.Background()
+	owner, _ := users.Create(ctx, model.User{Username: "docowner", Email: "docowner@x.io", PasswordHash: "h", Role: model.RoleUser})
+	other, _ := users.Create(ctx, model.User{Username: "docother", Email: "docother@x.io", PasswordHash: "h", Role: model.RoleUser})
+
+	priv, err := docs.Create(ctx, model.Document{OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: testFilenamePriv, Mime: testMimePDF, SourceType: model.DocSourcePDF})
+	if err != nil {
+		t.Fatalf("create private: %v", err)
+	}
+	pub, err := docs.Create(ctx, model.Document{OwnerUserID: nil, Scope: model.ScopePublic, Filename: testFilenamePublic, Mime: testMimePDF, SourceType: model.DocSourcePDF})
+	if err != nil {
+		t.Fatalf("create public: %v", err)
+	}
+
+	if err := docs.Delete(ctx, 999999, owner.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete nonexistent id err = %v, want ErrNotFound", err)
+	}
+	if err := docs.Delete(ctx, priv.ID, other.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete another user's doc err = %v, want ErrNotFound", err)
+	}
+	if err := docs.DeletePublic(ctx, 999999); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete public nonexistent id err = %v, want ErrNotFound", err)
+	}
+	if err := docs.DeletePublic(ctx, priv.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete-public on a private doc err = %v, want ErrNotFound", err)
+	}
+	if owned, _ := docs.ListByOwner(ctx, owner.ID); len(owned) != 1 {
+		t.Fatalf("private doc should be untouched: %+v", owned)
+	}
+
+	if err := docs.Delete(ctx, pub.ID, owner.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("owner-scoped delete of a public doc err = %v, want ErrNotFound", err)
+	}
+	if err := docs.DeletePublic(ctx, pub.ID); err != nil {
+		t.Fatalf("delete public: %v", err)
 	}
 }
 

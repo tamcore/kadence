@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -29,22 +28,6 @@ func (r *DocumentRepository) Create(ctx context.Context, d model.Document) (mode
 		Scan(&d.ID, &d.CreatedAt)
 	if err != nil {
 		return model.Document{}, fmt.Errorf("insert document: %w", err)
-	}
-	return d, nil
-}
-
-// GetByID returns a document including its extracted markdown, or ErrNotFound.
-func (r *DocumentRepository) GetByID(ctx context.Context, id int64) (model.Document, error) {
-	var d model.Document
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, owner_user_id, scope, filename, mime, source_type, extracted_markdown, created_at
-		 FROM documents WHERE id = $1`, id).
-		Scan(&d.ID, &d.OwnerUserID, &d.Scope, &d.Filename, &d.Mime, &d.SourceType, &d.ExtractedMarkdown, &d.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Document{}, ErrNotFound
-	}
-	if err != nil {
-		return model.Document{}, fmt.Errorf("get document: %w", err)
 	}
 	return d, nil
 }
@@ -139,20 +122,28 @@ func scanDocumentRows(rows pgx.Rows) ([]model.Document, error) {
 	return out, rows.Err()
 }
 
-// Delete removes a document owned by ownerUserID (cascades to chunks).
+// Delete removes a document owned by ownerUserID (cascades to chunks), or
+// ErrNotFound if no row matched (wrong id or not the owner).
 func (r *DocumentRepository) Delete(ctx context.Context, id, ownerUserID int64) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM documents WHERE id = $1 AND owner_user_id = $2`, id, ownerUserID)
+	tag, err := r.pool.Exec(ctx, `DELETE FROM documents WHERE id = $1 AND owner_user_id = $2`, id, ownerUserID)
 	if err != nil {
 		return fmt.Errorf("delete document: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
 
-// DeletePublic removes a public document (cascades to chunks).
+// DeletePublic removes a public document (cascades to chunks), or
+// ErrNotFound if no row matched.
 func (r *DocumentRepository) DeletePublic(ctx context.Context, id int64) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM documents WHERE id = $1 AND scope = 'public'`, id)
+	tag, err := r.pool.Exec(ctx, `DELETE FROM documents WHERE id = $1 AND scope = 'public'`, id)
 	if err != nil {
 		return fmt.Errorf("delete public document: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

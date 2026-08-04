@@ -16,6 +16,7 @@ import (
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/store"
 )
 
 const sampleUserID = int64(7)
@@ -78,15 +79,17 @@ func (f *fakeDocStore) ListPublic(_ context.Context) ([]model.Document, error) {
 func (f *fakeDocStore) Delete(_ context.Context, id, ownerUserID int64) error {
 	if d, ok := f.docs[id]; ok && d.OwnerUserID != nil && *d.OwnerUserID == ownerUserID {
 		delete(f.docs, id)
+		return nil
 	}
-	return nil
+	return store.ErrNotFound
 }
 
 func (f *fakeDocStore) DeletePublic(_ context.Context, id int64) error {
 	if d, ok := f.docs[id]; ok && d.Scope == model.ScopePublic {
 		delete(f.docs, id)
+		return nil
 	}
-	return nil
+	return store.ErrNotFound
 }
 
 type fakeChunkStore struct{}
@@ -470,6 +473,53 @@ func TestDeleteSuccess(t *testing.T) {
 	}
 	if _, ok := docs.docs[created.ID]; ok {
 		t.Fatalf("document not deleted")
+	}
+}
+
+func TestDeleteNotFoundForNonexistentID(t *testing.T) {
+	h, _ := newDocumentsHandler(t, 10<<20)
+
+	req := withChiParam(withDocUser(httptest.NewRequest(http.MethodDelete, "/api/documents/999", nil)),
+		"id", "999")
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteNotFoundForAnotherUsersDocument(t *testing.T) {
+	h, docs := newDocumentsHandler(t, 10<<20)
+	otherOwnerID := int64(99)
+	created, err := docs.Create(context.Background(), model.Document{OwnerUserID: &otherOwnerID, Scope: model.ScopePrivate, Filename: "other-owner.pdf"})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := withChiParam(withDocUser(httptest.NewRequest(http.MethodDelete, "/api/documents/"+strconv.FormatInt(created.ID, 10), nil)),
+		"id", strconv.FormatInt(created.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+	if _, ok := docs.docs[created.ID]; !ok {
+		t.Fatalf("another user's document should not be deleted")
+	}
+}
+
+func TestDeletePublicNotFoundForNonexistentID(t *testing.T) {
+	h, _ := newDocumentsHandler(t, 10<<20)
+
+	req := withChiParam(withDocUser(httptest.NewRequest(http.MethodDelete, "/api/admin/documents/999", nil)),
+		"id", "999")
+	rec := httptest.NewRecorder()
+	h.DeletePublic(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404, body=%s", rec.Code, rec.Body.String())
 	}
 }
 
