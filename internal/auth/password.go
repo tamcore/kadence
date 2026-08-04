@@ -5,8 +5,10 @@ import "golang.org/x/crypto/bcrypt"
 
 // MinPasswordLen is the minimum acceptable length for any account password.
 // Enforced consistently everywhere a password is set: bootstrap, admin
-// create/update, and self-service password change.
-const MinPasswordLen = 8
+// create/update, and self-service password change. 12 rather than the NIST
+// floor of 8: bcrypt cost and login rate limiting are already in place, but a
+// shorter minimum still needlessly widens the brute-force search space.
+const MinPasswordLen = 12
 
 // HashPassword returns a bcrypt hash of the plaintext password.
 func HashPassword(pw string) (string, error) {

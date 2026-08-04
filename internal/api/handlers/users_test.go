@@ -114,14 +114,14 @@ func patchUserAs(t *testing.T, h *handlers.Users, id, body string, actingID int6
 func TestCreateUserHashesAndInserts(t *testing.T) {
 	repo := &usersRepo{}
 	h := handlers.NewUsers(repo, &sessionsFake{})
-	body := `{"username":"bob","email":"b@x.io","password":"password123","role":"user"}`
+	body := `{"username":"bob","email":"b@x.io","password":"password12345","role":"user"}`
 	rec := httptest.NewRecorder()
 	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(body)))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if repo.created == nil || repo.created.PasswordHash == "password123" || repo.created.Role != "user" {
+	if repo.created == nil || repo.created.PasswordHash == "password12345" || repo.created.Role != "user" {
 		t.Fatalf("bad create: %+v", repo.created)
 	}
 }
@@ -137,6 +137,36 @@ func TestCreateUserRejectsShortPassword(t *testing.T) {
 	}
 	if repo.created != nil {
 		t.Fatalf("user should not have been created on short password, got %+v", repo.created)
+	}
+}
+
+// TestCreateUserPasswordLengthBoundary pins the MinPasswordLen boundary at
+// 12: 11 characters (below the raised minimum, but above the old 8-char
+// floor) must still be rejected, while exactly 12 must be accepted.
+func TestCreateUserPasswordLengthBoundary(t *testing.T) {
+	if auth.MinPasswordLen != 12 {
+		t.Fatalf("auth.MinPasswordLen = %d, want 12 (update this test's boundary literals if that changes)", auth.MinPasswordLen)
+	}
+
+	repo := &usersRepo{}
+	h := handlers.NewUsers(repo, &sessionsFake{})
+	body := `{"username":"bob","email":"b@x.io","password":"eleven-chr!","role":"user"}`
+	rec := httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("11-char password: status = %d, want 400", rec.Code)
+	}
+	if repo.created != nil {
+		t.Fatalf("user should not have been created on an 11-char password, got %+v", repo.created)
+	}
+
+	repo = &usersRepo{}
+	h = handlers.NewUsers(repo, &sessionsFake{})
+	body = `{"username":"bob","email":"b@x.io","password":"twelve-chrs!","role":"user"}`
+	rec = httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("12-char password: status = %d body=%s, want 201", rec.Code, rec.Body.String())
 	}
 }
 
@@ -191,7 +221,7 @@ func TestDeleteBlocksLastAdmin(t *testing.T) {
 func TestUpdateUserEditsFieldsAndResetsPassword(t *testing.T) {
 	repo := &usersRepo{byID: map[int64]model.User{5: {ID: 5, Username: testEditUser, Email: testEditEmail, Role: model.RoleUser}}}
 	h := handlers.NewUsers(repo, &sessionsFake{})
-	resp := patchUser(t, h, "5", `{"username":"bobby","email":"new@x.io","role":"admin","password":"longenough"}`)
+	resp := patchUser(t, h, "5", `{"username":"bobby","email":"new@x.io","role":"admin","password":"longenough123"}`)
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -200,7 +230,7 @@ func TestUpdateUserEditsFieldsAndResetsPassword(t *testing.T) {
 	if repo.updated == nil || repo.updated.Username != "bobby" || repo.updated.Email != "new@x.io" || repo.updated.Role != model.RoleAdmin {
 		t.Fatalf("bad update: %+v", repo.updated)
 	}
-	if repo.pwUpdated == "" || repo.pwUpdated == "longenough" {
+	if repo.pwUpdated == "" || repo.pwUpdated == "longenough123" {
 		t.Fatalf("password not hashed/updated: %q", repo.pwUpdated)
 	}
 }
@@ -268,7 +298,7 @@ func TestUpdatePasswordRevokesTargetSessions(t *testing.T) {
 	repo := &usersRepo{byID: map[int64]model.User{5: {ID: 5, Username: testEditUser, Email: testEditEmail, Role: model.RoleUser}}}
 	sessions := &sessionsFake{}
 	h := handlers.NewUsers(repo, sessions)
-	resp := patchUserAs(t, h, "5", `{"username":"bobby","email":"new@x.io","role":"user","password":"longenough"}`, 1, "admin-current-session")
+	resp := patchUserAs(t, h, "5", `{"username":"bobby","email":"new@x.io","role":"user","password":"longenough123"}`, 1, "admin-current-session")
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -288,7 +318,7 @@ func TestUpdatePasswordSelfResetKeepsCurrentSession(t *testing.T) {
 	}, adminCount: 2}
 	sessions := &sessionsFake{}
 	h := handlers.NewUsers(repo, sessions)
-	resp := patchUserAs(t, h, "1", `{"username":"admin","email":"admin@x.io","role":"admin","password":"longenough"}`, 1, testCurrentSessionCookie)
+	resp := patchUserAs(t, h, "1", `{"username":"admin","email":"admin@x.io","role":"admin","password":"longenough123"}`, 1, testCurrentSessionCookie)
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
