@@ -47,7 +47,7 @@ func RunForever(ctx context.Context, log *slog.Logger, name string, fn func(cont
 	if log == nil {
 		log = slog.Default()
 	}
-	for {
+	for ctx.Err() == nil {
 		err := Guard(func() error {
 			fn(ctx)
 			return nil

@@ -100,15 +100,23 @@ func TestRunForeverRestartsAfterPanicAndLogsStack(t *testing.T) {
 
 func TestRunForeverReturnsOnCancelWithoutRestarting(t *testing.T) {
 	var calls atomic.Int32
+	started := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		RunForever(ctx, slog.Default(), "testsub", func(c context.Context) {
 			calls.Add(1)
+			// Closing here (rather than sending) also fails loudly on a second
+			// invocation: close of a closed channel panics.
+			close(started)
 			<-c.Done()
 		})
 		close(done)
 	}()
+	// Wait until fn is actually running before cancelling. Cancelling first
+	// would race RunForever's `for ctx.Err() == nil` entry guard and the loop
+	// could legitimately never run fn at all.
+	<-started
 	cancel()
 	select {
 	case <-done:
