@@ -1,5 +1,7 @@
 import { goto } from '$app/navigation';
 import { clearAuth } from '$lib/stores/auth';
+import { canReachServerNow, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
+import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 import type { User } from '$lib/types';
 
 const API_BASE = '/api';
@@ -29,6 +31,7 @@ export function setCsrfToken(v: string | null): void {
 
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const REQUEST_TIMEOUT_MS = 15000;
+const NETWORK_CLASS_STATUS = new Set([502, 503, 504]);
 
 // handleUnauthorized centralizes the reaction to a 401: drop local auth state and
 // send the user back to /login with a returnTo, unless the failing request already
@@ -42,6 +45,10 @@ export function handleUnauthorized(): void {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+	if (typeof window !== 'undefined' && !canReachServerNow()) {
+		throw new APIError(0, UNREACHABLE_MESSAGE);
+	}
+
 	const method = (options.method ?? 'GET').toUpperCase();
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
@@ -76,9 +83,15 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 		if (!resp.ok) {
 			if (resp.status === 401) handleUnauthorized();
+			if (NETWORK_CLASS_STATUS.has(resp.status)) void reachabilityMonitor.probeNow();
 			throw new APIError(resp.status, envelope?.error ?? `request failed (${resp.status})`);
 		}
 		return (envelope?.data as T) ?? (undefined as T);
+	} catch (error) {
+		if (error instanceof APIError) throw error;
+		// fetch rejection (TypeError) or AbortError from the timeout: network-class.
+		void reachabilityMonitor.probeNow();
+		throw new APIError(0, error instanceof Error ? error.message : 'network request failed');
 	} finally {
 		clearTimeout(timer);
 	}

@@ -1,11 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+vi.mock('$lib/pwa/reachability-monitor', () => ({
+	reachabilityMonitor: { probeNow: vi.fn().mockResolvedValue(undefined) }
+}));
 
 import { goto } from '$app/navigation';
 import { api, APIError, getCsrfToken, setCsrfToken } from './client';
 import { isAuthenticated, setAuth } from '$lib/stores/auth';
+import { setOnline, setServerReachable, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
+import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 
 function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
 	return vi.fn().mockResolvedValue(
@@ -132,4 +137,44 @@ describe('request timeout', () => {
 			vi.useRealTimers();
 		}
 	}, 5000);
+});
+
+describe('reachability guard', () => {
+	beforeEach(() => {
+		setOnline(true);
+		setServerReachable(true);
+		vi.mocked(reachabilityMonitor.probeNow).mockClear();
+	});
+
+	it('rejects without fetching when unreachable', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch');
+		setServerReachable(false);
+		await expect(api.get('/anything')).rejects.toMatchObject({
+			name: 'APIError',
+			message: UNREACHABLE_MESSAGE
+		});
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it('triggers a probe on a network-class fetch rejection', async () => {
+		vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('failed to fetch'));
+		await expect(api.get('/anything')).rejects.toBeInstanceOf(APIError);
+		expect(reachabilityMonitor.probeNow).toHaveBeenCalledTimes(1);
+	});
+
+	it('triggers a probe on a 503 response', async () => {
+		vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+			new Response('{"error":"down"}', { status: 503, headers: { 'content-type': 'application/json' } })
+		);
+		await expect(api.get('/anything')).rejects.toBeInstanceOf(APIError);
+		expect(reachabilityMonitor.probeNow).toHaveBeenCalledTimes(1);
+	});
+
+	it('does NOT probe on a 400 response', async () => {
+		vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+			new Response('{"error":"bad"}', { status: 400, headers: { 'content-type': 'application/json' } })
+		);
+		await expect(api.get('/anything')).rejects.toBeInstanceOf(APIError);
+		expect(reachabilityMonitor.probeNow).not.toHaveBeenCalled();
+	});
 });
