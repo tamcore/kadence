@@ -50,21 +50,26 @@ beforeEach(() => {
 });
 
 describe('Composer', () => {
-	it('renders aligned attach and reference icons with stable labels', () => {
+	it('renders attach and reference controls as svg icons with stable labels', () => {
 		const { container } = render(Composer, { props: { richInput: true, onSubmit: vi.fn() } });
 
-		expect(container.querySelector('label[title="Attach files"] .composer-icon')).toHaveTextContent(
-			'+'
-		);
-		expect(screen.getByRole('button', { name: 'Reference documents' })).toContainElement(
-			container.querySelector('.reference-trigger .composer-icon')
-		);
-		expect(container.querySelector('.reference-trigger .composer-icon')).toHaveTextContent('@');
+		const attachIcon = container.querySelector('label[title="Attach files"] .composer-icon');
+		const referenceIcon = container.querySelector('.reference-trigger .composer-icon');
+
+		expect(attachIcon?.querySelector('svg')).toBeInTheDocument();
+		expect(referenceIcon?.querySelector('svg')).toBeInTheDocument();
+		expect(attachIcon).toHaveTextContent('');
+		expect(referenceIcon).toHaveTextContent('');
 		expect(container.querySelectorAll('.composer-icon')).toHaveLength(2);
+		expect(container.querySelectorAll('.composer-icon svg[aria-hidden="true"]')).toHaveLength(2);
+		expect(screen.getByRole('button', { name: 'Reference documents' })).toContainElement(
+			referenceIcon as HTMLElement
+		);
 		expect(screen.getByRole('button', { name: 'Reference documents' })).toHaveAttribute(
 			'aria-label',
 			'Reference documents'
 		);
+		expect(screen.getByText('Attach files')).toHaveClass('sr-only');
 	});
 
 	it('keeps evidence controls disabled unless rich input is explicitly enabled', () => {
