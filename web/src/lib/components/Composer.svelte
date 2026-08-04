@@ -3,6 +3,7 @@
 	import ChatAttachmentTray from '$lib/components/ChatAttachmentTray.svelte';
 	import DocumentReferencePicker from '$lib/components/DocumentReferencePicker.svelte';
 	import { getDocumentUploadCapabilities } from '$lib/api/documents';
+	import { canReachServer } from '$lib/stores/connection';
 	import type { Document } from '$lib/types';
 	import { onMount, tick } from 'svelte';
 
@@ -41,6 +42,7 @@
 
 	const canSubmit = $derived(
 		!disabled &&
+			$canReachServer &&
 			(text.trim().length > 0 ||
 				(richInput && (files.length > 0 || documentReferences.length > 0)))
 	);

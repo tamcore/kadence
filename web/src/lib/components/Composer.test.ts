@@ -12,6 +12,7 @@ vi.mock('$lib/api/documents', () => ({
 }));
 
 import Composer from './Composer.svelte';
+import { setServerReachable } from '$lib/stores/connection';
 import type { Document } from '$lib/types';
 
 const privateDocument: Document = {
@@ -398,5 +399,14 @@ describe('Composer', () => {
 		await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:first.png'));
 		unmount();
 		expect(revokeObjectURL).toHaveBeenCalledWith('blob:second.png');
+	});
+
+	it('disables send while the server is unreachable', async () => {
+		setServerReachable(false);
+		render(Composer, { props: { onSubmit: vi.fn() } });
+		const textarea = screen.getByRole('textbox');
+		await fireEvent.input(textarea, { target: { value: 'hello' } });
+		expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+		setServerReachable(true);
 	});
 });
