@@ -161,17 +161,20 @@ jobs:
         # and isn't standalone-buildable in a plain CI job. Both share the
         # same distroless-nonroot runtime base and entrypoint.
         run: docker build -f Dockerfile.dev -t kadence:scan .
-      - name: Run trivy (advisory)
-        # ADVISORY: exit-code 0 + continue-on-error mean this never fails the
-        # workflow, even on findings. Flip to blocking (drop both) once
-        # .trivyignore has stayed clean in CI for a while.
-        continue-on-error: true
+      - name: Run trivy
+        # BLOCKING: a HIGH or CRITICAL finding fails the workflow. Verified
+        # clean on 2026-08-04 against the Dockerfile.dev image — 0 findings for
+        # both the debian 12.15 base layer and the Go binary — so .trivyignore
+        # is empty on purpose. If an unpatchable upstream CVE ever blocks a
+        # run, add a CVE-specific entry to .trivyignore with a written
+        # justification and a revisit date; never a blanket ignore, and never
+        # suppress a CVE that has a patched version available.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: kadence:scan
           format: table
           severity: HIGH,CRITICAL
-          exit-code: "0"
+          exit-code: "1"
           trivyignores: .trivyignore
           output: trivy-report.txt
       - name: Add trivy report to job summary
@@ -181,7 +184,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Trivy image scan (advisory, HIGH/CRITICAL)"
+            echo "### Trivy image scan (HIGH/CRITICAL)"
             echo '```'
             if [ -f trivy-report.txt ]; then
               cat trivy-report.txt
@@ -205,9 +208,8 @@ jobs:
         with:
           node-version: "24"
       - run: npm ci
-      - name: npm audit (advisory)
-        # ADVISORY: 0 known high/critical runtime vulns as of 2026-07-22.
-        # Flip to blocking (remove continue-on-error) once that's held for a
-        # few CI runs.
-        continue-on-error: true
+      - name: npm audit
+        # BLOCKING. 0 known high/critical runtime vulns as of 2026-08-04
+        # (isomorphic-dompurify's undici transitive dep pinned via
+        # package.json "overrides" to clear GHSA-4cwx-7wf7-3272).
         run: npm audit --omit=dev --audit-level=high

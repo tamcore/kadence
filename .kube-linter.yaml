@@ -1,40 +1,34 @@
-# kube-linter config (advisory only — see .github/workflows/chart.yaml, job
-# "kube-linter"). Uses kube-linter's default check bundle; nothing is
-# disabled or excluded here, so this file has no effect on which checks run
-# today. It exists to document the current baseline and as a place to add
-# a scoped `exclude` block later if a specific, justified false positive
-# needs suppressing — never a blanket disable of a check that otherwise
-# passes.
+# kube-linter config — see .github/workflows/chart.yaml, job "kube-linter".
+# This job is BLOCKING: kube-linter's default check bundle runs against every
+# rendered combo (default values, values-dev.yaml.example, an mcp+markitdown
+# combo (garmin), and a postgres+markitdown+mcp(garmin,cloakbrowser)
+# NetworkPolicy combo rendered with networkPolicy.defaultDeny both false and
+# true — see chart.yaml's lint-and-template and kube-linter jobs for the
+# exact commands), and any finding fails CI unless explicitly excluded below.
 #
-# Known findings as of 2026-07-23 (`helm template` against default values,
-# values-dev.yaml.example, an mcp+markitdown combo (garmin), and a
-# postgres+markitdown+mcp(garmin,cloakbrowser) NetworkPolicy combo rendered
-# with networkPolicy.defaultDeny both false and true — see chart.yaml's
-# lint-and-template and kube-linter jobs for the exact commands). The
-# NetworkPolicy resources added in Wave 2 (issue 14) do not introduce any new
-# kube-linter finding category (kube-linter's default bundle has no
-# network-policy-specific check); findings below are unchanged by that work.
-#   - pdb-unhealthy-pod-eviction-policy: PDB doesn't set unhealthyPodEvictionPolicy
-#   - no-anti-affinity: app Deployment (2 replicas) has no inter-pod anti-affinity
-#   - no-read-only-root-fs: the mcp/markitdown containers run 3rd-party images
-#     that write to their own filesystem (garmin token cache, markitdown temp
-#     files); left read-write on purpose (the nginx sidecar in the same pod
-#     IS read-only-root-fs)
-#   - unset-memory-requirements: mcp/markitdown containers set a default
-#     memory *request* (mcp.resources / markitdown.resources) but no limit —
-#     3rd-party images with unpredictable memory ceilings (Chromium etc.);
-#     the nginx sidecar DOES set a limit (mcp.nginx.resources /
-#     markitdown.nginx.resources)
-#   - latest-tag: the example/test MCP server manifests intentionally use
-#     "example/garmin-mcp:latest" (values-dev.yaml.example placeholder) and
-#     the public "mcp/markitdown:latest" default (pin a digest in prod)
+# Only one check is excluded, and only for a documented reason:
+#   - no-read-only-root-fs: fires on the postgres StatefulSet's "postgres"
+#     container and on the mcp/markitdown Deployments' upstream containers.
+#     These are 3rd-party images (pgvector/pgvector, garmin-mcp,
+#     cloakbrowser-mcp, mcp/markitdown) that write to their own filesystem
+#     (Postgres data/WAL, garmin token cache, markitdown temp files); left
+#     read-write on purpose. The nginx sidecar in the mcp/markitdown pods IS
+#     read-only-root-fs.
 #
-# run-as-non-root and unset-cpu-requirements on the mcp/nginx containers are
-# FIXED (Wave 2, issue 15): both containers now get a pod-level
-# securityContext (runAsNonRoot/runAsUser/runAsGroup/fsGroup 65532 +
-# seccompProfile RuntimeDefault, override via per-server `securityContext`)
-# and default resource requests (mcp.resources, mcp.nginx.resources,
-# markitdown.nginx.resources). Verified non-root (2026-07-22, remote docker
-# `--user 65532:65532`) for garmin-mcp, cloakbrowser-mcp, and markitdown.
+# Every other finding previously documented here as advisory
+# (pdb-unhealthy-pod-eviction-policy, no-anti-affinity,
+# unset-memory-requirements, latest-tag) has since been fixed in the chart
+# and values defaults and is expected to stay clear. If a new finding
+# appears, fix it — do not add another exclude here without the same level
+# of written justification as above.
+#
+# run-as-non-root and unset-cpu-requirements on the mcp/nginx containers were
+# fixed by giving both containers a pod-level securityContext
+# (runAsNonRoot/runAsUser/runAsGroup/fsGroup 65532 + seccompProfile
+# RuntimeDefault, override via per-server `securityContext`) and default
+# resource requests (mcp.resources, mcp.nginx.resources,
+# markitdown.nginx.resources).
 checks:
   doNotAutoAddDefaults: false
+  exclude:
+  - no-read-only-root-fs
