@@ -75,7 +75,7 @@
 	--warning-fg: #f2c67f;
 	--code-bg: #0f1215;
 	--overlay: rgba(0, 0, 0, 0.78);
-	--shadow: 0 0 0 1px #2e343c, 0 10px 28px rgba(0, 0, 0, 0.9);
+	--shadow: 0 0 0 1px var(--border), 0 10px 28px rgba(0, 0, 0, 0.9);
 }
 
 * { box-sizing: border-box; }

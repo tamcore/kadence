@@ -71,6 +71,8 @@
 		padding: 8px 10px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
+		background: var(--surface);
+		color: var(--text);
 		font: inherit;
 	}
 	.error { color: var(--danger); }

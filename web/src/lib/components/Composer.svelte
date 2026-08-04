@@ -353,6 +353,8 @@
 		padding: 10px 12px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
+		background: var(--surface);
+		color: var(--text);
 		font: inherit;
 		line-height: 24px;
 		resize: none;

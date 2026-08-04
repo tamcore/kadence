@@ -122,6 +122,7 @@
 		width: 100%;
 		max-height: 180px;
 		object-fit: cover;
+		/* darkening scrim behind transparent PNGs; --on-accent would lighten instead */
 		background: color-mix(in srgb, var(--text) 8%, transparent);
 	}
 

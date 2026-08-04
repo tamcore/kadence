@@ -1,7 +1,7 @@
 // @ts-expect-error Vitest runs in Node; app tsconfig intentionally omits Node types.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { THEME_COLOR } from './constants';
+import { DARK_MEDIA_QUERY, DARK_VARIANT_STORAGE_KEY, THEME_COLOR, THEME_STORAGE_KEY } from './constants';
 import { resolveTheme } from './resolve';
 import type { DarkVariant, ThemePreference } from './types';
 
@@ -24,8 +24,8 @@ function runBootstrap(pref: string | null, variant: string | null, prefersDark: 
 		}
 	};
 	const store: Record<string, string> = {};
-	if (pref !== null) store.kadence_theme = pref;
-	if (variant !== null) store.kadence_theme_dark = variant;
+	if (pref !== null) store[THEME_STORAGE_KEY] = pref;
+	if (variant !== null) store[DARK_VARIANT_STORAGE_KEY] = variant;
 
 	const fn = new Function('window', 'document', 'localStorage', bootstrapBody());
 	fn(
@@ -66,5 +66,12 @@ describe('app.html theme bootstrap', () => {
 
 	it('keeps the theme-color meta ahead of the script that mutates it', () => {
 		expect(html.indexOf('name="theme-color"')).toBeLessThan(html.indexOf('<script>'));
+	});
+
+	it('reads the same storage keys the app writes', () => {
+		const body = bootstrapBody();
+		expect(body).toContain(THEME_STORAGE_KEY);
+		expect(body).toContain(DARK_VARIANT_STORAGE_KEY);
+		expect(body).toContain(DARK_MEDIA_QUERY);
 	});
 });
