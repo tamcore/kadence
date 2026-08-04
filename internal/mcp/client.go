@@ -78,6 +78,7 @@ func newClient(ctx context.Context, s Server, httpClient *http.Client) (mcpClien
 	}
 
 	if err := c.Start(ctx); err != nil {
+		_ = c.Close()
 		return nil, fmt.Errorf("mcp: start client for %s/%s: %w", s.Name, s.Scope, err)
 	}
 

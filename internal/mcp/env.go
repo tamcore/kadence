@@ -73,6 +73,14 @@ type Server struct {
 	// model in the chat system prompt (see chat.Service.systemPrompt /
 	// MCPUserSnapshot.ToolHints). Empty means no hint line is added.
 	Hint string
+	// FromEnv marks a server as env-configured. Env servers are cached and
+	// share one client; user-defined (DB) servers are dialed fresh per dispatch
+	// and closed after use, because their credentials can be revoked at any
+	// time. This is set by NewRegistry for its configured set and is always
+	// false for servers returned by a UserServerSource — provenance must never
+	// be inferred from Name/Scope, because a user-defined server may collide
+	// with an env server on both.
+	FromEnv bool
 }
 
 // AppliesTo reports whether this server's tools should be offered to the

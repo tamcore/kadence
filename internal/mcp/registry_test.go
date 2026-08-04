@@ -338,7 +338,7 @@ func newFakeGarminServerToggleable(t *testing.T) (*httptest.Server, *atomic.Bool
 // and that redial succeeds once the server recovers.
 func TestRegistry_EvictsClientOnProbeFailure(t *testing.T) {
 	ts, fail := newFakeGarminServerToggleable(t)
-	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	ctx := context.Background()
 
@@ -662,7 +662,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 // ends up cached.
 func TestRegistry_ClientForDedupsConcurrentDialsToSameServer(t *testing.T) {
 	ts, initializes := newFakeGarminServerCountingInitializes(t)
-	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 
 	const n = 10
@@ -704,7 +704,7 @@ func TestRegistry_ClientForDedupsConcurrentDialsToSameServer(t *testing.T) {
 // suppress caching a fresh, non-stale client.
 func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing.T) {
 	ts, started, release := newHangingThenWorkingServer(t)
-	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 
 	dialDone := make(chan error, 1)
@@ -748,7 +748,7 @@ func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing
 // inheriting the leader's context.Canceled error.
 func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 	ts, started, release := newHangingThenWorkingServer(t)
-	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
+	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
@@ -875,7 +875,7 @@ func TestRegistryCloseClosesEveryCachedClient(t *testing.T) {
 }
 
 func TestEvictClientClosesTheDroppedClient(t *testing.T) {
-	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	reg.mu.Lock()
@@ -893,7 +893,7 @@ func TestEvictClientClosesTheDroppedClient(t *testing.T) {
 }
 
 func TestClientForReleaseIsNoOpForCachedEnvClient(t *testing.T) {
-	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	reg.mu.Lock()
@@ -972,7 +972,7 @@ func TestToolsForClosesEachUserDefinedClientPerIteration(t *testing.T) {
 // caller. It must, however, remove it from the cache so the next clientFor
 // dials afresh instead of resurrecting the (now-stale) evicted entry.
 func TestEvictClientDoesNotCloseALeasedClient(t *testing.T) {
-	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	key := testEnvServerName + "/" + scopeGlobal
@@ -1008,7 +1008,7 @@ func TestEvictClientDoesNotCloseALeasedClient(t *testing.T) {
 // client's last outstanding lease is released, its transport is closed
 // exactly once.
 func TestReleaseAfterEvictionClosesExactlyOnce(t *testing.T) {
-	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	lc := &leasedClient{client: c, leases: 1}
@@ -1064,7 +1064,7 @@ func TestCloseDefersLeasedClientUntilRelease(t *testing.T) {
 // callers concurrently hold the same cached (now-evicted) client, the first
 // release closes nothing and the second closes it exactly once.
 func TestTwoLeasesOnSameClientOnlyLastReleaseCloses(t *testing.T) {
-	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	key := testEnvServerName + "/" + scopeGlobal
@@ -1090,5 +1090,71 @@ func TestTwoLeasesOnSameClientOnlyLastReleaseCloses(t *testing.T) {
 	release2()
 	if got := c.closes.Load(); got != 1 {
 		t.Fatalf("client closed %d times after the last release, want exactly 1", got)
+	}
+}
+
+// TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv proves provenance
+// is read from Server.FromEnv rather than inferred by matching Name+Scope
+// against the registry's env set. A user-defined (DB) server can legitimately
+// collide with an env server on both fields; before this fix, isEnvServer's
+// name-matching would misclassify it as env-configured, letting it (or its
+// credentials) enter the shared env cache. The colliding user-defined server
+// must still dial fresh and close on release, while the identically
+// Name+Scope'd env server continues to cache independently.
+func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
+	envClient := &fakeCloseClient{}
+	userClient := &fakeCloseClient{}
+
+	restore := dialClient
+	dialClient = func(_ context.Context, s Server, _ *http.Client) (mcpClient, error) {
+		if s.FromEnv {
+			return envClient, nil
+		}
+		return userClient, nil
+	}
+	t.Cleanup(func() { dialClient = restore })
+
+	envSrv := Server{
+		Name: "collide", Scope: scopeGlobal, URL: "https://collide.invalid",
+		Transport: transportStreamableHTTP, FromEnv: true,
+	}
+	reg := NewRegistry([]Server{envSrv}, nil, nil)
+
+	// A user-defined server colliding with the env server on BOTH Name and
+	// Scope, with FromEnv left at its zero value — exactly what any real
+	// UserServerSource returns.
+	userSrv := Server{
+		Name: "collide", Scope: scopeGlobal, URL: "https://collide.invalid",
+		Transport: transportStreamableHTTP,
+	}
+
+	got, release, err := reg.clientFor(context.Background(), userSrv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != userClient {
+		t.Fatal("clientFor dialed the wrong client for a colliding user-defined server")
+	}
+	release()
+	if got := userClient.closes.Load(); got != 1 {
+		t.Fatalf("user-defined client closed %d times, want 1 (closed on release)", got)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("colliding user-defined server entered the cache; size = %d", n)
+	}
+
+	got2, release2, err := reg.clientFor(context.Background(), envSrv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != envClient {
+		t.Fatal("clientFor dialed the wrong client for the env server")
+	}
+	release2()
+	if got := envClient.closes.Load(); got != 0 {
+		t.Fatalf("env client closed %d times after release, want 0 (cache owns its lifetime)", got)
+	}
+	if n := len(reg.clients); n != 1 {
+		t.Fatalf("env server did not cache independently; cache size = %d", n)
 	}
 }

@@ -79,8 +79,12 @@ type Registry struct {
 // system trust store). userSrc, if non-nil, supplies per-user DB-backed MCP
 // servers to merge with servers; pass nil to disable user-defined servers.
 func NewRegistry(servers []Server, httpClient *http.Client, userSrc UserServerSource) *Registry {
+	owned := append([]Server(nil), servers...)
+	for i := range owned {
+		owned[i].FromEnv = true
+	}
 	return &Registry{
-		servers:    servers,
+		servers:    owned,
 		httpClient: httpClient,
 		userSrc:    userSrc,
 		clients:    make(map[string]*leasedClient),
@@ -536,12 +540,10 @@ func (r *Registry) Close() error {
 }
 
 // isEnvServer reports whether s is one of the env-configured servers (vs. a
-// per-user DB server supplied by userSrc).
+// per-user DB server supplied by userSrc). Provenance is read directly from
+// s.FromEnv rather than inferred by matching Name+Scope against r.servers: a
+// user-defined server can collide with an env server on both fields, and
+// name-matching would misclassify it as env-configured.
 func (r *Registry) isEnvServer(s Server) bool {
-	for _, e := range r.servers {
-		if e.Name == s.Name && e.Scope == s.Scope {
-			return true
-		}
-	}
-	return false
+	return s.FromEnv
 }
