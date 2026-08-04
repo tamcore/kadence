@@ -277,6 +277,12 @@ func Run() error {
 		var registry *mcp.Registry
 		if len(servers) > 0 || userSrc != nil {
 			registry = mcp.NewRegistry(servers, mcpHTTPClient, userSrc)
+			// Deferred calls run LIFO at Run's return — after the whole shutdown
+			// sequence, and before the earlier-registered defer store.Close(pool)
+			// above. That closes MCP transports before the DB pool. Registering
+			// the defer here also avoids hoisting `registry` out of this block
+			// just to reach the shutdown sequence.
+			defer func() { _ = registry.Close() }()
 			mcpTools = mcpToolsAdapter{registry}
 			slog.Info("mcp enabled", "env_servers", len(servers), "user_mcp", userSrc != nil)
 

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -159,30 +160,33 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 
 	applicable, prefixes := applicableServersWithPrefixes(username, servers)
 	for i, s := range applicable {
-		client, err := r.clientFor(ctx, s)
-		if err != nil {
-			slog.Warn("mcp: skipping server (connect failed)", "server", s.Name, "scope", s.Scope, "error", err)
-			continue
-		}
-
-		tools, err := client.ListTools(ctx)
-		if err != nil {
-			slog.Warn("mcp: skipping server (list tools failed)", "server", s.Name, "scope", s.Scope, "error", err)
-			r.evictClient(s)
-			continue
-		}
-
-		prefix := prefixes[i] + "__"
-		for _, t := range tools {
-			if !s.allowsTool(t.Name) {
-				continue
+		func() {
+			client, release, err := r.clientFor(ctx, s)
+			if err != nil {
+				slog.Warn("mcp: skipping server (connect failed)", "server", s.Name, "scope", s.Scope, "error", err)
+				return
 			}
-			defs = append(defs, provider.ToolDefinition{
-				Name:        prefix + t.Name,
-				Description: t.Description,
-				Parameters:  t.Schema,
-			})
-		}
+			defer release()
+
+			tools, err := client.ListTools(ctx)
+			if err != nil {
+				slog.Warn("mcp: skipping server (list tools failed)", "server", s.Name, "scope", s.Scope, "error", err)
+				r.evictClient(s)
+				return
+			}
+
+			prefix := prefixes[i] + "__"
+			for _, t := range tools {
+				if !s.allowsTool(t.Name) {
+					continue
+				}
+				defs = append(defs, provider.ToolDefinition{
+					Name:        prefix + t.Name,
+					Description: t.Description,
+					Parameters:  t.Schema,
+				})
+			}
+		}()
 	}
 
 	return defs, nil
@@ -228,10 +232,11 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 		return "", fmt.Errorf("mcp: tool %q is not enabled for server %q", realTool, prefix)
 	}
 
-	client, err := r.clientFor(ctx, s)
+	client, release, err := r.clientFor(ctx, s)
 	if err != nil {
 		return "", fmt.Errorf("mcp: connect to server %s: %w", s.Name, err)
 	}
+	defer release()
 
 	out, err := client.CallTool(ctx, realTool, argsJSON)
 	if err != nil {
@@ -259,10 +264,11 @@ func (r *Registry) Servers() []Server {
 // the server's TOOLS filter (matching what ToolsFor/Call actually expose).
 // Used by the health poller; reuses the cached client.
 func (r *Registry) Probe(ctx context.Context, s Server) ([]ToolInfo, error) {
-	client, err := r.clientFor(ctx, s)
+	client, release, err := r.clientFor(ctx, s)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: probe connect %s/%s: %w", s.Name, s.Scope, err)
 	}
+	defer release()
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		r.evictClient(s)
@@ -358,10 +364,16 @@ func serverPrefixes(servers []Server) []string {
 	return prefixes
 }
 
-// clientFor returns a client for the given server. Env-configured servers use
-// a lazily-created, cached client (keyed by Name+Scope). User-defined (DB)
-// servers always get a fresh client — they're not cached, since their
-// credentials/URL can change or be revoked at any time.
+// clientFor returns a client for the given server plus a release func the
+// caller must invoke when done with it.
+//
+// Env-configured servers use a lazily-created, cached client (keyed by
+// Name+Scope) and get a no-op release — the cache owns their lifetime, and
+// Registry.Close closes them. User-defined (DB) servers always get a fresh
+// client, because their credentials/URL can change or be revoked at any time;
+// their release closes it, so a per-user dispatch does not leak the
+// connection. Returning the release func keeps the env-vs-user distinction in
+// this one place instead of duplicating it at every call site.
 //
 // The network dial (newClient's Start+Initialize handshake) never runs while
 // holding r.mu: the mutex only ever guards the map get/set/delete, each held
@@ -374,15 +386,21 @@ func serverPrefixes(servers []Server) []string {
 // dialTimeout: without this, canceling the "leader" caller's context (e.g. an
 // aborted chat stream) would abort the in-flight dial and hand every waiter
 // sharing it a context.Canceled error unrelated to their own request.
-func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
+func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), error) {
+	noop := func() {}
+
 	if !r.isEnvServer(s) {
-		return newClient(ctx, s, r.httpClient)
+		c, err := newClient(ctx, s, r.httpClient)
+		if err != nil {
+			return nil, noop, err
+		}
+		return c, func() { _ = c.Close() }, nil
 	}
 
 	key := s.Name + "/" + s.Scope
 
 	if c, ok := r.cachedClient(key); ok {
-		return c, nil
+		return c, noop, nil
 	}
 
 	v, err, _ := r.dial.Do(key, func() (any, error) {
@@ -391,15 +409,22 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, error) {
 		return newClient(dctx, s, r.httpClient)
 	})
 	if err != nil {
-		return nil, err
+		return nil, noop, err
 	}
 	c := v.(mcpClient) //nolint:forcetypeassert // dial's fn always returns mcpClient
 
 	r.mu.Lock()
+	if existing, ok := r.clients[key]; ok && existing != c {
+		// Another goroutine cached a client for this key while we dialed. Keep
+		// theirs and close ours rather than overwriting and leaking it.
+		r.mu.Unlock()
+		_ = c.Close()
+		return existing, noop, nil
+	}
 	r.clients[key] = c
 	r.mu.Unlock()
 
-	return c, nil
+	return c, noop, nil
 }
 
 // cachedClient looks up key in the client cache under r.mu, without dialing.
@@ -421,8 +446,33 @@ func (r *Registry) evictClient(s Server) {
 	}
 	key := s.Name + "/" + s.Scope
 	r.mu.Lock()
+	c, ok := r.clients[key]
 	delete(r.clients, key)
 	r.mu.Unlock()
+	if ok {
+		_ = c.Close()
+	}
+}
+
+// Close closes every cached client and clears the cache. Safe to call more
+// than once. Registered as a deferred call at construction time in
+// cmd/server/serve.
+func (r *Registry) Close() error {
+	r.mu.Lock()
+	clients := make([]mcpClient, 0, len(r.clients))
+	for key, c := range r.clients {
+		clients = append(clients, c)
+		delete(r.clients, key)
+	}
+	r.mu.Unlock()
+
+	var errs []error
+	for _, c := range clients {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // isEnvServer reports whether s is one of the env-configured servers (vs. a

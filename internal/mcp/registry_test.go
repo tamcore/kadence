@@ -621,7 +621,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 
 	slowDone := make(chan error, 1)
 	go func() {
-		_, err := reg.clientFor(context.Background(), slowServer)
+		_, _, err := reg.clientFor(context.Background(), slowServer)
 		slowDone <- err
 	}()
 
@@ -635,7 +635,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 	// DIFFERENT server must complete promptly rather than queueing behind it.
 	fastDone := make(chan error, 1)
 	go func() {
-		_, err := reg.clientFor(context.Background(), fastServer)
+		_, _, err := reg.clientFor(context.Background(), fastServer)
 		fastDone <- err
 	}()
 
@@ -672,7 +672,7 @@ func TestRegistry_ClientForDedupsConcurrentDialsToSameServer(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			clients[i], errs[i] = reg.clientFor(context.Background(), s)
+			clients[i], _, errs[i] = reg.clientFor(context.Background(), s)
 		}(i)
 	}
 	wg.Wait()
@@ -708,7 +708,7 @@ func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing
 
 	dialDone := make(chan error, 1)
 	go func() {
-		_, err := reg.clientFor(context.Background(), s)
+		_, _, err := reg.clientFor(context.Background(), s)
 		dialDone <- err
 	}()
 
@@ -757,7 +757,7 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 		err error
 	}, 1)
 	go func() {
-		c, err := reg.clientFor(leaderCtx, s)
+		c, _, err := reg.clientFor(leaderCtx, s)
 		leaderDone <- struct {
 			c   mcpClient
 			err error
@@ -773,7 +773,7 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 	// A follower racing on the same key joins the in-flight dial.
 	followerDone := make(chan error, 1)
 	go func() {
-		_, err := reg.clientFor(context.Background(), s)
+		_, _, err := reg.clientFor(context.Background(), s)
 		followerDone <- err
 	}()
 
@@ -809,5 +809,105 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 
 	if n := len(reg.clients); n != 1 {
 		t.Fatalf("clients cached = %d, want 1", n)
+	}
+}
+
+// fakeCloseClient is the package's first mcpClient fake; it records Close calls.
+type fakeCloseClient struct {
+	closes atomic.Int32
+	tools  []ToolInfo
+}
+
+func (f *fakeCloseClient) ListTools(context.Context) ([]ToolInfo, error) { return f.tools, nil }
+func (f *fakeCloseClient) CallTool(context.Context, string, string) (string, error) {
+	return "ok", nil
+}
+func (f *fakeCloseClient) Close() error {
+	f.closes.Add(1)
+	return nil
+}
+
+func TestRegistryNeverCachesUserDefinedClient(t *testing.T) {
+	ts := newFakeGarminServer(t)
+	userSrv := Server{
+		Name: "userone", Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP,
+	}
+	// No env servers, so userSrv is a user-defined server.
+	reg := NewRegistry(nil, nil, &fakeUserSrc{perUser: map[string][]Server{"owner": {userSrv}}})
+
+	if _, err := reg.ToolsFor(context.Background(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("user-defined clients must never be cached; cache size = %d", n)
+	}
+}
+
+func TestRegistryCloseClosesEveryCachedClient(t *testing.T) {
+	reg := NewRegistry(nil, nil, nil)
+	a := &fakeCloseClient{}
+	b := &fakeCloseClient{}
+	reg.mu.Lock()
+	reg.clients["a/global"] = a
+	reg.clients["b/global"] = b
+	reg.mu.Unlock()
+
+	if err := reg.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := a.closes.Load(); got != 1 {
+		t.Fatalf("client a closed %d times, want 1", got)
+	}
+	if got := b.closes.Load(); got != 1 {
+		t.Fatalf("client b closed %d times, want 1", got)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("cache not cleared after Close; size = %d", n)
+	}
+	// Close must be idempotent.
+	if err := reg.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if got := a.closes.Load(); got != 1 {
+		t.Fatalf("client a closed %d times after a second Close, want 1", got)
+	}
+}
+
+func TestEvictClientClosesTheDroppedClient(t *testing.T) {
+	s := Server{Name: "envone", Scope: scopeGlobal}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	c := &fakeCloseClient{}
+	reg.mu.Lock()
+	reg.clients["envone/"+scopeGlobal] = c
+	reg.mu.Unlock()
+
+	reg.evictClient(s)
+
+	if got := c.closes.Load(); got != 1 {
+		t.Fatalf("evicted client closed %d times, want 1", got)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("client still cached after eviction; size = %d", n)
+	}
+}
+
+func TestClientForReleaseIsNoOpForCachedEnvClient(t *testing.T) {
+	s := Server{Name: "envone", Scope: scopeGlobal}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	c := &fakeCloseClient{}
+	reg.mu.Lock()
+	reg.clients["envone/"+scopeGlobal] = c
+	reg.mu.Unlock()
+
+	got, release, err := reg.clientFor(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != c {
+		t.Fatal("clientFor did not return the cached client")
+	}
+	release()
+	if n := c.closes.Load(); n != 0 {
+		t.Fatalf("release closed a cached env client %d times, want 0", n)
 	}
 }
