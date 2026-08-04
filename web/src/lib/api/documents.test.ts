@@ -80,6 +80,18 @@ describe('documents api', () => {
 		expect(fetchMock.mock.calls[2][0]).toBe('/api/admin/documents');
 	});
 
+	it('treats a 404 on delete as already-deleted', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(404, { error: 'document not found' })));
+
+		await expect(deleteDocument(1)).resolves.toBeUndefined();
+	});
+
+	it('still rejects on a non-404 delete failure', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(500, { error: 'boom' })));
+
+		await expect(deleteDocument(1)).rejects.toBeInstanceOf(APIError);
+	});
+
 	it('loads the effective upload capabilities from the authenticated shared endpoint', async () => {
 		const capabilities = {
 			max_bytes: 20 * 1024 * 1024,

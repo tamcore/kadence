@@ -68,6 +68,14 @@ export function listDocumentReferences(): Promise<DocumentReferenceOptions> {
 	return api.get<DocumentReferenceOptions>('/documents/references');
 }
 
-export function deleteDocument(id: number, opts: { admin?: boolean } = {}): Promise<void> {
-	return api.del<void>(`${documentsPath(opts.admin)}/${id}`);
+// deleteDocument treats a 404 as success: the server (correctly) reports one for
+// a document that is already gone, and delete is idempotent from the UI's point
+// of view — a double-click must not surface an error for work that is done.
+export async function deleteDocument(id: number, opts: { admin?: boolean } = {}): Promise<void> {
+	try {
+		await api.del<void>(`${documentsPath(opts.admin)}/${id}`);
+	} catch (error: unknown) {
+		if (error instanceof APIError && error.status === 404) return;
+		throw error;
+	}
 }
