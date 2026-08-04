@@ -5,6 +5,11 @@ const HEALTHZ_PATH = '/api/healthz';
 export const HEALTHY_INTERVAL_MS = 20000;
 export const UNHEALTHY_INTERVAL_MS = 5000;
 
+// A probe response means the server answered, so it is reachable — even a 404.
+// Only a gateway-down status implies the backend is unreachable behind the proxy;
+// a network-level failure (fetch reject) is handled separately in probe().
+const GATEWAY_DOWN_STATUS = new Set([502, 503, 504]);
+
 export class ReachabilityMonitor {
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private stopped = true;
@@ -57,7 +62,7 @@ export class ReachabilityMonitor {
 		if (!this.isOnline()) return;
 		try {
 			const resp = await this.fetchFn(HEALTHZ_PATH, { method: 'GET', credentials: 'include' });
-			this.healthy = resp.ok;
+			this.healthy = !GATEWAY_DOWN_STATUS.has(resp.status);
 		} catch {
 			this.healthy = false;
 		}

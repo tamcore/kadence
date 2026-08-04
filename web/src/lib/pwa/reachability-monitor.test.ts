@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReachabilityMonitor, HEALTHY_INTERVAL_MS, UNHEALTHY_INTERVAL_MS } from './reachability-monitor';
 
 function okResponse(ok: boolean) {
-	return { ok } as Response;
+	return { ok, status: ok ? 200 : 503 } as Response;
+}
+
+function statusResponse(status: number) {
+	return { ok: status >= 200 && status < 300, status } as Response;
 }
 
 describe('ReachabilityMonitor', () => {
@@ -26,12 +30,20 @@ describe('ReachabilityMonitor', () => {
 		expect(setReachable).toHaveBeenLastCalledWith(false);
 	});
 
-	it('marks unreachable on a non-ok probe', async () => {
-		const fetchFn = vi.fn().mockResolvedValue(okResponse(false));
+	it('marks unreachable on a gateway-down (503) probe', async () => {
+		const fetchFn = vi.fn().mockResolvedValue(statusResponse(503));
 		const setReachable = vi.fn();
 		const m = new ReachabilityMonitor(fetchFn, setReachable, () => true);
 		await m.probeNow();
 		expect(setReachable).toHaveBeenLastCalledWith(false);
+	});
+
+	it('marks reachable on a non-2xx probe that is not gateway-down (404 = server answered)', async () => {
+		const fetchFn = vi.fn().mockResolvedValue(statusResponse(404));
+		const setReachable = vi.fn();
+		const m = new ReachabilityMonitor(fetchFn, setReachable, () => true);
+		await m.probeNow();
+		expect(setReachable).toHaveBeenLastCalledWith(true);
 	});
 
 	it('skips the probe while offline', async () => {
