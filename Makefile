@@ -11,7 +11,7 @@ KUBE_CONTEXT   ?=
 _HELM_CTX   = $(if $(KUBE_CONTEXT),--kube-context $(KUBE_CONTEXT),)
 _KUBECTL_CTX = $(if $(KUBE_CONTEXT),--context $(KUBE_CONTEXT),)
 
-.PHONY: help build build-prod fmt vet test coverage lint goreleaser-check helm-lint dev-deploy-k8s e2e-web e2e-kind clean
+.PHONY: help build build-prod fmt fmt-check vet test coverage lint goreleaser-check helm-lint dev-deploy-k8s e2e-web e2e-kind clean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -23,8 +23,12 @@ build-prod: ## Build the production binary with the SvelteKit frontend embedded
 	@cd web && npm ci --silent && npm run build
 	@go build -ldflags "$(LDFLAGS)" -tags prodfrontend -o bin/kadence ./cmd/server
 
-fmt: ## Run go fmt
+fmt: ## Run go fmt (rewrites files; local dev use only)
 	go fmt ./...
+
+fmt-check: ## Check gofmt formatting without rewriting files
+	@out="$$(gofmt -l . | grep -v '^web/' || true)"; \
+	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 vet: ## Run go vet
 	go vet ./...
@@ -38,7 +42,7 @@ coverage: test ## Print coverage by func and total
 goreleaser-check: ## Validate .goreleaser.yaml
 	@if [ -f .goreleaser.yaml ]; then goreleaser check; else echo ".goreleaser.yaml not present - skipping"; fi
 
-lint: fmt vet goreleaser-check helm-lint ## Run linters
+lint: fmt-check vet goreleaser-check helm-lint ## Run linters
 
 e2e-web: ## Build + run Playwright browser e2e (needs KADENCE_DATABASE_URL)
 	@cd web && npm ci --silent && npm run build
