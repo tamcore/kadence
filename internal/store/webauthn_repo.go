@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -49,25 +50,31 @@ func (r *WebAuthnCredentialRepository) Create(ctx context.Context, c model.WebAu
 		`INSERT INTO webauthn_credentials (user_id, credential_id, public_key, aaguid, sign_count, transports, name, backup_eligible, backup_state)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		c.UserID, c.CredentialID, c.PublicKey, aaguid, c.SignCount, transports, c.Name, c.BackupEligible, c.BackupState)
-	return err
+	if err != nil {
+		return fmt.Errorf("insert webauthn credential: %w", err)
+	}
+	return nil
 }
 
 // ListByUser returns the user's credentials, newest first.
 func (r *WebAuthnCredentialRepository) ListByUser(ctx context.Context, userID int64) ([]model.WebAuthnCredential, error) {
 	rows, err := r.pool.Query(ctx, `SELECT `+webauthnCredCols+` FROM webauthn_credentials WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list webauthn credentials: %w", err)
 	}
 	defer rows.Close()
 	out := make([]model.WebAuthnCredential, 0)
 	for rows.Next() {
 		c, err := scanWebAuthnCred(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan webauthn credential: %w", err)
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list webauthn credentials: %w", err)
+	}
+	return out, nil
 }
 
 // GetByCredentialID finds a credential by its raw credential id.
@@ -76,14 +83,17 @@ func (r *WebAuthnCredentialRepository) GetByCredentialID(ctx context.Context, cr
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.WebAuthnCredential{}, ErrNotFound
 	}
-	return c, err
+	if err != nil {
+		return model.WebAuthnCredential{}, fmt.Errorf("scan webauthn credential: %w", err)
+	}
+	return c, nil
 }
 
 // Rename sets a credential's name, owner-scoped.
 func (r *WebAuthnCredentialRepository) Rename(ctx context.Context, publicID string, userID int64, name string) error {
 	tag, err := r.pool.Exec(ctx, `UPDATE webauthn_credentials SET name=$1 WHERE public_id=$2 AND user_id=$3`, name, publicID, userID)
 	if err != nil {
-		return err
+		return fmt.Errorf("rename webauthn credential: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -95,7 +105,7 @@ func (r *WebAuthnCredentialRepository) Rename(ctx context.Context, publicID stri
 func (r *WebAuthnCredentialRepository) DeleteByPublicIDForUser(ctx context.Context, publicID string, userID int64) error {
 	tag, err := r.pool.Exec(ctx, `DELETE FROM webauthn_credentials WHERE public_id=$1 AND user_id=$2`, publicID, userID)
 	if err != nil {
-		return err
+		return fmt.Errorf("delete webauthn credential: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -106,5 +116,8 @@ func (r *WebAuthnCredentialRepository) DeleteByPublicIDForUser(ctx context.Conte
 // UpdateSignCount bumps the counter + last_used_at after a successful assertion.
 func (r *WebAuthnCredentialRepository) UpdateSignCount(ctx context.Context, credID []byte, signCount uint32, lastUsed time.Time) error {
 	_, err := r.pool.Exec(ctx, `UPDATE webauthn_credentials SET sign_count=$1, last_used_at=$2 WHERE credential_id=$3`, signCount, lastUsed, credID)
-	return err
+	if err != nil {
+		return fmt.Errorf("update webauthn sign count: %w", err)
+	}
+	return nil
 }
