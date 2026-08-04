@@ -18,6 +18,7 @@ import (
 	"github.com/tamcore/kadence/internal/api"
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
+	"github.com/tamcore/kadence/internal/bg"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/config"
@@ -165,12 +166,14 @@ func Run() error {
 	var bgWG sync.WaitGroup
 
 	bgWG.Go(func() {
-		runSessionReaper(rootCtx, sessions, sessionReapInterval, slog.Default())
+		bg.RunForever(rootCtx, slog.Default(), "session-reaper", func(ctx context.Context) {
+			runSessionReaper(ctx, sessions, sessionReapInterval, slog.Default())
+		})
 	})
 	bgWG.Go(func() {
-		runMCPAuditReaper(
-			rootCtx, auditRepo, cfg.MCPAuditTTL, mcpAuditReapInterval, slog.Default(), time.Now,
-		)
+		bg.RunForever(rootCtx, slog.Default(), "mcp-audit-reaper", func(ctx context.Context) {
+			runMCPAuditReaper(ctx, auditRepo, cfg.MCPAuditTTL, mcpAuditReapInterval, slog.Default(), time.Now)
+		})
 	})
 
 	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
@@ -236,7 +239,9 @@ func Run() error {
 			rag = chat.NewRAG(embedder, chunkRepo, cfg.RAGTopK)
 			slog.Info("rag enabled", "model", cfg.EmbedModel, "base_url", cfg.EmbedBaseURL, "top_k", cfg.RAGTopK)
 			bgWG.Go(func() {
-				reindex.Run(rootCtx, chunkRepo, embedder.Embed, slog.Default())
+				bg.RunForever(rootCtx, slog.Default(), "reindex", func(ctx context.Context) {
+					reindex.Run(ctx, chunkRepo, embedder.Embed, slog.Default())
+				})
 			})
 
 			ingestSvc := ingest.NewService(
@@ -277,7 +282,7 @@ func Run() error {
 
 			poller := mcp.NewHealthPoller(registry, mcp.DefaultHealthInterval)
 			bgWG.Go(func() {
-				poller.Run(rootCtx)
+				bg.RunForever(rootCtx, slog.Default(), "mcp-health-poller", poller.Run)
 			})
 
 			// userRepo is a *store.UserServerRepo; passed as nil explicitly

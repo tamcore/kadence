@@ -2,9 +2,11 @@ package serve
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/tamcore/kadence/internal/bg"
 	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/scheduled"
 )
@@ -20,7 +22,7 @@ func startScheduledWorker(ctx context.Context, wg *sync.WaitGroup, enabled bool,
 		return false
 	}
 	wg.Go(func() {
-		worker.Run(ctx)
+		bg.RunForever(ctx, slog.Default(), "scheduled-worker", worker.Run)
 	})
 	return true
 }

@@ -76,3 +76,31 @@ func TestScheduledStaleAfterCoversGatherAndSynthesis(t *testing.T) {
 		t.Fatalf("overflow stale cutoff = %s, want %s", got, maxDuration)
 	}
 }
+
+type scheduledRunnerFunc func(context.Context)
+
+func (f scheduledRunnerFunc) Run(ctx context.Context) { f(ctx) }
+
+func TestStartScheduledWorkerSurvivesPanickingWorker(t *testing.T) {
+	panicked := make(chan struct{}, 1)
+	worker := scheduledRunnerFunc(func(ctx context.Context) {
+		select {
+		case panicked <- struct{}{}:
+			panic("worker exploded")
+		default:
+			// Second and later invocations (post-restart) just park until
+			// shutdown, so wg.Wait below cannot hang.
+			<-ctx.Done()
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	if !startScheduledWorker(ctx, &wg, true, worker) {
+		t.Fatal("startScheduledWorker returned false for an enabled worker")
+	}
+	<-panicked
+	// Reaching this line at all means the panic did not take the process down.
+	cancel()
+	wg.Wait()
+}

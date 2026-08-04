@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tamcore/kadence/internal/api/handlers"
+	"github.com/tamcore/kadence/internal/bg"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/push"
 	"github.com/tamcore/kadence/internal/store"
@@ -41,7 +42,7 @@ func startPushDispatcher(ctx context.Context, wg *sync.WaitGroup, pool *pgxpool.
 	)
 	dispatcher := push.NewDispatcher(pushSubs, pushSvc, push.DispatcherConfig{}, slog.Default())
 	wg.Go(func() {
-		dispatcher.Run(ctx)
+		bg.RunForever(ctx, slog.Default(), "push-dispatcher", dispatcher.Run)
 	})
 	return true
 }
