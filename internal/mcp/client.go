@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -18,6 +19,31 @@ const (
 	transportStreamableHTTP = "streamable-http"
 	transportSSE            = "sse"
 )
+
+const (
+	// maxToolResultBytes caps one tool result. Remote MCP servers are not
+	// trusted to bound their own output, and the result flows straight into the
+	// chat request, so an unbounded response would inflate memory and tokens.
+	// Well above realistic tool output.
+	maxToolResultBytes = 256 << 10
+
+	// toolResultTruncatedMarker tells the model the result was cut, so it does
+	// not silently reason over a partial payload.
+	toolResultTruncatedMarker = "\n[truncated: response exceeded 256KiB]"
+)
+
+// truncateToolResult caps s at maxToolResultBytes, cutting on a rune boundary
+// and appending toolResultTruncatedMarker.
+func truncateToolResult(s string) string {
+	if len(s) <= maxToolResultBytes {
+		return s
+	}
+	cut := maxToolResultBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + toolResultTruncatedMarker
+}
 
 // ToolInfo describes one tool discovered on a remote MCP server.
 type ToolInfo struct {
@@ -185,7 +211,7 @@ func (c *realMCPClient) CallTool(ctx context.Context, name, argsJSON string) (st
 		return "", fmt.Errorf("mcp: call tool %s: %w", name, err)
 	}
 
-	text := flattenTextContent(result.Content)
+	text := truncateToolResult(flattenTextContent(result.Content))
 	if result.IsError {
 		return "", fmt.Errorf("mcp: tool %s returned an error: %s", name, text)
 	}
