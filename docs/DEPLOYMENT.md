@@ -115,6 +115,18 @@ recreates the StatefulSet, which adopts the orphaned pod/PVC back once its
 selector matches again. The Deployments have no state to preserve, so a plain
 delete (as above) is enough for those.
 
+**Every user is logged out by this upgrade.** Migration
+`00023_hashed_session_ids.sql` runs `DELETE FROM sessions`: session ids are now
+stored sha256-hashed, and the hash is one-way, so existing rows cannot be
+converted to the new format. Everyone logs in again once; nothing else is
+affected. Plan the upgrade accordingly if you have active users.
+
+**`KADENCE_ADMIN_PASSWORD` now requires at least 12 characters** (previously
+8). The check only runs on a first boot that actually creates the admin user,
+so an existing install carrying a shorter legacy value upgrades cleanly — that
+value is never read once an admin exists. Only a fresh install (empty `users`
+table) with a shorter value fails startup.
+
 ## MCP servers
 
 Each entry under `mcp.servers[]` renders a full, isolated unit:
