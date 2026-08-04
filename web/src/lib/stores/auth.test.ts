@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearAuth, currentUser, isAuthenticated, setAuth } from './auth';
 
 beforeEach(() => {
@@ -42,5 +42,13 @@ describe('auth store', () => {
 		clearAuth();
 		expect(get(currentUser)).toBeNull();
 		expect(get(isAuthenticated)).toBe(false);
+	});
+
+	it('falls back to the initial value instead of throwing on corrupt localStorage JSON', async () => {
+		localStorage.setItem('kadence_user', '{not valid json');
+		vi.resetModules();
+		const fresh = await import('./auth');
+		expect(get(fresh.currentUser)).toBeNull();
+		expect(localStorage.getItem('kadence_user')).toBeNull();
 	});
 });

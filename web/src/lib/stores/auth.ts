@@ -2,13 +2,19 @@ import { derived, writable } from 'svelte/store';
 import type { User } from '$lib/types';
 
 function persisted<T>(key: string, initial: T) {
-	let start: string | null = null;
+	let start: T = initial;
 	try {
-		start = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+		const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+		if (raw) start = JSON.parse(raw) as T;
 	} catch {
-		start = null;
+		start = initial;
+		try {
+			localStorage.removeItem(key);
+		} catch {
+			// localStorage not available, nothing to clean up
+		}
 	}
-	const store = writable<T>(start ? (JSON.parse(start) as T) : initial);
+	const store = writable<T>(start);
 	try {
 		if (typeof localStorage !== 'undefined') {
 			store.subscribe((v) => {
