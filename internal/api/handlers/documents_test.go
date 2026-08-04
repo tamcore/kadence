@@ -94,7 +94,9 @@ func (f *fakeDocStore) DeletePublic(_ context.Context, id int64) error {
 
 type fakeChunkStore struct{}
 
-func (fakeChunkStore) Insert(_ context.Context, _ model.Chunk, _ []float32) error { return nil }
+func (fakeChunkStore) InsertBatch(_ context.Context, _ []model.Chunk, _ [][]float32) error {
+	return nil
+}
 
 type recordingDocIngester struct {
 	mime string

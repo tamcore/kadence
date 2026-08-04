@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/ingest"
@@ -36,8 +37,11 @@ func (f *fakeDocs) Create(_ context.Context, d model.Document) (model.Document, 
 
 type fakeChunks struct{ inserted []model.Chunk }
 
-func (f *fakeChunks) Insert(_ context.Context, c model.Chunk, _ []float32) error {
-	f.inserted = append(f.inserted, c)
+func (f *fakeChunks) InsertBatch(_ context.Context, chunks []model.Chunk, embeddings [][]float32) error {
+	if len(chunks) != len(embeddings) {
+		return fmt.Errorf("fakeChunks.InsertBatch: got %d chunks for %d embeddings", len(chunks), len(embeddings))
+	}
+	f.inserted = append(f.inserted, chunks...)
 	return nil
 }
 

@@ -271,3 +271,76 @@ func TestChunkEmbeddingColumnPinnedTo1024Dims(t *testing.T) {
 		t.Fatal("expected wrong-dimension insert to be rejected by the vector(1024) column type")
 	}
 }
+
+// TestChunkRepository_InsertBatch_WritesSameRowsAsIndividualInserts asserts
+// the batched write path (a pgx pipelined batch, replacing the ingest
+// service's former per-chunk Insert calls) persists the same rows, with the
+// same field values and the same embedding-to-content pairing, as calling
+// Insert once per chunk would.
+func TestChunkRepository_InsertBatch_WritesSameRowsAsIndividualInserts(t *testing.T) {
+	const wantChunkTwo = "chunk two"
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	ctx := context.Background()
+	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
+
+	repo := store.NewChunkRepository(pool, "m1")
+	chunks := []model.Chunk{
+		{UserID: &u.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "chunk one"},
+		{UserID: &u.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: wantChunkTwo},
+		{UserID: &u.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceDocument, Content: "chunk three"},
+	}
+	vecs := [][]float32{vec1024(1, 0, 0), vec1024(0, 1, 0), vec1024(0, 0, 1)}
+
+	if err := repo.InsertBatch(ctx, chunks, vecs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	got, err := repo.ListContentForUser(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("ListContentForUser: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 rows written, got %d: %+v", len(got), got)
+	}
+	wantContents := map[string]bool{"chunk one": true, wantChunkTwo: true, "chunk three": true}
+	for _, ref := range got {
+		if !wantContents[ref.Content] {
+			t.Fatalf("unexpected content written: %q", ref.Content)
+		}
+		if ref.SourceKind != model.ChunkSourceDocument {
+			t.Fatalf("row source kind wrong: %+v", ref)
+		}
+	}
+
+	// The nearest chunk to (0,1,0) must be wantChunkTwo's content: confirms each
+	// embedding was written paired with the row it was given for, not
+	// shuffled by the pipelined batch.
+	top, err := repo.SearchTopK(ctx, u.ID, vec1024(0, 1, 0), 1)
+	if err != nil {
+		t.Fatalf("SearchTopK: %v", err)
+	}
+	if len(top) != 1 || top[0].Content != wantChunkTwo {
+		t.Fatalf("expected chunk two nearest to (0,1,0), got %+v", top)
+	}
+}
+
+func TestChunkRepository_InsertBatch_EmptyIsNoop(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	repo := store.NewChunkRepository(pool, "m1")
+	if err := repo.InsertBatch(context.Background(), nil, nil); err != nil {
+		t.Fatalf("InsertBatch with no chunks: %v", err)
+	}
+}
+
+func TestChunkRepository_InsertBatch_RejectsMismatchedLengths(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	repo := store.NewChunkRepository(pool, "m1")
+	chunks := []model.Chunk{{Scope: model.ScopePublic, SourceKind: model.ChunkSourceDocument, Content: "x"}}
+	if err := repo.InsertBatch(context.Background(), chunks, nil); err == nil {
+		t.Fatal("expected an error for a chunks/embeddings length mismatch")
+	}
+}

@@ -13,10 +13,10 @@ type DocumentStore interface {
 	Create(ctx context.Context, d model.Document) (model.Document, error)
 }
 
-// ChunkStore persists a chunk together with its embedding. Satisfied by
-// *store.ChunkRepository.
+// ChunkStore persists chunks together with their embeddings in one batch.
+// Satisfied by *store.ChunkRepository.
 type ChunkStore interface {
-	Insert(ctx context.Context, c model.Chunk, embedding []float32) error
+	InsertBatch(ctx context.Context, chunks []model.Chunk, embeddings [][]float32) error
 }
 
 // Service orchestrates the document ingestion pipeline: extract → chunk →
@@ -79,8 +79,9 @@ func (s *Service) Ingest(ctx context.Context, ownerUserID *int64, scope, filenam
 		return model.Document{}, fmt.Errorf("embed document %d: got %d vectors for %d chunks", doc.ID, len(vecs), len(pieces))
 	}
 
+	chunks := make([]model.Chunk, len(pieces))
 	for i, piece := range pieces {
-		chunk := model.Chunk{
+		chunks[i] = model.Chunk{
 			UserID:     ownerUserID,
 			DocumentID: &doc.ID,
 			Scope:      scope,
@@ -88,9 +89,9 @@ func (s *Service) Ingest(ctx context.Context, ownerUserID *int64, scope, filenam
 			SourceID:   &doc.ID,
 			Content:    piece,
 		}
-		if err := s.chunks.Insert(ctx, chunk, vecs[i]); err != nil {
-			return model.Document{}, fmt.Errorf("insert chunk %d for document %d: %w", i, doc.ID, err)
-		}
+	}
+	if err := s.chunks.InsertBatch(ctx, chunks, vecs); err != nil {
+		return model.Document{}, fmt.Errorf("insert chunks for document %d: %w", doc.ID, err)
 	}
 
 	return doc, nil

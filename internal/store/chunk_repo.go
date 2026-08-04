@@ -38,6 +38,35 @@ func (r *ChunkRepository) Insert(ctx context.Context, c model.Chunk, embedding [
 	return nil
 }
 
+// InsertBatch stores multiple chunks together with their embeddings in a
+// single round trip (a pgx pipelined batch), tagged with the repository's
+// embedding model. Unlike calling Insert once per chunk, the whole batch runs
+// in one implicit transaction: either every chunk is written or none is.
+func (r *ChunkRepository) InsertBatch(ctx context.Context, chunks []model.Chunk, embeddings [][]float32) error {
+	if len(chunks) != len(embeddings) {
+		return fmt.Errorf("insert chunk batch: got %d chunks for %d embeddings", len(chunks), len(embeddings))
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for i, c := range chunks {
+		batch.Queue(
+			`INSERT INTO chunks (user_id, conversation_id, document_id, scope, source_kind, source_id, content, embedding, embedding_model)
+			 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)`,
+			c.UserID, c.ConversationID, c.DocumentID, c.Scope, c.SourceKind, c.SourceID, c.Content,
+			pgvector.NewVector(embeddings[i]), r.embeddingModel)
+	}
+	br := r.pool.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+	for range chunks {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("insert chunk batch: %w", err)
+		}
+	}
+	return nil
+}
+
 // SearchTopK returns the k chunks nearest to the query embedding (cosine),
 // restricted to the user's own chunks plus any public chunks, and further
 // restricted to chunks tagged with the repository's embedding model.
@@ -242,12 +271,21 @@ func (r *ChunkRepository) ReembedBatch(ctx context.Context, embed func(context.C
 	if len(vecs) != len(ids) {
 		return 0, fmt.Errorf("reembed: got %d vectors for %d chunks", len(vecs), len(ids))
 	}
+	updateBatch := &pgx.Batch{}
 	for i, id := range ids {
-		if _, err := tx.Exec(ctx,
+		updateBatch.Queue(
 			`UPDATE chunks SET embedding = $1, embedding_model = $2 WHERE id = $3`,
-			pgvector.NewVector(vecs[i]), r.embeddingModel, id); err != nil {
-			return 0, fmt.Errorf("reembed update id %d: %w", id, err)
+			pgvector.NewVector(vecs[i]), r.embeddingModel, id)
+	}
+	br := tx.SendBatch(ctx, updateBatch)
+	for range ids {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
+			return 0, fmt.Errorf("reembed update: %w", err)
 		}
+	}
+	if err := br.Close(); err != nil {
+		return 0, fmt.Errorf("reembed update close: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("reembed commit: %w", err)
