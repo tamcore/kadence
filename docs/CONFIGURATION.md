@@ -23,9 +23,9 @@ Values shown are the built-in defaults; `—` means unset/empty.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `KADENCE_CSRF_SECRET` | — | `gorilla/csrf` secret. Required in prod; random per-restart in dev. Share across replicas. |
+| `KADENCE_CSRF_SECRET` | — | `gorilla/csrf` secret. Required in prod (must be at least 32 bytes); random per-restart in dev. Share across replicas. |
 | `KADENCE_TRUSTED_ORIGINS` | — | Comma-separated CSRF/WebAuthn trusted origins (e.g. `https://kadence.example.com`). |
-| `KADENCE_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key (AES-256-GCM) for secrets at rest (MCP credentials, WebAuthn ceremony data). |
+| `KADENCE_ENCRYPTION_KEY` | — | Base64-encoded 32-byte key (AES-256-GCM) for secrets at rest (MCP credentials, WebAuthn ceremony data). If set, it is always decoded and length-checked at startup, even when no key-dependent feature (passkeys, user-defined MCP) is enabled — a malformed value fails startup unconditionally, not just when the dependent feature is on. |
 | `KADENCE_WEBAUTHN_RP_ID` | — | WebAuthn Relying Party ID = the site's effective domain (e.g. `kadence.example.com`). Empty disables passkeys. Also requires `KADENCE_TRUSTED_ORIGINS` + a valid `KADENCE_ENCRYPTION_KEY`. |
 | `KADENCE_ADMIN_USERNAME` | — | First-run admin bootstrap (created only when the users table is empty). |
 | `KADENCE_ADMIN_EMAIL` | — | First-run admin email. |
@@ -271,9 +271,13 @@ complete, unchanged file successfully.
 `config.Validate()` notably rejects startup when:
 
 1. `KADENCE_DATABASE_URL` is empty.
-2. `KADENCE_ENV` is prod/production but `KADENCE_CSRF_SECRET` is empty.
-3. `KADENCE_USER_MCP_ALLOWED_HOSTS` is set but `KADENCE_ENCRYPTION_KEY` is not a valid
-   32-byte key.
+2. In production (`KADENCE_ENV=prod`/`production`), `KADENCE_CSRF_SECRET` is empty
+   or shorter than 32 bytes. In dev, an empty secret does *not* fail startup — the
+   router falls back to an in-process random secret instead.
+3. In production, `KADENCE_USER_MCP_ALLOWED_HOSTS` is set but `KADENCE_ENCRYPTION_KEY`
+   is not a valid 32-byte key. In dev this combination does not fail startup; the
+   user-defined-MCP feature simply stays disabled (see item 10 below for the
+   unconditional case).
 4. `KADENCE_RATE_LIMIT_GLOBAL` or `KADENCE_RATE_LIMIT_AUTH` is negative.
 5. `KADENCE_LLM_CONTEXT_BUDGET` is not a positive integer.
 6. A `KADENCE_FIT_ROUTE_<N>_*` group is partial, has an invalid scope or prefixed
@@ -283,10 +287,31 @@ complete, unchanged file successfully.
    worker budget/concurrency/active-task limit is not positive.
 9. Only some of `KADENCE_PUSH_VAPID_PUBLIC_KEY`, `KADENCE_PUSH_VAPID_PRIVATE_KEY`,
    `KADENCE_PUSH_VAPID_SUBJECT` are set (all three or none are required).
+10. `KADENCE_ENCRYPTION_KEY` is set but fails to base64-decode, or does not decode to
+    exactly 32 bytes — **unconditionally**, regardless of whether passkeys or
+    user-defined MCP are otherwise enabled. An unset key is not an error; only a
+    malformed one is.
+11. Any of these is not a positive integer/duration: `KADENCE_LLM_MAX_TOKENS`,
+    `KADENCE_LLM_TIMEOUT`, `KADENCE_RAG_TOP_K`, `KADENCE_MCP_MAX_ITERATIONS`,
+    `KADENCE_MCP_MAX_TOOLS`, `KADENCE_MCP_AUDIT_TTL`, `KADENCE_UPLOAD_MAX_BYTES`,
+    `KADENCE_INGEST_CHUNK_CHARS`. Additionally, `KADENCE_EMBED_DIMENSIONS`,
+    `KADENCE_USER_MCP_MAX_SERVERS`, and `KADENCE_MAX_BODY_BYTES` must each be
+    non-negative (zero is allowed for these three; the others must be strictly
+    positive).
 
 Passkeys additionally require `KADENCE_WEBAUTHN_RP_ID` **and** `KADENCE_TRUSTED_ORIGINS`
 **and** a valid 32-byte `KADENCE_ENCRYPTION_KEY`; if the RP ID is set without the
 others, startup fails with a message naming what's missing.
+
+**Defaults are not always "safe" fallbacks.** `envIntOr`, `envFloatOr`,
+`envDurationOr`, and `envBoolOr` silently return the built-in default when the env
+var is set to a value that fails to parse (e.g. `KADENCE_LLM_MAX_TOKENS=abc`) —
+this is *not* a startup error, so a typo'd numeric/duration/boolean value is
+indistinguishable from an unset one at runtime. The same applies to `KADENCE_ENV`:
+any value other than exactly `prod` or `production` is treated as `dev`
+(`IsProd()` does a direct string match), so a typo like `KADENCE_ENV=production `
+(trailing space) or `KADENCE_ENV=prd` silently runs in dev mode — with dev's
+weaker CSRF/cookie behavior — rather than failing.
 
 ## Feature gating summary
 

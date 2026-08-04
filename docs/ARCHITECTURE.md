@@ -22,8 +22,10 @@ internal/
   pace/              strict metric/imperial/mps running-pace conversion
   secret/            credential broker — one-time placeholder tokens, never logs secrets
   chat/              per-turn orchestration: guardrail → RAG → provider stream → tool loop
+  chat/skill/        model-facing skill definitions injected into the chat tool catalog
   scheduled/         conversational task compiler, recurrence engine, worker + executor
-  rag/               pgvector retrieval (per-user private ∪ admin public corpus)
+  bg/                panic-containment policy for long-lived background goroutines
+  push/              web push dispatch (VAPID) with per-send timeout and failure pruning
   ingest/            document extraction pipeline (PDF fallback + markitdown-mcp)
   reindex/           background re-embed worker when the embedding model changes
   knowledge/         dependency-free text analytics (keywords/entities for the context view)
@@ -255,6 +257,11 @@ more than one is visible, the native tool requires a `source` chosen from those
 servers' effective prefixes.
 
 ## RAG & ingestion
+
+There is no dedicated `rag/` package: pgvector storage and similarity search live in
+`internal/store` (`chunk_repo.go`), and the retrieval step of the chat pipeline
+(embed query → fetch ranked chunks) lives in `internal/chat` (`rag.go`), called
+from `chat/service.go`'s per-turn orchestration.
 
 - **Retrieval** filters on `user_id = current ∪ scope = public`, so each user sees
   their own memory plus the admin corpus, never other users' data.

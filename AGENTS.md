@@ -16,9 +16,10 @@ full docs live under [`docs/`](docs/).
 cmd/server/            entrypoint (main.go) + serve.Run() orchestrator
 internal/api/          chi router, handlers, middleware
 internal/config/       env-based config (KADENCE_* prefix)
-internal/{chat,mcp,rag,ingest,provider,embed}/   chat pipeline + integrations
+internal/{chat,mcp,ingest,provider,embed}/       chat pipeline + integrations
 internal/{auth,crypto,secret,webauthn}/          auth + secrets + passkeys
-internal/store/        pgx + goose migrations + repositories
+internal/{bg,push}/    background-goroutine panic containment + web push
+internal/store/        pgx + goose migrations + repositories (RAG retrieval lives here + internal/chat)
 web/                   SvelteKit SPA, embedded via //go:embed (-tags prodfrontend)
 charts/kadence/        Helm chart
 ```
