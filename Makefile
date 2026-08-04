@@ -33,8 +33,9 @@ fmt-check: ## Check gofmt formatting without rewriting files
 vet: ## Run go vet
 	go vet ./...
 
-golangci-lint: ## Run golangci-lint
-	golangci-lint run ./...
+golangci-lint: ## Run golangci-lint (skipped when not installed; CI uses the pinned action)
+	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; \
+	else echo "golangci-lint not installed - skipping (CI runs it via the pinned action)"; fi
 
 test: ## Run all Go tests with race detector and coverage
 	@go test -race -coverprofile=coverage.out ./...
