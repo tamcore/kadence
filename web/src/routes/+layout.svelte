@@ -9,6 +9,8 @@
 	import { listMcp } from '$lib/api/mcp';
 	import { clearAuth, setAuth } from '$lib/stores/auth';
 	import { PwaLifecycle, type PwaStatus } from '$lib/pwa/lifecycle';
+	import { online, serverReachable, setOnline } from '$lib/stores/connection';
+	import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
 	import { initTheme } from '$lib/theme/store';
 	import Sidebar from '$lib/components/Sidebar.svelte';
@@ -98,9 +100,14 @@
 		stopTheme = initTheme();
 		if (window.innerWidth < MOBILE_BREAKPOINT_PX) closeSidebar();
 		pwaLifecycle = new PwaLifecycle((status) => {
+			const wasOnline = pwaStatus.online;
 			pwaStatus = status;
+			setOnline(status.online);
+			if (status.online && !wasOnline) void reachabilityMonitor.probeNow();
 		});
 		void pwaLifecycle.start();
+		setOnline(navigator.onLine);
+		reachabilityMonitor.start();
 
 		navigator.serviceWorker?.addEventListener('message', (e) => {
 			if (e.data?.type === 'NAVIGATE' && typeof e.data.url === 'string') {
@@ -129,6 +136,7 @@
 		stopMcpPoll();
 		pwaLifecycle?.destroy();
 		stopTheme?.();
+		reachabilityMonitor.stop();
 	});
 </script>
 
@@ -139,7 +147,8 @@
 {:else}
 	<div class="app-viewport">
 		<PwaStatusStrip
-			online={pwaStatus.online}
+			online={$online}
+			serverReachable={$serverReachable}
 			updateAvailable={pwaStatus.updateAvailable}
 			applyingUpdate={pwaStatus.applyingUpdate}
 			onReload={() => pwaLifecycle?.applyUpdate()}
