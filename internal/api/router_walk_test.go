@@ -88,7 +88,7 @@ func fullDeps() api.Deps {
 // (no session cookie) request, except the small public allowlist (healthz,
 // login, passkey login, webauthn-enabled probe).
 func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
-	router := api.NewRouter(fullDeps())
+	router := mustNewRouter(t, fullDeps())
 	chiRouter, ok := router.(chi.Router)
 	if !ok {
 		t.Fatalf("NewRouter() = %T, want chi.Router", router)
@@ -156,7 +156,7 @@ func TestRouterWalk_AnonymousRequestsRejectedExceptAllowlist(t *testing.T) {
 func TestRouterDoesNotExposeDiscardWhenScheduledIsDisabled(t *testing.T) {
 	users := store.NewUserRepository(nil)
 	sessions := store.NewSessionRepository(nil)
-	router := api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: config.Config{}})
+	router := mustNewRouter(t, api.Deps{Users: users, Sessions: sessions, Config: config.Config{}})
 	chiRouter, ok := router.(chi.Router)
 	if !ok {
 		t.Fatalf("NewRouter() = %T, want chi.Router", router)

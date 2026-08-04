@@ -24,8 +24,19 @@ func rateLimitDeps(cfg config.Config) api.Deps {
 	}
 }
 
+// mustNewRouter builds a router and fails the test if construction errors.
+// Shared across this package's test files.
+func mustNewRouter(t *testing.T, deps api.Deps) http.Handler {
+	t.Helper()
+	r, err := api.NewRouter(deps)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	return r
+}
+
 func TestGlobalRateLimitReturns429AfterCap(t *testing.T) {
-	srv := httptest.NewServer(api.NewRouter(rateLimitDeps(config.Config{RateLimitGlobal: 1})))
+	srv := httptest.NewServer(mustNewRouter(t, rateLimitDeps(config.Config{RateLimitGlobal: 1})))
 	defer srv.Close()
 
 	resp1, err := http.Get(srv.URL + "/api/session")
@@ -50,7 +61,7 @@ func TestGlobalRateLimitReturns429AfterCap(t *testing.T) {
 }
 
 func TestGlobalRateLimitZeroDisables(t *testing.T) {
-	srv := httptest.NewServer(api.NewRouter(rateLimitDeps(config.Config{RateLimitGlobal: 0})))
+	srv := httptest.NewServer(mustNewRouter(t, rateLimitDeps(config.Config{RateLimitGlobal: 0})))
 	defer srv.Close()
 
 	for i := range 5 {
@@ -66,7 +77,7 @@ func TestGlobalRateLimitZeroDisables(t *testing.T) {
 }
 
 func TestHealthzNeverRateLimited(t *testing.T) {
-	srv := httptest.NewServer(api.NewRouter(rateLimitDeps(config.Config{RateLimitGlobal: 1})))
+	srv := httptest.NewServer(mustNewRouter(t, rateLimitDeps(config.Config{RateLimitGlobal: 1})))
 	defer srv.Close()
 
 	// Exhaust the global cap of 1 req/min via a limited route first.
@@ -86,7 +97,7 @@ func TestHealthzNeverRateLimited(t *testing.T) {
 }
 
 func TestAuthStrictRateLimitReturns429OnLoginEndpoint(t *testing.T) {
-	srv := httptest.NewServer(api.NewRouter(rateLimitDeps(config.Config{RateLimitGlobal: 1000, RateLimitAuth: 2})))
+	srv := httptest.NewServer(mustNewRouter(t, rateLimitDeps(config.Config{RateLimitGlobal: 1000, RateLimitAuth: 2})))
 	defer srv.Close()
 
 	var last *http.Response
@@ -111,7 +122,7 @@ func TestAuthStrictRateLimitReturns429OnLoginEndpoint(t *testing.T) {
 }
 
 func TestAuthStrictRateLimitZeroDisables(t *testing.T) {
-	srv := httptest.NewServer(api.NewRouter(rateLimitDeps(config.Config{RateLimitGlobal: 1000, RateLimitAuth: 0})))
+	srv := httptest.NewServer(mustNewRouter(t, rateLimitDeps(config.Config{RateLimitGlobal: 1000, RateLimitAuth: 0})))
 	defer srv.Close()
 
 	for i := range 5 {

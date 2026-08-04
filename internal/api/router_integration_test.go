@@ -40,7 +40,7 @@ func TestLoginThenCurrentUser(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewRouter(api.Deps{Users: users, Sessions: sessions, Config: config.Config{ScheduledEnabled: true}}))
+	srv := httptest.NewServer(mustNewRouter(t, api.Deps{Users: users, Sessions: sessions, Config: config.Config{ScheduledEnabled: true}}))
 	defer srv.Close()
 	jar := &cookieJar{}
 
@@ -88,7 +88,7 @@ func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	srv := httptest.NewServer(api.NewRouter(api.Deps{
+	srv := httptest.NewServer(mustNewRouter(t, api.Deps{
 		Users:     users,
 		Sessions:  sessions,
 		Config:    config.Config{CSRFSecret: testCSRFSecret},
@@ -155,7 +155,7 @@ func TestChatEndToEnd(t *testing.T) {
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, Temperature: 0.2}, chat.Deps{Convs: convs, Msgs: msgs})
 	chatH := handlers.NewChat(chatSvc, convs, msgs, nil, nil)
 
-	srv := httptest.NewServer(api.NewRouter(api.Deps{
+	srv := httptest.NewServer(mustNewRouter(t, api.Deps{
 		Users: users, Sessions: sessions, Config: config.Config{CSRFSecret: testCSRFSecret}, Chat: chatH,
 	}))
 	defer srv.Close()
@@ -230,7 +230,7 @@ func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
 	})
 	profileH := handlers.NewProfile(users, sessions, cfg)
 
-	srv := httptest.NewServer(api.NewRouter(api.Deps{
+	srv := httptest.NewServer(mustNewRouter(t, api.Deps{
 		Users: users, Sessions: sessions, Config: cfg, Documents: documentsH, Profile: profileH,
 	}))
 	defer srv.Close()
@@ -341,7 +341,7 @@ func TestRouter_WebAuthnEnabledEndpoint(t *testing.T) {
 	sessions := store.NewSessionRepository(pool)
 
 	waH := handlers.NewWebAuthn(nil, nil, nil, nil, nil, config.Config{})
-	srv := httptest.NewServer(api.NewRouter(api.Deps{
+	srv := httptest.NewServer(mustNewRouter(t, api.Deps{
 		Users: users, Sessions: sessions, Config: config.Config{}, WebAuthn: waH,
 	}))
 	defer srv.Close()

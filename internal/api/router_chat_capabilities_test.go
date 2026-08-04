@@ -14,7 +14,7 @@ import (
 )
 
 func TestRouterMountsChatUploadCapabilitiesWithoutDocumentCRUD(t *testing.T) {
-	router := api.NewRouter(api.Deps{
+	router := mustNewRouter(t, api.Deps{
 		Users:    store.NewUserRepository(nil),
 		Sessions: store.NewSessionRepository(nil),
 		Config:   config.Config{},

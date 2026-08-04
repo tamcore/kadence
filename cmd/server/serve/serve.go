@@ -182,28 +182,9 @@ func Run() error {
 	deps.SessionsAPI = handlers.NewSessions(sessions)
 
 	webauthnCreds := store.NewWebAuthnCredentialRepository(pool)
-	var waSvc *webauthn.Service
-	var waCipher *crypto.Cipher
-	if cfg.WebAuthnEnabled() {
-		// cfg.Validate() (called above) already fails fast on the same
-		// preconditions (TrustedOrigins set, valid 32-byte EncryptionKey) as
-		// a config-level error; the branches below only fire for a
-		// downstream construction failure Validate() can't anticipate (e.g.
-		// go-webauthn itself rejecting a malformed RPID).
-		s, wErr := webauthn.NewService(cfg)
-		if wErr != nil {
-			return fmt.Errorf(
-				"passkeys enabled (KADENCE_WEBAUTHN_RP_ID set) but webauthn service failed "+
-					"to initialize; also requires KADENCE_TRUSTED_ORIGINS: %w", wErr)
-		}
-		waSvc = s
-		c, cErr := crypto.NewCipher(cfg.EncryptionKey)
-		if cErr != nil {
-			return fmt.Errorf(
-				"passkeys enabled (KADENCE_WEBAUTHN_RP_ID set) but cipher failed to initialize; "+
-					"also requires a 32-byte KADENCE_ENCRYPTION_KEY: %w", cErr)
-		}
-		waCipher = c
+	waSvc, waCipher, err := setupWebAuthn(cfg)
+	if err != nil {
+		return err
 	}
 	deps.WebAuthn = handlers.NewWebAuthn(waSvc, webauthnCreds, users, sessions, waCipher, cfg)
 
@@ -398,9 +379,13 @@ func Run() error {
 		slog.Info("push dispatcher enabled")
 	}
 
+	router, err := buildRouter(deps)
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.NewRouter(deps),
+		Handler:           router,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 	}
@@ -457,6 +442,42 @@ func Run() error {
 	}
 
 	return shutdownErr
+}
+
+// setupWebAuthn initializes the passkey service + credential cipher when
+// KADENCE_WEBAUTHN_RP_ID is set, returning (nil, nil, nil) otherwise.
+// cfg.Validate() (called by Run before this) already fails fast on the same
+// preconditions (TrustedOrigins set, valid 32-byte EncryptionKey) as a
+// config-level error; the errors here only fire for a downstream
+// construction failure Validate() can't anticipate (e.g. go-webauthn itself
+// rejecting a malformed RPID).
+func setupWebAuthn(cfg config.Config) (*webauthn.Service, *crypto.Cipher, error) {
+	if !cfg.WebAuthnEnabled() {
+		return nil, nil, nil
+	}
+	svc, err := webauthn.NewService(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"passkeys enabled (KADENCE_WEBAUTHN_RP_ID set) but webauthn service failed "+
+				"to initialize; also requires KADENCE_TRUSTED_ORIGINS: %w", err)
+	}
+	cipher, err := crypto.NewCipher(cfg.EncryptionKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"passkeys enabled (KADENCE_WEBAUTHN_RP_ID set) but cipher failed to initialize; "+
+				"also requires a 32-byte KADENCE_ENCRYPTION_KEY: %w", err)
+	}
+	return svc, cipher, nil
+}
+
+// buildRouter constructs the HTTP router, wrapping any construction error
+// (e.g. a production config missing its CSRF secret) with context.
+func buildRouter(deps api.Deps) (http.Handler, error) {
+	router, err := api.NewRouter(deps)
+	if err != nil {
+		return nil, fmt.Errorf("build router: %w", err)
+	}
+	return router, nil
 }
 
 func newChatHandler(

@@ -2,6 +2,7 @@
 package api
 
 import (
+	"errors"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -53,7 +54,13 @@ type Deps struct {
 // NewRouter returns the public HTTP handler. API routes live under /api; the
 // embedded SvelteKit frontend (when built with -tags prodfrontend) is served
 // at root with SPA fallback.
-func NewRouter(deps Deps) http.Handler {
+//
+// It fails if deps.Config.IsProd() and the CSRF secret is unset: mountAuth
+// would otherwise fall back to a random per-process secret in production,
+// invalidating every outstanding CSRF token on each restart.
+// Config.Validate() already catches this before startup, but NewRouter does
+// not rely on an upstream caller having run it.
+func NewRouter(deps Deps) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP) //nolint:staticcheck // trusted proxy sets X-Forwarded-For/X-Real-IP; used only for access logging, not auth decisions
@@ -71,15 +78,19 @@ func NewRouter(deps Deps) http.Handler {
 		// larger cfg.UploadMaxBytes-derived caps at handler level. JSON chat
 		// remains behind the global cap. Nesting a second, smaller
 		// http.MaxBytesReader would silently override a larger inner cap.
+		var mountErr error
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(deps.Config.RateLimitGlobal))
 			r.Use(middleware.MaxBodyBytesExempt(deps.Config.ResolvedMaxBodyBytes(), isUploadRoute))
-			mountAuth(r, deps)
+			mountErr = mountAuth(r, deps)
 		})
+		if mountErr != nil {
+			return nil, mountErr
+		}
 	}
 
 	mountFrontend(r)
-	return r
+	return r, nil
 }
 
 // isUploadRoute reports whether r targets an endpoint/media-type combination
@@ -99,7 +110,14 @@ func isUploadRoute(r *http.Request) bool {
 	return err == nil && mediaType == "multipart/form-data"
 }
 
-func mountAuth(r chi.Router, deps Deps) {
+// mountAuth wires the authenticated/admin routes. It fails if deps.Config
+// requires a CSRF secret (production) but none is configured, rather than
+// silently falling back to a per-restart random one.
+func mountAuth(r chi.Router, deps Deps) error {
+	if deps.Config.IsProd() && deps.Config.CSRFSecret == "" {
+		return errors.New("KADENCE_CSRF_SECRET must be set in production")
+	}
+
 	authH := handlers.NewAuth(deps.Config, deps.Users, deps.Sessions)
 	usersH := handlers.NewUsers(deps.Users, deps.Sessions, deps.Config)
 
@@ -247,6 +265,7 @@ func mountAuth(r chi.Router, deps Deps) {
 			}
 		})
 	})
+	return nil
 }
 
 func mountFrontend(r chi.Router) {
