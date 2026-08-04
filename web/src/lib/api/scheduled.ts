@@ -1,4 +1,6 @@
 import { api, getCsrfToken, handleUnauthorized, setCsrfToken } from '$lib/api/client';
+import { canReachServerNow, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
+import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 
 const MAX_SCHEDULED_SSE_BYTES = 128 << 10;
 
@@ -126,19 +128,32 @@ export async function* streamScheduledDefinition(
 	request: ScheduledDefinitionRequest,
 	signal: AbortSignal
 ): AsyncIterable<ScheduledDefinitionEvent> {
+	if (typeof window !== 'undefined' && !canReachServerNow()) {
+		yield { type: 'error', error: UNREACHABLE_MESSAGE };
+		return;
+	}
+
 	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 	const token = getCsrfToken();
 	if (token) headers['X-CSRF-Token'] = token;
 	const endpoint = request.taskId
 		? `/api/scheduled/tasks/${encodeURIComponent(request.taskId)}/messages`
 		: '/api/scheduled/tasks';
-	const response = await fetch(endpoint, {
-		method: 'POST',
-		credentials: 'include',
-		signal,
-		headers,
-		body: JSON.stringify({ message: request.message })
-	});
+	let response: Response;
+	try {
+		response = await fetch(endpoint, {
+			method: 'POST',
+			credentials: 'include',
+			signal,
+			headers,
+			body: JSON.stringify({ message: request.message })
+		});
+	} catch {
+		if (signal.aborted) return;
+		void reachabilityMonitor.probeNow();
+		yield { type: 'error', error: UNREACHABLE_MESSAGE };
+		return;
+	}
 	const rotated = response.headers.get('X-CSRF-Token');
 	if (rotated) setCsrfToken(rotated);
 	if (!response.ok || !response.body) {

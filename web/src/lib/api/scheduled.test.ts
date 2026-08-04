@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+vi.mock('$lib/pwa/reachability-monitor', () => ({
+	reachabilityMonitor: { probeNow: vi.fn().mockResolvedValue(undefined) }
+}));
 
 import { goto } from '$app/navigation';
 import {
@@ -16,6 +19,8 @@ import {
 	streamScheduledDefinition
 } from './scheduled';
 import { APIError, setCsrfToken } from './client';
+import { setOnline, setServerReachable, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
+import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 
 function streamResponse(chunks: string[], status = 200, headers: Record<string, string> = {}): Response {
 	const body = new ReadableStream({
@@ -30,6 +35,11 @@ function streamResponse(chunks: string[], status = 200, headers: Record<string, 
 		headers: { 'Content-Type': 'text/event-stream', ...headers }
 	});
 }
+
+beforeEach(() => {
+	setOnline(true);
+	setServerReachable(true);
+});
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -284,5 +294,35 @@ describe('Scheduled API', () => {
 			expect.objectContaining<Partial<APIError>>({ name: 'APIError', status: 401 })
 		);
 		expect(goto).toHaveBeenCalledWith('/login?returnTo=' + encodeURIComponent('/'));
+	});
+
+	it('yields the unreachable message without fetching when the server is known unreachable', async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal('fetch', fetchMock);
+		setServerReachable(false);
+
+		const events = [];
+		for await (const event of streamScheduledDefinition(
+			{ message: 'x' },
+			new AbortController().signal
+		)) {
+			events.push(event);
+		}
+		expect(events).toEqual([{ type: 'error', error: UNREACHABLE_MESSAGE }]);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('yields the unreachable message and triggers a probe on a network-level fetch rejection', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('failed to fetch')));
+
+		const events = [];
+		for await (const event of streamScheduledDefinition(
+			{ message: 'x' },
+			new AbortController().signal
+		)) {
+			events.push(event);
+		}
+		expect(events).toEqual([{ type: 'error', error: UNREACHABLE_MESSAGE }]);
+		expect(reachabilityMonitor.probeNow).toHaveBeenCalledTimes(1);
 	});
 });
