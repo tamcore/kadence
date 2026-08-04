@@ -110,10 +110,10 @@
 		display: block;
 		width: min(220px, 100%);
 		overflow: hidden;
-		border: 1px solid rgba(255, 255, 255, 0.42);
+		border: 1px solid color-mix(in srgb, var(--on-accent) 42%, transparent);
 		border-radius: 7px;
-		background: rgba(255, 255, 255, 0.12);
-		color: white;
+		background: color-mix(in srgb, var(--on-accent) 12%, transparent);
+		color: var(--on-accent);
 		text-decoration: none;
 	}
 
@@ -122,7 +122,7 @@
 		width: 100%;
 		max-height: 180px;
 		object-fit: cover;
-		background: rgba(0, 0, 0, 0.08);
+		background: color-mix(in srgb, var(--text) 8%, transparent);
 	}
 
 	.image-attachment > span {
@@ -142,10 +142,10 @@
 		gap: 8px;
 		align-items: center;
 		padding: 7px 9px;
-		border: 1px solid rgba(255, 255, 255, 0.42);
+		border: 1px solid color-mix(in srgb, var(--on-accent) 42%, transparent);
 		border-radius: 7px;
-		background: rgba(255, 255, 255, 0.12);
-		color: white;
+		background: color-mix(in srgb, var(--on-accent) 12%, transparent);
+		color: var(--on-accent);
 		text-decoration: none;
 	}
 
@@ -196,9 +196,9 @@
 		gap: 7px;
 		align-items: center;
 		padding: 6px 9px;
-		border: 1px solid rgba(255, 255, 255, 0.42);
+		border: 1px solid color-mix(in srgb, var(--on-accent) 42%, transparent);
 		border-radius: 7px;
-		background: rgba(255, 255, 255, 0.12);
+		background: color-mix(in srgb, var(--on-accent) 12%, transparent);
 	}
 
 	.references li.unavailable {
@@ -207,11 +207,11 @@
 	}
 
 	a:hover {
-		background: rgba(255, 255, 255, 0.2);
+		background: color-mix(in srgb, var(--on-accent) 20%, transparent);
 	}
 
 	a:focus-visible {
-		outline: 2px solid white;
+		outline: 2px solid var(--on-accent);
 		outline-offset: 2px;
 	}
 </style>

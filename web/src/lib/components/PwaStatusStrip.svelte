@@ -39,9 +39,9 @@
 	}
 
 	.offline {
-		background: #fff4d6;
-		border-bottom: 1px solid #e4c36a;
-		color: #5f3d00;
+		background: var(--warning-bg);
+		border-bottom: 1px solid var(--warning);
+		color: var(--warning-fg);
 	}
 
 	.signal {
@@ -49,20 +49,20 @@
 		height: 8px;
 		flex: 0 0 auto;
 		border-radius: 50%;
-		background: #c17b00;
-		box-shadow: 0 0 0 3px rgba(193, 123, 0, 0.16);
+		background: var(--warning);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent);
 	}
 
 	.update {
-		background: #021c46;
-		color: #fff;
+		background: var(--brand);
+		color: var(--on-brand);
 	}
 
 	button {
-		border: 1px solid rgba(255, 255, 255, 0.72);
+		border: 1px solid color-mix(in srgb, var(--on-brand) 72%, transparent);
 		border-radius: 5px;
-		background: #fff;
-		color: #021c46;
+		background: var(--on-brand);
+		color: var(--brand);
 		padding: 3px 10px;
 		font: inherit;
 		font-weight: 650;
@@ -70,11 +70,11 @@
 	}
 
 	button:hover:not(:disabled) {
-		background: #edf3fb;
+		background: color-mix(in srgb, var(--brand) 6%, var(--on-brand));
 	}
 
 	button:focus-visible {
-		outline: 3px solid rgba(255, 255, 255, 0.55);
+		outline: 3px solid color-mix(in srgb, var(--on-brand) 55%, transparent);
 		outline-offset: 2px;
 	}
 
