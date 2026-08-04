@@ -23,6 +23,7 @@ const (
 	testGetToolsPattern  = "get_*"
 	testCloakBrowserName = "CLOAKBROWSER"
 	testBrowserAlias     = "browser"
+	testEnvServerName    = "envone"
 )
 
 // anonymizedActivitiesFixture is modeled on a real garmin_mcp get_activities
@@ -848,8 +849,8 @@ func TestRegistryCloseClosesEveryCachedClient(t *testing.T) {
 	a := &fakeCloseClient{}
 	b := &fakeCloseClient{}
 	reg.mu.Lock()
-	reg.clients["a/global"] = a
-	reg.clients["b/global"] = b
+	reg.clients["a/global"] = &leasedClient{client: a}
+	reg.clients["b/global"] = &leasedClient{client: b}
 	reg.mu.Unlock()
 
 	if err := reg.Close(); err != nil {
@@ -874,11 +875,11 @@ func TestRegistryCloseClosesEveryCachedClient(t *testing.T) {
 }
 
 func TestEvictClientClosesTheDroppedClient(t *testing.T) {
-	s := Server{Name: "envone", Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	reg.mu.Lock()
-	reg.clients["envone/"+scopeGlobal] = c
+	reg.clients[testEnvServerName+"/"+scopeGlobal] = &leasedClient{client: c}
 	reg.mu.Unlock()
 
 	reg.evictClient(s)
@@ -892,11 +893,11 @@ func TestEvictClientClosesTheDroppedClient(t *testing.T) {
 }
 
 func TestClientForReleaseIsNoOpForCachedEnvClient(t *testing.T) {
-	s := Server{Name: "envone", Scope: scopeGlobal}
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	c := &fakeCloseClient{}
 	reg.mu.Lock()
-	reg.clients["envone/"+scopeGlobal] = c
+	reg.clients[testEnvServerName+"/"+scopeGlobal] = &leasedClient{client: c}
 	reg.mu.Unlock()
 
 	got, release, err := reg.clientFor(context.Background(), s)
@@ -962,5 +963,132 @@ func TestToolsForClosesEachUserDefinedClientPerIteration(t *testing.T) {
 	}
 	if n := len(reg.clients); n != 0 {
 		t.Fatalf("user-defined clients must never be cached; cache size = %d", n)
+	}
+}
+
+// TestEvictClientDoesNotCloseALeasedClient proves the fix for the regression
+// found by adversarial review: evicting a cached env client that is still
+// leased by an in-flight caller must not close it out from under that
+// caller. It must, however, remove it from the cache so the next clientFor
+// dials afresh instead of resurrecting the (now-stale) evicted entry.
+func TestEvictClientDoesNotCloseALeasedClient(t *testing.T) {
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	c := &fakeCloseClient{}
+	key := testEnvServerName + "/" + scopeGlobal
+	reg.mu.Lock()
+	reg.clients[key] = &leasedClient{client: c, leases: 1}
+	reg.mu.Unlock()
+
+	reg.evictClient(s)
+
+	if got := c.closes.Load(); got != 0 {
+		t.Fatalf("leased client closed %d times during eviction, want 0", got)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("evicted client still cached; size = %d", n)
+	}
+
+	restore := dialClient
+	fresh := &fakeCloseClient{}
+	dialClient = func(context.Context, Server, *http.Client) (mcpClient, error) { return fresh, nil }
+	t.Cleanup(func() { dialClient = restore })
+
+	got, release, err := reg.clientFor(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != fresh {
+		t.Fatal("clientFor did not dial afresh after eviction of a still-leased client")
+	}
+	release()
+}
+
+// TestReleaseAfterEvictionClosesExactlyOnce verifies that once an evicted
+// client's last outstanding lease is released, its transport is closed
+// exactly once.
+func TestReleaseAfterEvictionClosesExactlyOnce(t *testing.T) {
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	c := &fakeCloseClient{}
+	lc := &leasedClient{client: c, leases: 1}
+	key := testEnvServerName + "/" + scopeGlobal
+	reg.mu.Lock()
+	reg.clients[key] = lc
+	reg.mu.Unlock()
+
+	reg.evictClient(s)
+	if got := c.closes.Load(); got != 0 {
+		t.Fatalf("client closed %d times immediately after eviction, want 0 (still leased)", got)
+	}
+
+	reg.release(lc)
+	if got := c.closes.Load(); got != 1 {
+		t.Fatalf("client closed %d times after releasing the last lease, want exactly 1", got)
+	}
+}
+
+// TestCloseDefersLeasedClientUntilRelease verifies Registry.Close closes
+// unleased cached clients immediately, but a client with an outstanding
+// lease is only closed once that lease is released.
+func TestCloseDefersLeasedClientUntilRelease(t *testing.T) {
+	reg := NewRegistry(nil, nil, nil)
+	leased := &fakeCloseClient{}
+	free := &fakeCloseClient{}
+	leasedLC := &leasedClient{client: leased, leases: 1}
+	reg.mu.Lock()
+	reg.clients["leased/global"] = leasedLC
+	reg.clients["free/global"] = &leasedClient{client: free}
+	reg.mu.Unlock()
+
+	if err := reg.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := free.closes.Load(); got != 1 {
+		t.Fatalf("unleased client closed %d times by Close, want 1", got)
+	}
+	if got := leased.closes.Load(); got != 0 {
+		t.Fatalf("leased client closed %d times by Close while still leased, want 0", got)
+	}
+	if n := len(reg.clients); n != 0 {
+		t.Fatalf("cache not cleared after Close; size = %d", n)
+	}
+
+	reg.release(leasedLC)
+	if got := leased.closes.Load(); got != 1 {
+		t.Fatalf("leased client closed %d times after its last release, want exactly 1", got)
+	}
+}
+
+// TestTwoLeasesOnSameClientOnlyLastReleaseCloses verifies that when two
+// callers concurrently hold the same cached (now-evicted) client, the first
+// release closes nothing and the second closes it exactly once.
+func TestTwoLeasesOnSameClientOnlyLastReleaseCloses(t *testing.T) {
+	s := Server{Name: testEnvServerName, Scope: scopeGlobal}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	c := &fakeCloseClient{}
+	key := testEnvServerName + "/" + scopeGlobal
+	reg.mu.Lock()
+	reg.clients[key] = &leasedClient{client: c}
+	reg.mu.Unlock()
+
+	_, release1, ok1 := reg.leaseCached(key)
+	if !ok1 {
+		t.Fatal("expected a cache hit for the first lease")
+	}
+	_, release2, ok2 := reg.leaseCached(key)
+	if !ok2 {
+		t.Fatal("expected a cache hit for the second lease")
+	}
+
+	reg.evictClient(s) // mark evicted while both leases are still outstanding
+
+	release1()
+	if got := c.closes.Load(); got != 0 {
+		t.Fatalf("client closed after the first release with a lease still outstanding, want 0, got %d", got)
+	}
+	release2()
+	if got := c.closes.Load(); got != 1 {
+		t.Fatalf("client closed %d times after the last release, want exactly 1", got)
 	}
 }

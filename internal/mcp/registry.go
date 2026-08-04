@@ -37,6 +37,19 @@ type UserServerSource interface {
 	AllServers(ctx context.Context) ([]Server, error)
 }
 
+// leasedClient tracks how many callers currently hold a cached client. A
+// client evicted (or dropped by Registry.Close) while still in use is removed
+// from the cache immediately — so the next dispatch re-dials — but its
+// transport is closed only once the last holder has released it. Without
+// this, evicting on a transient failure would close a transport another
+// goroutine is mid-call on.
+type leasedClient struct {
+	client  mcpClient
+	leases  int
+	evicted bool
+	closed  bool
+}
+
 // Registry holds the configured remote MCP servers and lazily-created
 // clients for them, keyed by (Name, Scope). It exposes a per-user tool
 // list (namespaced by server) and dispatches tool calls back to the
@@ -47,7 +60,7 @@ type Registry struct {
 	userSrc    UserServerSource
 
 	mu      sync.Mutex
-	clients map[string]mcpClient // keyed by Name+"/"+Scope; env servers only
+	clients map[string]*leasedClient // keyed by Name+"/"+Scope; env servers only
 
 	// dial deduplicates concurrent first-time dials to the same env server:
 	// callers racing on a cache miss for the same key share one in-flight
@@ -70,7 +83,7 @@ func NewRegistry(servers []Server, httpClient *http.Client, userSrc UserServerSo
 		servers:    servers,
 		httpClient: httpClient,
 		userSrc:    userSrc,
-		clients:    make(map[string]mcpClient),
+		clients:    make(map[string]*leasedClient),
 	}
 }
 
@@ -372,10 +385,14 @@ func serverPrefixes(servers []Server) []string {
 // caller must invoke when done with it.
 //
 // Env-configured servers use a lazily-created, cached client (keyed by
-// Name+Scope) and get a no-op release — the cache owns their lifetime, and
-// Registry.Close closes them. User-defined (DB) servers always get a fresh
-// client, because their credentials/URL can change or be revoked at any time;
-// their release closes it, so a per-user dispatch does not leak the
+// Name+Scope), reference-counted via leasedClient: each hand-out takes a
+// lease, and release drops it. The cache owns the client's lifetime as long
+// as it's still cached, but eviction (on a transient failure) or
+// Registry.Close only close it once every outstanding lease has been
+// released — never out from under an in-flight ListTools/CallTool on the
+// same shared client. User-defined (DB) servers always get a fresh client,
+// because their credentials/URL can change or be revoked at any time; their
+// release closes it directly, so a per-user dispatch does not leak the
 // connection. Returning the release func keeps the env-vs-user distinction in
 // this one place instead of duplicating it at every call site.
 //
@@ -403,8 +420,8 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 
 	key := s.Name + "/" + s.Scope
 
-	if c, ok := r.cachedClient(key); ok {
-		return c, noop, nil
+	if c, release, ok := r.leaseCached(key); ok {
+		return c, release, nil
 	}
 
 	v, err, _ := r.dial.Do(key, func() (any, error) {
@@ -418,61 +435,100 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 	c := v.(mcpClient) //nolint:forcetypeassert // dial's fn always returns mcpClient
 
 	r.mu.Lock()
-	if existing, ok := r.clients[key]; ok && existing != c {
-		// Another goroutine cached a client for this key while we dialed. Keep
-		// theirs and close ours rather than overwriting and leaking it.
+	if existing, ok := r.clients[key]; ok && existing.client != c {
+		// Another goroutine cached a different client for this key while we
+		// dialed. Keep theirs, take a lease on it, and close ours.
+		existing.leases++
 		r.mu.Unlock()
 		_ = c.Close()
-		return existing, noop, nil
+		return existing.client, func() { r.release(existing) }, nil
 	}
-	r.clients[key] = c
+	lc, ok := r.clients[key]
+	if !ok {
+		lc = &leasedClient{client: c}
+		r.clients[key] = lc
+	}
+	lc.leases++
 	r.mu.Unlock()
 
-	return c, noop, nil
+	return lc.client, func() { r.release(lc) }, nil
 }
 
-// cachedClient looks up key in the client cache under r.mu, without dialing.
-func (r *Registry) cachedClient(key string) (mcpClient, bool) {
+// leaseCached takes a lease on key's cached client without dialing.
+func (r *Registry) leaseCached(key string) (mcpClient, func(), bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	c, ok := r.clients[key]
-	return c, ok
+	lc, ok := r.clients[key]
+	if !ok {
+		return nil, nil, false
+	}
+	lc.leases++
+	return lc.client, func() { r.release(lc) }, true
+}
+
+// release drops one lease, closing the transport if it has been evicted and
+// this was the last holder.
+func (r *Registry) release(lc *leasedClient) {
+	r.mu.Lock()
+	lc.leases--
+	shouldClose := lc.evicted && lc.leases <= 0 && !lc.closed
+	if shouldClose {
+		lc.closed = true
+	}
+	r.mu.Unlock()
+	if shouldClose {
+		_ = lc.client.Close()
+	}
 }
 
 // evictClient drops s's cached client (if any) so the next clientFor call
 // redials instead of reusing a connection that just failed a probe or tool
 // call. Only env-configured servers are ever cached (see clientFor); calling
 // this for a user-defined server is a harmless no-op — those already get a
-// fresh client on every call.
+// fresh client on every call. If the evicted client is still leased by
+// another in-flight call, closing it is deferred to that caller's release —
+// otherwise we would close a transport out from under it.
 func (r *Registry) evictClient(s Server) {
 	if !r.isEnvServer(s) {
 		return
 	}
 	key := s.Name + "/" + s.Scope
 	r.mu.Lock()
-	c, ok := r.clients[key]
-	delete(r.clients, key)
-	r.mu.Unlock()
+	lc, ok := r.clients[key]
+	var shouldClose bool
 	if ok {
-		_ = c.Close()
+		delete(r.clients, key)
+		lc.evicted = true
+		shouldClose = lc.leases <= 0 && !lc.closed
+		if shouldClose {
+			lc.closed = true
+		}
+	}
+	r.mu.Unlock()
+	if shouldClose {
+		_ = lc.client.Close()
 	}
 }
 
-// Close closes every cached client and clears the cache. Safe to call more
-// than once. Registered as a deferred call at construction time in
-// cmd/server/serve.
+// Close closes every cached client (deferring any still leased to its last
+// release) and clears the cache. Safe to call more than once. Registered as a
+// deferred call at construction time in cmd/server/serve.
 func (r *Registry) Close() error {
 	r.mu.Lock()
-	clients := make([]mcpClient, 0, len(r.clients))
-	for key, c := range r.clients {
-		clients = append(clients, c)
+	var toClose []*leasedClient
+	for key, lc := range r.clients {
 		delete(r.clients, key)
+		lc.evicted = true
+		if lc.leases <= 0 && !lc.closed {
+			lc.closed = true
+			toClose = append(toClose, lc)
+		}
 	}
 	r.mu.Unlock()
 
 	var errs []error
-	for _, c := range clients {
-		if err := c.Close(); err != nil {
+	for _, lc := range toClose {
+		if err := lc.client.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
