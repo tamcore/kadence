@@ -108,7 +108,7 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 3
         resources:
-          {{- toYaml $root.Values.mcp.nginx.resources | nindent 10 }}
+          {{- toYaml $root.Values.mcp.fileBridge.resources | nindent 10 }}
         env:
         - name: KADENCE_FILE_BRIDGE_ROOT
           value: {{ $server.fitAnalysis.downloadDir | quote }}
@@ -121,7 +121,7 @@ spec:
           mountPath: {{ $server.fitAnalysis.downloadDir }}
       {{- end }}
       - name: nginx
-        image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
+        image: {{ $root.Values.mcp.nginx.image }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -213,7 +213,8 @@ spec:
       {{- end }}
       {{- if and $server.fitAnalysis $server.fitAnalysis.enabled }}
       - name: fit-files
-        emptyDir: {}
+        emptyDir:
+          sizeLimit: {{ $root.Values.mcp.fitFilesSizeLimit }}
       {{- end }}
 ---
 {{- if and $server.persistence $server.persistence.enabled }}

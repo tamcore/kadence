@@ -132,6 +132,16 @@ spec:
             name: {{ include "kadence.fullname" . }}-config
         - secretRef:
             name: {{ include "kadence.fullname" . }}-secret
+        # Generous ~300s budget (periodSeconds * failureThreshold) absorbs a
+        # slow first boot (migrations + reindex) so it can't crash-loop
+        # against livenessProbe's initialDelaySeconds: 30. While this probe
+        # hasn't yet succeeded, liveness/readiness are not evaluated.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          periodSeconds: 10
+          failureThreshold: 30
         livenessProbe:
           httpGet:
             path: /healthz
@@ -161,7 +171,8 @@ spec:
         {{- end }}
       volumes:
       - name: tmp
-        emptyDir: {}
+        emptyDir:
+          sizeLimit: {{ .Values.tmpSizeLimit }}
       {{- if .Values.mcp.tls.enabled }}
       - name: mcp-ca
         secret:

@@ -104,8 +104,17 @@ resources:
   requests:
     cpu: 50m
     memory: 128Mi
+    ephemeral-storage: 128Mi
   limits:
     memory: 256Mi
+    # Headroom for the /tmp emptyDir (see tmpSizeLimit below): must exceed
+    # KADENCE_UPLOAD_MAX_BYTES (10Mi default) with base64-inflation headroom.
+    ephemeral-storage: 512Mi
+
+# /tmp emptyDir sizeLimit (transient upload staging). Must exceed
+# KADENCE_UPLOAD_MAX_BYTES (10Mi default) with base64-inflation headroom
+# (~1.34x) and multi-file chat turns, or uploads start failing partway.
+tmpSizeLimit: 512Mi
 
 # Non-secret app config (rendered into a ConfigMap -> envFrom).
 config:
@@ -185,6 +194,10 @@ postgres:
     requests:
       cpu: 100m
       memory: 256Mi
+    # Postgres's workload is predictable (unlike the 3rd-party mcp/markitdown
+    # images below), so a normal limit is appropriate here.
+    limits:
+      memory: 512Mi
 
 # External database. Used only when postgres.enabled=false.
 # IMPORTANT: with networkPolicy.enabled (or defaultDeny) on, the chart's
@@ -275,7 +288,20 @@ mcp:
     requests:
       cpu: 50m
       memory: 128Mi
+      ephemeral-storage: 32Mi
+    # GENEROUS and TUNE-ME: mcp.servers[] images are 3rd-party (garmin-mcp,
+    # cloakbrowser-mcp/Chromium, etc.) with unpredictable memory ceilings — a
+    # tight limit here trades a latent OOM risk (no limit) for a live one (an
+    # image that legitimately needs more than we guessed gets killed). Once
+    # you know a given image's real footprint, override it tightly via that
+    # server's own `resources` key instead of tightening this default.
+    limits:
+      memory: 1Gi
+      ephemeral-storage: 256Mi
   nginx:
+    # Pinned nginx sidecar image, shared by every MCP server's proxy
+    # container; override to mirror it to a private registry.
+    image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
     # nginx sidecar resources shared by every MCP server's proxy container.
     resources:
       requests:
@@ -283,6 +309,24 @@ mcp:
         memory: 32Mi
       limits:
         memory: 64Mi
+  # file-bridge sidecar resources (only rendered when a server enables
+  # fitAnalysis). It streams files up to KADENCE_FILE_BRIDGE_MAX_BYTES (32Mi
+  # default) into memory, so it needs real headroom above that — it must NOT
+  # reuse mcp.nginx.resources (64Mi limit), which would OOMKill on a large
+  # FIT transfer.
+  fileBridge:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+        ephemeral-storage: 32Mi
+      limits:
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+  # fit-files emptyDir sizeLimit, shared between the mcp container and the
+  # file-bridge sidecar. Must exceed KADENCE_FILE_BRIDGE_MAX_BYTES (32Mi
+  # default) with headroom for more than one file in flight.
+  fitFilesSizeLimit: 256Mi
 
 # Optional markitdown-mcp ingestion sidecar. When enabled, renders a fixed
 # Deployment (markitdown-mcp) + nginx basicAuth sidecar + Service +
@@ -310,6 +354,13 @@ markitdown:
     requests:
       cpu: 50m
       memory: 128Mi
+      ephemeral-storage: 32Mi
+    # GENEROUS and TUNE-ME: markitdown-mcp is a 3rd-party image converting
+    # arbitrary uploaded documents with an unpredictable memory ceiling — see
+    # mcp.resources.limits above for the same tradeoff rationale.
+    limits:
+      memory: 1Gi
+      ephemeral-storage: 256Mi
   # Pod-level securityContext, same treatment and verification as mcp.podSecurityContext.
   podSecurityContext:
     runAsNonRoot: true
@@ -319,6 +370,8 @@ markitdown:
     seccompProfile:
       type: RuntimeDefault
   nginx:
+    # Pinned nginx sidecar image; override to mirror it to a private registry.
+    image: nginxinc/nginx-unprivileged:1.31.3-alpine-slim
     resources:
       requests:
         cpu: 10m
