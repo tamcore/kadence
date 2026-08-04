@@ -299,4 +299,28 @@ describe('/profile', () => {
 			)
 		);
 	});
+
+	it('renders a theme section with the picker', () => {
+		render(Page);
+		expect(screen.getByRole('group', { name: 'Appearance' })).toBeInTheDocument();
+		expect(screen.getByRole('radio', { name: 'Auto' })).toBeInTheDocument();
+	});
+
+	it('never sends the theme to the profile API', async () => {
+		render(Page);
+		await fireEvent.click(screen.getByRole('radio', { name: 'Dark' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+		await waitFor(() => expect(updateProfileMock).toHaveBeenCalled());
+		const body = updateProfileMock.mock.calls[0][0] as Record<string, unknown>;
+		expect(body).not.toHaveProperty('theme');
+		expect(Object.keys(body).sort()).toEqual(
+			['aboutMe', 'displayName', 'email', 'location', 'timezone', 'unitSystem'].sort()
+		);
+	});
+
+	it('keeps the unit-system radios unambiguous alongside the theme radios', () => {
+		render(Page);
+		expect(screen.getByRole('radio', { name: 'Metric' })).toBeInTheDocument();
+		expect(screen.getByRole('radio', { name: 'Imperial' })).toBeInTheDocument();
+	});
 });

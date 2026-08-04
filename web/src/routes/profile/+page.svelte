@@ -15,6 +15,7 @@
 	import Input from '$lib/components/Input.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import ThemePicker from '$lib/components/ThemePicker.svelte';
 	import { enablePush, disablePush } from '$lib/push/subscribe';
 	import {
 		pushSupported,
@@ -253,6 +254,11 @@
 			</label>
 			<Button type="submit" variant="primary">Save account</Button>
 		</form>
+	</section>
+
+	<section>
+		<h2>Theme</h2>
+		<ThemePicker />
 	</section>
 
 	<section>
