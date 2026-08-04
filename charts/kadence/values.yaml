@@ -24,9 +24,11 @@ serviceAccount:
 
 replicaCount: 2
 
-# App container ports. KADENCE_LISTEN_ADDR / KADENCE_HEALTH_ADDR (image-side)
-# must be kept in sync with these if you change them — see the note atop
-# this file about upgrading chart and image together.
+# App container ports. The ConfigMap derives KADENCE_LISTEN_ADDR and
+# KADENCE_HEALTH_ADDR from these, so changing a port moves the listener, the
+# containerPort, the probes and the NetworkPolicy together. Setting either env
+# var explicitly under `config:` overrides the derived value (and is then your
+# responsibility to keep consistent with these ports).
 ports:
   http: 8080
   health: 8081
@@ -153,13 +155,17 @@ resources:
     ephemeral-storage: 128Mi
   limits:
     memory: 256Mi
-    # Headroom for the /tmp emptyDir (see tmpSizeLimit below): must exceed
-    # KADENCE_UPLOAD_MAX_BYTES (10Mi default) with base64-inflation headroom.
-    ephemeral-storage: 512Mi
+    # Must stay STRICTLY ABOVE tmpSizeLimit below. If the two are equal, /tmp
+    # filling up trips the container's ephemeral-storage limit at the same
+    # moment as the emptyDir's own sizeLimit, and the kubelet EVICTS the pod
+    # instead of merely failing the oversized write. Keeping headroom here
+    # contains /tmp pressure to the volume. Raise both together.
+    ephemeral-storage: 1Gi
 
 # /tmp emptyDir sizeLimit (transient upload staging). Must exceed
 # KADENCE_UPLOAD_MAX_BYTES (10Mi default) with base64-inflation headroom
-# (~1.34x) and multi-file chat turns, or uploads start failing partway.
+# (~1.34x) and multi-file chat turns, or uploads start failing partway. Must
+# stay below resources.limits.ephemeral-storage (see above).
 tmpSizeLimit: 512Mi
 
 # Non-secret app config (rendered into a ConfigMap -> envFrom).
@@ -370,7 +376,9 @@ mcp:
     # server's own `resources` key instead of tightening this default.
     limits:
       memory: 1Gi
-      ephemeral-storage: 256Mi
+      # Above fitFilesSizeLimit for the same eviction reason as the app's
+      # ephemeral-storage limit (see resources.limits above).
+      ephemeral-storage: 512Mi
   nginx:
     # Pinned nginx sidecar image, shared by every MCP server's proxy
     # container; override to mirror it to a private registry.
@@ -395,7 +403,9 @@ mcp:
         ephemeral-storage: 32Mi
       limits:
         memory: 128Mi
-        ephemeral-storage: 256Mi
+        # Above fitFilesSizeLimit so a full shared volume fails the write
+        # instead of evicting the pod (see the app's resources.limits).
+        ephemeral-storage: 512Mi
   # fit-files emptyDir sizeLimit, shared between the mcp container and the
   # file-bridge sidecar. Must exceed KADENCE_FILE_BRIDGE_MAX_BYTES (32Mi
   # default) with headroom for more than one file in flight.

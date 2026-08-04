@@ -5,6 +5,17 @@ metadata:
   labels:
     {{- include "kadence.labels" . | nindent 4 }}
 data:
+  {{- /* The app's bind addresses are DERIVED from .Values.ports, so a changed
+         port actually moves the listener as well as the containerPort, probes
+         and NetworkPolicy. An explicit config.KADENCE_*_ADDR still wins (it is
+         rendered by the range below) — hasKey, not the rendered value, so
+         setting it to "" deliberately falls back to the app default. */}}
+  {{- if not (hasKey .Values.config "KADENCE_LISTEN_ADDR") }}
+  KADENCE_LISTEN_ADDR: {{ printf ":%v" .Values.ports.http | quote }}
+  {{- end }}
+  {{- if not (hasKey .Values.config "KADENCE_HEALTH_ADDR") }}
+  KADENCE_HEALTH_ADDR: {{ printf ":%v" .Values.ports.health | quote }}
+  {{- end }}
   {{- /* Render any non-nil value verbatim (false, 0 all survive); only an
          unset-optional empty string is dropped, so an operator can still set
          KADENCE_GUARDRAIL_ENABLED=false or KADENCE_RATE_LIMIT_GLOBAL=0
