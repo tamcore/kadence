@@ -172,7 +172,10 @@ secrets:
 # migration 00003 requires `CREATE EXTENSION vector`, hence the pgvector image.
 postgres:
   enabled: false
-  image: pgvector/pgvector:pg17
+  # Pinned to a specific pgvector release (not the floating "pg17" tag) so
+  # kube-linter's latest-tag concern doesn't apply and upgrades are explicit.
+  # Bump deliberately; check https://hub.docker.com/r/pgvector/pgvector/tags.
+  image: pgvector/pgvector:0.8.6-pg17-bookworm
   storage: 10Gi
   storageClass: "" # set in values-dev.yaml to a pgvector-capable class
   database: kadence
@@ -288,7 +291,10 @@ mcp:
 # fallback). See values-dev.yaml.example.
 markitdown:
   enabled: false
-  image: mcp/markitdown:latest # public image; pin a digest/tag in prod
+  # mcp/markitdown publishes no version tag (only "latest" on Docker Hub), so
+  # pin by digest instead of a mutable tag. Rotate this digest deliberately;
+  # check https://hub.docker.com/r/mcp/markitdown/tags for the current one.
+  image: mcp/markitdown@sha256:9cb5f26d30b609a1d5560a090371cb9dba84fc32e7df10e5496aa22aa7b52658
   port: 3001
   # Trailing slash is required: markitdown-mcp (starlette) 307-redirects
   # /mcp -> /mcp/, and the sidecar's fixed Host header turns that redirect

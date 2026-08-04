@@ -5,8 +5,12 @@ metadata:
   labels:
     {{- include "kadence.labels" . | nindent 4 }}
 data:
+  {{- /* Render any non-nil value verbatim (false, 0 all survive); only an
+         unset-optional empty string is dropped, so an operator can still set
+         KADENCE_GUARDRAIL_ENABLED=false or KADENCE_RATE_LIMIT_GLOBAL=0
+         without the app default silently winning. */}}
   {{- range $key, $value := .Values.config }}
-  {{- if $value }}
+  {{- if or (ne (kindOf $value) "string") (ne $value "") }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
   {{- end }}

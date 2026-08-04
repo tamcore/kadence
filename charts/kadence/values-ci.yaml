@@ -2,6 +2,12 @@
 # job e2e-kind). Ephemeral cluster, ephemeral test creds — safe to commit.
 # LLM/EMBED base URLs are intentionally unset: chat/RAG/documents stay disabled,
 # so this is a pure deploy + migrate + auth smoke (no external dependency).
+#
+# The secrets below are NOT a vulnerability: the KinD cluster they deploy to is
+# created and destroyed within the same CI job, is never reachable outside the
+# runner, and is never the target of a real deploy. They exist only so the
+# smoke test has *some* value to inject. Do NOT copy these into a real
+# deployment's values — generate fresh secrets for anything that persists.
 
 image:
   pullPolicy: Never # image is kind-loaded, never pulled from a registry

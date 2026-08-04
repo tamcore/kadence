@@ -68,7 +68,7 @@ externalDatabase:
 #   servers:
 #     - name: garmin
 #       scope: global
-#       image: example/garmin-mcp:latest
+#       image: example/garmin-mcp:1.4.2 # pin an explicit tag/digest, never :latest
 #       transport: streamable-http
 #       port: 8000
 #       path: /mcp

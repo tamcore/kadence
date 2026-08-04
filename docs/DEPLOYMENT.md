@@ -14,8 +14,8 @@ helm upgrade --install kadence ./charts/kadence \
 
 Provide, at minimum: a database, provider keys, admin bootstrap, and (in prod) a CSRF
 secret. All non-secret settings go under `config:` (rendered into a ConfigMap); all
-secrets go under `secrets:` (rendered into a Secret, or supply an `existingSecret`).
-The keys map 1:1 to the environment variables in [CONFIGURATION.md](CONFIGURATION.md).
+secrets go under `secrets:` (rendered into a Secret). The keys map 1:1 to the
+environment variables in [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Database
 
@@ -28,6 +28,47 @@ Two options:
   pgvector-enabled database via `externalDatabase.url` or `externalDatabase.existingSecret`.
 
 Migrations (`goose`, embedded SQL) run automatically on startup — no separate job.
+
+## NetworkPolicy
+
+`networkPolicy.enabled` (default `true`) renders explicit allow-list NetworkPolicies
+for the app, postgres, mcp, and markitdown pods. Four keys tune that behavior:
+
+- `networkPolicy.defaultDeny` (default `false`) — adds a namespace-wide
+  default-deny-all NetworkPolicy (ingress + egress) on top of the explicit allow
+  rules. NetworkPolicies are additive/OR, so this only closes off traffic not
+  already permitted by name; it does not need to be combined with anything else to
+  be safe, but you should confirm the explicit rules below cover every flow your
+  deployment actually uses before enabling it.
+- `networkPolicy.ingressNamespaceSelector` — the namespace selector the app's
+  NetworkPolicy uses to allow ingress from your ingress controller. Defaults to
+  matching a namespace literally named `ingress-nginx`; change it if your ingress
+  controller lives elsewhere.
+- `networkPolicy.dnsPodSelectorValues` — the `k8s-app` label values matched for the
+  cluster DNS egress rule (`kube-dns` and `coredns` by default, covering both
+  common CoreDNS deployment conventions). Add to this list if your cluster's
+  CoreDNS uses a different label.
+- `networkPolicy.extraAppEgress` — raw NetworkPolicy egress rules appended verbatim
+  to the app's egress list, for destinations this chart doesn't know about.
+
+  **Trap:** with `postgres.enabled=false` (external database) and NetworkPolicy
+  enabled, the chart has no built-in egress rule for the app -> external DB
+  connection at all — the bundled-postgres egress rule is gated on
+  `postgres.enabled=true`, and there is no equivalent for an external host. If you
+  combine `externalDatabase` with NetworkPolicy (`networkPolicy.enabled` or
+  `defaultDeny`), you must add a rule for that host/port to `extraAppEgress`
+  yourself, or the app cannot reach its database at all:
+
+  ```yaml
+  networkPolicy:
+    extraAppEgress:
+    - to:
+      - ipBlock:
+          cidr: 10.20.30.40/32
+      ports:
+      - protocol: TCP
+        port: 5432
+  ```
 
 ## Upgrade notes
 
