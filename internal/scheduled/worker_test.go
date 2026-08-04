@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -473,5 +474,148 @@ func TestWorkerMaintenanceTicksAndLogsFailures(t *testing.T) {
 	if !bytes.Contains(logs.Bytes(), []byte("scheduled stale-run recovery failed")) ||
 		!bytes.Contains(logs.Bytes(), []byte("scheduled no-change retention failed")) {
 		t.Fatalf("missing maintenance error logs: %s", logs.String())
+	}
+}
+
+func TestWorkerSurvivesPanickingExecutionAndMarksRunFailed(t *testing.T) {
+	now := time.Now()
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	store := &workerStoreStub{claims: []model.ClaimedScheduledTask{workerClaim(1, now)}}
+	executed := make(chan struct{}, 1)
+	worker := NewWorker(WorkerDeps{
+		Store: store,
+		Executor: workerExecutorFunc(func(context.Context, Actor, model.ClaimedScheduledTask) error {
+			executed <- struct{}{}
+			panic("executor exploded")
+		}),
+		Config: WorkerConfig{Concurrency: 1, PollInterval: time.Hour},
+		Now:    func() time.Time { return now },
+		Log:    log,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Run(ctx)
+		close(done)
+	}()
+	<-executed
+
+	// Wait for the failure to be persisted BEFORE cancelling. The recovered-panic
+	// path bails out early on ctx.Err() != nil, so cancelling immediately after
+	// <-executed races it: the goroutine could observe cancellation and skip
+	// FinishFailure entirely, making this test flaky.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		store.mu.Lock()
+		recorded := len(store.failures)
+		store.mu.Unlock()
+		if recorded > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("panicked run was never marked failed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker.Run did not return; a panicking execution must not wedge it")
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "scheduled execution panicked") {
+		t.Fatalf("missing panic log:\n%s", out)
+	}
+	if !strings.Contains(out, "executor exploded") {
+		t.Fatalf("panic value not logged:\n%s", out)
+	}
+	if !strings.Contains(out, "level=ERROR") {
+		t.Fatalf("panic must be logged at ERROR:\n%s", out)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.failures) != 1 {
+		t.Fatalf("FinishFailure called %d times, want 1 (the panicked run must be marked failed)", len(store.failures))
+	}
+	if got := store.failures[0].Code; got != failurePanic {
+		t.Fatalf("failure code = %q, want %q", got, failurePanic)
+	}
+	if got := store.failures[0].RunID; got != 1 {
+		t.Fatalf("failure RunID = %d, want 1", got)
+	}
+}
+
+// syncBuffer is a mutex-guarded io.Writer for slog output that the test reads
+// while the worker goroutine is still running. bytes.Buffer alone is not safe
+// for that, and reading it only after cancellation would race the worker's
+// post-Execute logging (the error path bails out early once ctx is cancelled).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitForLog blocks until the sink contains want, or fails the test.
+func waitForLog(t *testing.T, b *syncBuffer, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(b.String(), want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("log never contained %q:\n%s", want, b.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestWorkerNonPanicExecutionErrorStillOnlyLogs(t *testing.T) {
+	now := time.Now()
+	logs := &syncBuffer{}
+	log := slog.New(slog.NewTextHandler(logs, nil))
+	store := &workerStoreStub{claims: []model.ClaimedScheduledTask{workerClaim(1, now)}}
+	executed := make(chan struct{}, 1)
+	worker := NewWorker(WorkerDeps{
+		Store: store,
+		Executor: workerExecutorFunc(func(context.Context, Actor, model.ClaimedScheduledTask) error {
+			executed <- struct{}{}
+			return errors.New("executor failed")
+		}),
+		Config: WorkerConfig{Concurrency: 1, PollInterval: time.Hour},
+		Now:    func() time.Time { return now },
+		Log:    log,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Run(ctx)
+		close(done)
+	}()
+	<-executed
+	// Wait for the log line before cancelling: the error path is suppressed once
+	// ctx is cancelled, so cancelling first would race it away.
+	waitForLog(t, logs, "scheduled execution finished with error")
+	cancel()
+	<-done
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.failures) != 0 {
+		t.Fatalf("FinishFailure called %d times for a plain error; the Executor already persisted it", len(store.failures))
 	}
 }

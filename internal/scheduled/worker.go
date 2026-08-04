@@ -2,10 +2,13 @@ package scheduled
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/tamcore/kadence/internal/bg"
 	"github.com/tamcore/kadence/internal/model"
 )
 
@@ -16,6 +19,7 @@ const (
 	workerMaintenanceBatchSize       = 100
 	noChangeRetention                = 30 * 24 * time.Hour
 	failureInterrupted               = "execution_interrupted"
+	failurePanic                     = "execution_panicked"
 )
 
 // WorkerStore coordinates every replica through atomic PostgreSQL claims.
@@ -119,10 +123,29 @@ func (w *Worker) Run(ctx context.Context) {
 			executions.Go(func() {
 				defer func() { <-slots }()
 				actor := Actor{ID: claim.Task.UserID, Username: claim.Username}
-				if err := w.executor.Execute(ctx, actor, claim); err != nil && ctx.Err() == nil {
-					w.log.Warn("scheduled execution finished with error",
-						"task_id", claim.Task.ID, "run_id", claim.Run.ID, "err", err)
+				err := bg.Guard(func() error {
+					return w.executor.Execute(ctx, actor, claim)
+				})
+				if err == nil || ctx.Err() != nil {
+					return
 				}
+				var pe *bg.PanicError
+				if errors.As(err, &pe) {
+					// A panic left no persisted outcome: the Executor marks its
+					// own failures, but never got the chance. Mark the run
+					// failed here so it is not stuck running until recoverStale.
+					w.log.Error("scheduled execution panicked",
+						"task_id", claim.Task.ID, "run_id", claim.Run.ID,
+						"panic", fmt.Sprint(pe.Value), "stack", string(pe.Stack))
+					failure := executionFailure(claim, w.now(), failurePanic)
+					if ferr := w.store.FinishFailure(ctx, failure); ferr != nil {
+						w.log.Warn("scheduled panic failure transition lost",
+							"run_id", claim.Run.ID, "err", ferr)
+					}
+					return
+				}
+				w.log.Warn("scheduled execution finished with error",
+					"task_id", claim.Task.ID, "run_id", claim.Run.ID, "err", err)
 			})
 		}
 	}
