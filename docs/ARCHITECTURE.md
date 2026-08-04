@@ -73,7 +73,9 @@ Each turn runs:
    date and the user's unit preference) and stream from the provider, running a
    **tool loop**: the model requests a remote MCP or narrow Kadence-native tool → the
    app dispatches it → the result is fed back → repeat, up to a configured iteration
-   cap.
+   cap. Remote tool results are size-capped and fed back inside the same
+   `<untrusted_context>` JSON fence as document text, so a result cannot escape its
+   own fence or pose as an instruction.
 5. **Persist + embed** — the turn, safe file metadata, raw attachment payloads, and
    reference snapshots are stored transactionally; text is embedded back into RAG.
 

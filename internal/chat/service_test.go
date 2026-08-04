@@ -1886,7 +1886,7 @@ func (p *toolThenContentProvider) StreamChatWithTools(_ context.Context, req pro
 	p.calls++
 	if p.calls == 1 {
 		return provider.StreamResult{
-			ToolCalls: []provider.ToolCall{{ID: "call_1", Name: p.toolName, Arguments: p.toolArgs}},
+			ToolCalls: []provider.ToolCall{{ID: testToolCallID, Name: p.toolName, Arguments: p.toolArgs}},
 		}, nil
 	}
 	if err := onToken(p.finalReply); err != nil {
@@ -1969,10 +1969,11 @@ func (s *fakeMCPSnapshot) ToolHints() []string {
 }
 
 const (
-	testToolName  = "weather__get_forecast"
-	testToolArgs  = `{"city":"Berlin"}`
-	testToolReply = "sunny, 22C"
-	toolMsgRole   = "tool"
+	testToolName   = "weather__get_forecast"
+	testToolCallID = "call_1"
+	testToolArgs   = `{"city":"Berlin"}`
+	testToolReply  = "sunny, 22C"
+	toolMsgRole    = "tool"
 )
 
 func TestStreamRunsToolCallThenFinishes(t *testing.T) {
@@ -2037,7 +2038,8 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 	secondCallMsgs := prov.gotMessages[1]
 	var hasToolResult bool
 	for _, m := range secondCallMsgs {
-		if m.Role == toolMsgRole && m.ToolCallID == "call_1" && m.Content == testToolReply {
+		if m.Role == toolMsgRole && m.ToolCallID == testToolCallID &&
+			strings.Contains(m.Content, `"result":"`+testToolReply+`"`) {
 			hasToolResult = true
 		}
 	}
@@ -2075,7 +2077,7 @@ func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
 	secondCallMsgs := prov.gotMessages[1]
 	var hasErrResult bool
 	for _, m := range secondCallMsgs {
-		if m.Role == toolMsgRole && strings.HasPrefix(m.Content, "error: ") {
+		if m.Role == toolMsgRole && strings.Contains(m.Content, `"result":"error: `) {
 			hasErrResult = true
 		}
 	}

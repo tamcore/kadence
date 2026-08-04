@@ -214,7 +214,7 @@ func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
 	if calledTool != testFITRemoteTool {
 		t.Fatalf("called tool = %q, want bob's visible download tool", calledTool)
 	}
-	if msg.Content != fitAnalysisErrorMessage {
+	if unfencedToolResult(t, msg.Content) != fitAnalysisErrorMessage {
 		t.Fatalf("tool result = %q, want safe decode failure", msg.Content)
 	}
 	if auditStore.started.ToolName != testFITRemoteTool ||
@@ -222,6 +222,20 @@ func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
 		auditStore.finished.Status != model.MCPAuditStatusSucceeded {
 		t.Fatalf("nested FIT audit start=%+v finish=%+v", auditStore.started, auditStore.finished)
 	}
+}
+
+// unfencedToolResult returns the result carried inside an
+// <untrusted_context>-fenced tool message.
+func unfencedToolResult(t *testing.T, content string) string {
+	t.Helper()
+	payload := strings.TrimSuffix(
+		strings.TrimPrefix(content, untrustedContextOpen+"\n"), "\n"+untrustedContextClose,
+	)
+	var envelope untrustedToolResultEnvelope
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		t.Fatalf("unmarshal fenced tool result %q: %v", content, err)
+	}
+	return envelope.Result
 }
 
 func hasToolNamed(tools []provider.ToolDefinition, name string) bool {
@@ -271,7 +285,7 @@ func TestFITAnalysisReturnsSafeToolError(t *testing.T) {
 		sink,
 	)
 
-	if msg.Content != fitAnalysisErrorMessage {
+	if unfencedToolResult(t, msg.Content) != fitAnalysisErrorMessage {
 		t.Fatalf("tool result = %q, want generic safe error", msg.Content)
 	}
 	if strings.Contains(msg.Content, "/data/fit") || len(sink.events) != 2 || sink.events[1].Status != toolStatusError {
