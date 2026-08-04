@@ -1,11 +1,23 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+vi.mock('$lib/pwa/reachability-monitor', () => ({
+	reachabilityMonitor: { probeNow: vi.fn().mockResolvedValue(undefined) }
+}));
 
 import { goto } from '$app/navigation';
 import { editMessage, pinConversation, regenerateMessage, streamChat } from './chat';
 import { api } from './client';
 import { setCsrfToken } from './client';
+import { setOnline, setServerReachable, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
+import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
+import type { ChatEvent } from '$lib/types';
+
+async function collect(iter: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
+	const out: ChatEvent[] = [];
+	for await (const e of iter) out.push(e);
+	return out;
+}
 
 function streamResponse(frames: string[]): Response {
 	const body = new ReadableStream({
@@ -193,5 +205,28 @@ describe('conversation mutations', () => {
 		await pinConversation('conv-1', true);
 
 		expect(patch).toHaveBeenCalledWith('/conversations/conv-1', { pinned: true });
+	});
+});
+
+describe('streamChat reachability', () => {
+	beforeEach(() => {
+		setOnline(true);
+		setServerReachable(true);
+		vi.mocked(reachabilityMonitor.probeNow).mockClear();
+	});
+
+	it('yields an unreachable error without fetching when unreachable', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch');
+		setServerReachable(false);
+		const events = await collect(streamChat({ message: 'hi' }, new AbortController().signal));
+		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE }]);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it('probes and yields an error on a fetch rejection', async () => {
+		vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('failed to fetch'));
+		const events = await collect(streamChat({ message: 'hi' }, new AbortController().signal));
+		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE }]);
+		expect(reachabilityMonitor.probeNow).toHaveBeenCalledTimes(1);
 	});
 });

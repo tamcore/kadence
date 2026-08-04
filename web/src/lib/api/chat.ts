@@ -1,4 +1,6 @@
 import { api, getCsrfToken, handleUnauthorized, setCsrfToken } from '$lib/api/client';
+import { canReachServerNow, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
+import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 import type { ChatEvent, Conversation, ChatMessage } from '$lib/types';
 
 export interface ChatRequestBody {
@@ -59,18 +61,30 @@ async function* streamRequest(
 	body: unknown,
 	signal: AbortSignal
 ): AsyncIterable<ChatEvent> {
+	if (typeof window !== 'undefined' && !canReachServerNow()) {
+		yield { type: 'error', message: UNREACHABLE_MESSAGE };
+		return;
+	}
+
 	const multipart = body instanceof FormData;
 	const headers: Record<string, string> = multipart ? {} : { 'Content-Type': 'application/json' };
 	const token = getCsrfToken();
 	if (token) headers['X-CSRF-Token'] = token;
 
-	const resp = await fetch(path, {
-		method: 'POST',
-		credentials: 'include',
-		signal,
-		headers,
-		body: body === undefined ? undefined : multipart ? body : JSON.stringify(body)
-	});
+	let resp: Response;
+	try {
+		resp = await fetch(path, {
+			method: 'POST',
+			credentials: 'include',
+			signal,
+			headers,
+			body: body === undefined ? undefined : multipart ? body : JSON.stringify(body)
+		});
+	} catch {
+		void reachabilityMonitor.probeNow();
+		yield { type: 'error', message: UNREACHABLE_MESSAGE };
+		return;
+	}
 	const rotated = resp.headers.get('X-CSRF-Token');
 	if (rotated) setCsrfToken(rotated);
 
