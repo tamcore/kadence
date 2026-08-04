@@ -1882,6 +1882,19 @@ func (s *Service) runToolLoop(
 				ctx, streamCtx, conversationID, userID, uc, sourceUser, history, mcpSnap, tc, gated, &state, redactor, sink,
 			))
 		}
+
+		// The context budget is fitted once before the loop, but every round
+		// appends an assistant message plus one result per tool call. Stop
+		// growing the request as soon as it no longer fits instead of letting
+		// the provider reject a turn we already knew was oversized. Finishing
+		// with what we have beats dropping context we cannot safely choose
+		// between.
+		if used := requestTokenEstimate(req.Messages); used > s.contextBudget {
+			slog.Warn("tool loop exceeded context budget; forcing a final answer",
+				"conversation", conversationID, "iteration", i+1,
+				"estimated_tokens", used, "budget_tokens", s.contextBudget)
+			return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state)
+		}
 	}
 
 	// Iteration budget exhausted with tools still pending. Make one final
@@ -1889,15 +1902,7 @@ func (s *Service) runToolLoop(
 	// an empty response.
 	slog.Warn("tool loop hit iteration cap; forcing a final answer",
 		"conversation", conversationID, "maxIter", maxIter)
-	req.Tools = nil
-	final, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
-	if streamErr != nil {
-		slog.Error("final answer stream failed", "err", streamErr, "conversation", conversationID)
-		return "", state, &providerStreamFailure{
-			content: s.redactAssistantContent(final.Content, redactor, userID), err: streamErr,
-		}
-	}
-	return s.completeIfTruncated(streamCtx, conversationID, req, final, onToken), state, nil
+	return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state)
 }
 
 func (s *Service) redactAssistantContent(content string, redactor *turnRedactor, userID int64) string {
