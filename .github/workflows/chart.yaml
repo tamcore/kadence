@@ -26,14 +26,14 @@ jobs:
       - run: helm template kadence ./charts/kadence -f ./charts/kadence/values-dev.yaml.example
       - run: >
           helm template kadence ./charts/kadence
-          --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]'
+          --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]'
       - name: template with networkPolicy.defaultDeny=true (wave 2, issue 14)
         run: >
           helm template kadence ./charts/kadence
           --set postgres.enabled=true --set postgres.password=x
           --set markitdown.enabled=true
           --set networkPolicy.defaultDeny=true
-          --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]'
+          --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:2.0.0","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]'
       - name: template with networkPolicy.enabled=false
         run: >
           helm template kadence ./charts/kadence
@@ -51,9 +51,9 @@ jobs:
       - name: assert Scheduled configuration wiring
         run: |
           helm template kadence ./charts/kadence > /tmp/rendered-scheduled-default.yaml
-          default_enabled=$(yq eval-all '[select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data | to_entries[] | select(.key == "KADENCE_SCHEDULED_ENABLED")] | length' /tmp/rendered-scheduled-default.yaml)
-          if [ "$default_enabled" != "0" ]; then
-            echo "expected default render not to enable Scheduled, got $default_enabled KADENCE_SCHEDULED_ENABLED entries"
+          default_enabled=$(yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data.KADENCE_SCHEDULED_ENABLED' /tmp/rendered-scheduled-default.yaml)
+          if [ "$default_enabled" != "false" ]; then
+            echo "expected default render to render KADENCE_SCHEDULED_ENABLED: \"false\", got '$default_enabled'"
             exit 1
           fi
           default_termination_grace=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.terminationGracePeriodSeconds' /tmp/rendered-scheduled-default.yaml)
@@ -136,7 +136,7 @@ jobs:
           # the nginx sidecar must expose the unauthenticated /healthz probe
           # (the mcp/markitdown container itself binds loopback-only, so the
           # kubelet can never probe it directly).
-          set_args=(--set markitdown.enabled=true --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]')
+          set_args=(--set markitdown.enabled=true --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]')
           helm template kadence ./charts/kadence "${set_args[@]}" > /tmp/rendered-hardening.yaml
           for name in kadence-mcp-garmin kadence-markitdown; do
             runAsNonRoot=$(yq eval "select(.kind == \"Deployment\" and .metadata.name == \"$name\") | .spec.template.spec.securityContext.runAsNonRoot" /tmp/rendered-hardening.yaml)
@@ -149,8 +149,8 @@ jobs:
           done
       - name: assert optional FIT analysis wiring
         run: |
-          server_without_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds"}]'
-          server_with_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}}]'
+          server_without_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:1.0.0","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds"}]'
+          server_with_fit='[{"name":"activity","scope":"global","image":"example/activity-mcp:1.0.0","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}}]'
 
           helm template kadence ./charts/kadence --set-json "mcp.servers=$server_without_fit" > /tmp/rendered-fit-disabled.yaml
           disabled_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.name == "kadence-mcp-activity") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-disabled.yaml)
@@ -178,8 +178,8 @@ jobs:
           fi
 
           servers_with_user_fit='[
-            {"name":"activity1","scope":{"user":"alice"},"alias":"activity","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}},
-            {"name":"activity2","scope":{"user":"bob"},"alias":"activity","image":"example/activity-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}}
+            {"name":"activity1","scope":{"user":"alice"},"alias":"activity","image":"example/activity-mcp:1.0.0","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}},
+            {"name":"activity2","scope":{"user":"bob"},"alias":"activity","image":"example/activity-mcp:1.0.0","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"activity-creds","fitAnalysis":{"enabled":true,"downloadDir":"/data/fit","downloadTool":"download_file"}}
           ]'
           helm template kadence ./charts/kadence --set-json "mcp.servers=$servers_with_user_fit" > /tmp/rendered-fit-multi-user.yaml
           multi_bridge=$(yq eval-all '[select(.kind == "Deployment" and .metadata.labels."app.kubernetes.io/component" == "mcp") | .spec.template.spec.containers[] | select(.name == "file-bridge")] | length' /tmp/rendered-fit-multi-user.yaml)
@@ -196,7 +196,7 @@ jobs:
           # combo: postgres+markitdown+2 mcp servers (garmin, cloakbrowser), defaultDeny=false
           # -> expect exactly 5 NetworkPolicies (app, postgres, markitdown, mcp-garmin, mcp-cloakbrowser), no default-deny.
           set_args=(--set postgres.enabled=true --set postgres.password=x --set markitdown.enabled=true
-            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]')
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:2.0.0","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]')
           helm template kadence ./charts/kadence "${set_args[@]}" > /tmp/rendered-netpol.yaml
           count=$(yq eval-all '[select(.kind == "NetworkPolicy")] | length' /tmp/rendered-netpol.yaml)
           if [ "$count" != "5" ]; then
@@ -261,13 +261,13 @@ jobs:
           helm template kadence ./charts/kadence > rendered-default.yaml
           helm template kadence ./charts/kadence -f ./charts/kadence/values-dev.yaml.example > rendered-example.yaml
           helm template kadence ./charts/kadence \
-            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]' > rendered-mcp.yaml
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds","persistence":{"enabled":true,"size":"1Gi","mountPath":"/root/.garminconnect"}}]' > rendered-mcp.yaml
           helm template kadence ./charts/kadence \
             --set postgres.enabled=true --set postgres.password=x --set markitdown.enabled=true \
-            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]' > rendered-netpol.yaml
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:2.0.0","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]' > rendered-netpol.yaml
           helm template kadence ./charts/kadence \
             --set postgres.enabled=true --set postgres.password=x --set markitdown.enabled=true --set networkPolicy.defaultDeny=true \
-            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:latest","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:latest","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]' > rendered-netpol-deny.yaml
+            --set-json 'mcp.servers=[{"name":"garmin","scope":"global","image":"example/garmin-mcp:1.4.2","transport":"streamable-http","port":8000,"path":"/mcp","existingSecret":"garmin-creds"},{"name":"cloakbrowser","scope":"global","image":"example/cloakbrowser-mcp:2.0.0","transport":"streamable-http","port":9000,"path":"/mcp","shm":"512Mi"}]' > rendered-netpol-deny.yaml
       - name: Run kube-linter (advisory)
         # ADVISORY: continue-on-error means findings never fail the workflow.
         # See .kube-linter.yaml for the documented current baseline. Flip to
