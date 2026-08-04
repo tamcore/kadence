@@ -57,3 +57,13 @@ func TestAnalyzerClassifiesDecodeFailure(t *testing.T) {
 		t.Fatalf("FailureStage() = %q, want decode", got)
 	}
 }
+
+func TestNewAnalyzerUsesItsOwnClientWithATimeout(t *testing.T) {
+	a := NewAnalyzer("download_fit", "http://bridge.invalid", "u", "p", 1024)
+	if a.httpClient == http.DefaultClient {
+		t.Fatal("analyzer must not use http.DefaultClient; mutating it would affect every caller")
+	}
+	if a.httpClient.Timeout != bridgeFetchTimeout {
+		t.Fatalf("Timeout = %s, want %s", a.httpClient.Timeout, bridgeFetchTimeout)
+	}
+}

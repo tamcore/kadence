@@ -10,7 +10,13 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// bridgeFetchTimeout bounds one file-bridge fetch as a backstop independent of
+// the caller's context. Generous because the bridge streams files up to
+// KADENCE_FILE_BRIDGE_MAX_BYTES (32 MiB default).
+const bridgeFetchTimeout = 60 * time.Second
 
 type analysisFailure struct {
 	stage string
@@ -54,7 +60,14 @@ type Analyzer struct {
 
 // NewAnalyzer creates an analyzer for one configured Garmin download tool.
 func NewAnalyzer(downloadTool, bridgeURL, authUser, authPass string, maxBytes int64) *Analyzer {
-	return &Analyzer{downloadTool: downloadTool, bridgeURL: strings.TrimRight(bridgeURL, "/"), authUser: authUser, authPass: authPass, maxBytes: maxBytes, httpClient: http.DefaultClient}
+	return &Analyzer{
+		downloadTool: downloadTool,
+		bridgeURL:    strings.TrimRight(bridgeURL, "/"),
+		authUser:     authUser,
+		authPass:     authPass,
+		maxBytes:     maxBytes,
+		httpClient:   &http.Client{Timeout: bridgeFetchTimeout},
+	}
 }
 
 // Analyze downloads one activity through MCP, fetches its temporary FIT file,
