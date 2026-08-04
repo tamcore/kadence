@@ -1,17 +1,81 @@
 :root {
+	color-scheme: light;
 	--bg: #f7f8fa;
 	--surface: #ffffff;
+	--surface-hover: rgba(0, 0, 0, 0.03);
 	--text: #1a1d21;
 	--text-muted: #626c77;
 	--border: #e2e6ea;
 	--accent: #338574;
 	--accent-hover: #2b6f61;
+	/* Ink for any saturated fill — --accent AND --danger. There is no --on-danger. */
+	--on-accent: #ffffff;
+	--accent-tint: #eef5f3;
+	--brand: #021c46;
+	--on-brand: #ffffff;
 	--danger: #c0392b;
+	--success: #1a9e5c;
+	--warning: #b66a2c;
+	--warning-bg: #fff8f1;
+	--warning-fg: #754019;
+	--code-bg: #f0f2f4;
+	--overlay: rgba(0, 0, 0, 0.4);
+	--shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
 	--radius: 8px;
-	--space: 8px;
 	--sidebar-w: 260px;
 	--font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-	--shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+/* Neutral Slate. Elevation is a real lightness ramp: bg < surface < surface-hover. */
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--bg: #14171b;
+	--surface: #1c2026;
+	--surface-hover: #252a31;
+	--text: #e6eaef;
+	--text-muted: #9aa5b1;
+	--border: #383f49;
+	--accent: #4fc2ab;
+	--accent-hover: #6fd3bf;
+	--on-accent: #06231e;
+	--accent-tint: #16302c;
+	--brand: #4770b6;
+	--on-brand: #ffffff;
+	--danger: #f2726a;
+	--success: #41c179;
+	--warning: #e0a44a;
+	--warning-bg: #2a2114;
+	--warning-fg: #f0c179;
+	--code-bg: #1a1f25;
+	--overlay: rgba(0, 0, 0, 0.66);
+	--shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.45), 0 12px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* True black. The lightness ramp bottoms out here, so structure comes from
+   --border and --shadow degenerates into a 1px ring. --code-bg sits ABOVE
+   --surface on purpose: anything below #0b0d10 is indistinguishable from bg. */
+:root[data-theme='amoled'] {
+	color-scheme: dark;
+	--bg: #000000;
+	--surface: #0b0d10;
+	--surface-hover: #171b20;
+	--text: #eaeaea;
+	--text-muted: #9aa3ad;
+	--border: #2e343c;
+	--accent: #4fc9b1;
+	--accent-hover: #72d8c4;
+	--on-accent: #04211c;
+	--accent-tint: #112a26;
+	--brand: #3e64a3;
+	--on-brand: #e9eef6;
+	--danger: #f4796f;
+	--success: #44c87d;
+	--warning: #e3a94f;
+	--warning-bg: #221a0f;
+	--warning-fg: #f2c67f;
+	--code-bg: #0f1215;
+	--overlay: rgba(0, 0, 0, 0.78);
+	--shadow: 0 0 0 1px #2e343c, 0 10px 28px rgba(0, 0, 0, 0.9);
 }
 
 * { box-sizing: border-box; }
@@ -112,7 +176,7 @@ a { color: var(--accent); }
 	border: 1px solid var(--accent);
 	border-radius: var(--radius);
 	background: var(--accent);
-	color: #fff;
+	color: var(--on-accent);
 	font: inherit;
 	font-weight: 650;
 	line-height: 1.2;
@@ -151,7 +215,7 @@ a { color: var(--accent); }
 		z-index: 30;
 	}
 	.sidebar.open { transform: translateX(0); }
-	.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 20; }
+	.scrim { position: fixed; inset: 0; background: var(--overlay); z-index: 20; }
 	.scrim.show { display: block; }
 	.mobilebar {
 		display: flex;
