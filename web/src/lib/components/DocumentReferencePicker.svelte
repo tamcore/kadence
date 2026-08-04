@@ -187,8 +187,8 @@
 	.reference-trigger {
 		position: relative;
 		display: grid;
-		width: 34px;
-		height: 34px;
+		width: var(--composer-control-h);
+		height: var(--composer-control-h);
 		padding: 0;
 		place-items: center;
 		border: 1px solid var(--border);

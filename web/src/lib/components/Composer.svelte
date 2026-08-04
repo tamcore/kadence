@@ -289,6 +289,7 @@
 
 <style>
 	.composer-shell {
+		--composer-control-h: 42px;
 		display: grid;
 		width: 100%;
 		gap: 8px;
@@ -308,8 +309,8 @@
 
 	.attach-control {
 		display: grid;
-		width: 34px;
-		height: 34px;
+		width: var(--composer-control-h);
+		height: var(--composer-control-h);
 		place-items: center;
 		border: 1px solid var(--border);
 		border-radius: 7px;
@@ -348,10 +349,12 @@
 	textarea {
 		flex: 1;
 		min-width: 0;
-		padding: 10px 12px;
+		min-height: var(--composer-control-h);
+		padding: 8px 12px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		font: inherit;
+		line-height: 24px;
 		resize: none;
 		overflow-y: auto;
 		box-sizing: border-box;
@@ -361,7 +364,7 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 7px;
-		padding-left: 40px;
+		padding-left: calc(var(--composer-control-h) + 6px);
 	}
 
 	.reference-tray {
@@ -411,7 +414,7 @@
 	}
 
 	.validation-error {
-		padding-left: 40px;
+		padding-left: calc(var(--composer-control-h) + 6px);
 		color: var(--danger);
 		font-size: 0.8rem;
 	}
