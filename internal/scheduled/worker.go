@@ -20,6 +20,9 @@ const (
 	noChangeRetention                = 30 * 24 * time.Hour
 	failureInterrupted               = "execution_interrupted"
 	failurePanic                     = "execution_panicked"
+	// panicFinishTimeout bounds the detached write that records a panicked run,
+	// so recording an outcome during shutdown can never hold the drain open.
+	panicFinishTimeout = 5 * time.Second
 )
 
 // WorkerStore coordinates every replica through atomic PostgreSQL claims.
@@ -126,22 +129,36 @@ func (w *Worker) Run(ctx context.Context) {
 				err := bg.Guard(func() error {
 					return w.executor.Execute(ctx, actor, claim)
 				})
-				if err == nil || ctx.Err() != nil {
+				if err == nil {
 					return
 				}
+				// A panic must be classified BEFORE the shutdown suppression
+				// below: it is a known terminal outcome (unlike a plain error,
+				// which the Executor already persisted), so it must not be
+				// dropped just because ctx was cancelled concurrently.
+				// recoverStale is the fallback for hard kills, not the normal
+				// path for a recovered panic.
 				var pe *bg.PanicError
 				if errors.As(err, &pe) {
-					// A panic left no persisted outcome: the Executor marks its
-					// own failures, but never got the chance. Mark the run
-					// failed here so it is not stuck running until recoverStale.
 					w.log.Error("scheduled execution panicked",
 						"task_id", claim.Task.ID, "run_id", claim.Run.ID,
 						"panic", fmt.Sprint(pe.Value), "stack", string(pe.Stack))
+					// Detached from ctx (which may already be cancelled during
+					// shutdown) but bounded, so this write can never hold the
+					// shutdown drain open indefinitely.
+					finishCtx, cancelFinish := context.WithTimeout(
+						context.WithoutCancel(ctx), panicFinishTimeout)
+					defer cancelFinish()
 					failure := executionFailure(claim, w.now(), failurePanic)
-					if ferr := w.store.FinishFailure(ctx, failure); ferr != nil {
+					if ferr := w.store.FinishFailure(finishCtx, failure); ferr != nil {
 						w.log.Warn("scheduled panic failure transition lost",
 							"run_id", claim.Run.ID, "err", ferr)
 					}
+					return
+				}
+				// Ordinary errors keep the pre-existing shutdown suppression: the
+				// Executor already persisted them, so this is log noise only.
+				if ctx.Err() != nil {
 					return
 				}
 				w.log.Warn("scheduled execution finished with error",

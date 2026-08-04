@@ -619,3 +619,50 @@ func TestWorkerNonPanicExecutionErrorStillOnlyLogs(t *testing.T) {
 		t.Fatalf("FinishFailure called %d times for a plain error; the Executor already persisted it", len(store.failures))
 	}
 }
+
+func TestWorkerPersistsPanicFailureEvenDuringShutdown(t *testing.T) {
+	now := time.Now()
+	logs := &syncBuffer{}
+	log := slog.New(slog.NewTextHandler(logs, nil))
+	store := &workerStoreStub{claims: []model.ClaimedScheduledTask{workerClaim(1, now)}}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	worker := NewWorker(WorkerDeps{
+		Store: store,
+		Executor: workerExecutorFunc(func(context.Context, Actor, model.ClaimedScheduledTask) error {
+			close(started)
+			<-release // held open until the test has cancelled the context
+			panic("exploded during shutdown")
+		}),
+		Config: WorkerConfig{Concurrency: 1, PollInterval: time.Hour},
+		Now:    func() time.Time { return now },
+		Log:    log,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Run(ctx)
+		close(done)
+	}()
+
+	<-started
+	cancel()       // shutdown begins while the execution is still in flight
+	close(release) // now let it panic, with ctx already cancelled
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker.Run did not return")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.failures) != 1 {
+		t.Fatalf("FinishFailure called %d times, want 1 — a panic during shutdown must still be persisted via the detached context", len(store.failures))
+	}
+	if got := store.failures[0].Code; got != failurePanic {
+		t.Fatalf("failure code = %q, want %q", got, failurePanic)
+	}
+}
