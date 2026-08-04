@@ -446,6 +446,10 @@
 		font-size: 0.85rem;
 		color: var(--text-muted);
 	}
+	.field input {
+		background: var(--surface);
+		color: var(--text);
+	}
 	.field textarea {
 		padding: 10px 12px;
 		border: 1px solid var(--border);
