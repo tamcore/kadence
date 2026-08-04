@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -30,19 +31,69 @@ const (
 	// toolResultTruncatedMarker tells the model the result was cut, so it does
 	// not silently reason over a partial payload.
 	toolResultTruncatedMarker = "\n[truncated: response exceeded 256KiB]"
+
+	// maxToolSchemaBytes caps one tool's JSON input schema. Schemas are remote
+	// input that becomes part of every chat request's tool definitions, so an
+	// unbounded schema inflates every turn, not just one result.
+	maxToolSchemaBytes = 32 << 10
+
+	// maxToolDescriptionBytes caps one tool's description, same reasoning.
+	maxToolDescriptionBytes = 4 << 10
+
+	// placeholderToolSchema replaces an oversized schema. A schema must stay
+	// valid JSON, so it cannot be truncated like free text; an unconstrained
+	// object still lets the model call the tool, and the reason is in the log.
+	placeholderToolSchema = `{"type":"object"}`
 )
 
 // truncateToolResult caps s at maxToolResultBytes, cutting on a rune boundary
 // and appending toolResultTruncatedMarker.
 func truncateToolResult(s string) string {
-	if len(s) <= maxToolResultBytes {
+	return truncateTo(s, maxToolResultBytes)
+}
+
+// truncateTo caps s at limit bytes on a rune boundary, appending
+// toolResultTruncatedMarker.
+func truncateTo(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	cut := maxToolResultBytes
+	cut := limit
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut] + toolResultTruncatedMarker
+}
+
+// boundedError renders a capped message while keeping the original error's
+// chain reachable, so errors.Is/As still work on a bounded error.
+type boundedError struct {
+	msg string
+	err error
+}
+
+func (e *boundedError) Error() string { return e.msg }
+func (e *boundedError) Unwrap() error { return e.err }
+
+// boundError caps err's rendered message at maxToolResultBytes. A transport
+// failure carries the remote server's response body, and internal/chat turns
+// that text into a tool result the model reads — so it needs the same cap as a
+// successful result. Errors already within the cap are returned unchanged.
+func boundError(err error) error {
+	if err == nil || len(err.Error()) <= maxToolResultBytes {
+		return err
+	}
+	return &boundedError{msg: truncateTo(err.Error(), maxToolResultBytes), err: err}
+}
+
+// capToolSchema replaces an oversized tool schema with placeholderToolSchema.
+func capToolSchema(name string, schema json.RawMessage) json.RawMessage {
+	if len(schema) <= maxToolSchemaBytes {
+		return schema
+	}
+	slog.Warn("mcp tool schema exceeds the cap; advertising an unconstrained schema instead",
+		"tool", name, "schema_bytes", len(schema), "cap_bytes", maxToolSchemaBytes)
+	return json.RawMessage(placeholderToolSchema)
 }
 
 // ToolInfo describes one tool discovered on a remote MCP server.
@@ -173,7 +224,7 @@ func basicAuthHeaders(s Server) map[string]string {
 func (c *realMCPClient) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	result, err := c.client.ListTools(ctx, mcpgo.ListToolsRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("mcp: list tools: %w", err)
+		return nil, boundError(fmt.Errorf("mcp: list tools: %w", err))
 	}
 
 	infos := make([]ToolInfo, 0, len(result.Tools))
@@ -184,8 +235,8 @@ func (c *realMCPClient) ListTools(ctx context.Context) ([]ToolInfo, error) {
 		}
 		infos = append(infos, ToolInfo{
 			Name:        t.Name,
-			Description: t.Description,
-			Schema:      schema,
+			Description: truncateTo(t.Description, maxToolDescriptionBytes),
+			Schema:      capToolSchema(t.Name, schema),
 		})
 	}
 	return infos, nil
@@ -208,7 +259,9 @@ func (c *realMCPClient) CallTool(ctx context.Context, name, argsJSON string) (st
 
 	result, err := c.client.CallTool(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("mcp: call tool %s: %w", name, err)
+		// Bounded: a transport failure carries the remote body, and the caller
+		// forwards this text to the model as the tool result.
+		return "", boundError(fmt.Errorf("mcp: call tool %s: %w", name, err))
 	}
 
 	text := truncateToolResult(flattenTextContent(result.Content))
