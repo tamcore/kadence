@@ -229,4 +229,15 @@ describe('streamChat reachability', () => {
 		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE }]);
 		expect(reachabilityMonitor.probeNow).toHaveBeenCalledTimes(1);
 	});
+
+	it('does not probe or yield an error when the fetch rejects due to a caller-initiated abort', async () => {
+		const controller = new AbortController();
+		vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+			controller.abort();
+			return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+		});
+		const events = await collect(streamChat({ message: 'hi' }, controller.signal));
+		expect(events).toEqual([]);
+		expect(reachabilityMonitor.probeNow).not.toHaveBeenCalled();
+	});
 });

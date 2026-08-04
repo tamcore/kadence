@@ -31,7 +31,15 @@ export class ReachabilityMonitor {
 	}
 
 	async probeNow(): Promise<void> {
+		const wasHealthy = this.healthy;
 		await this.probe();
+		if (wasHealthy && !this.healthy) {
+			if (this.timer) {
+				clearTimeout(this.timer);
+				this.timer = undefined;
+			}
+			this.schedule(UNHEALTHY_INTERVAL_MS);
+		}
 	}
 
 	private schedule(delay: number): void {

@@ -81,6 +81,7 @@ async function* streamRequest(
 			body: body === undefined ? undefined : multipart ? body : JSON.stringify(body)
 		});
 	} catch {
+		if (signal.aborted) return;
 		void reachabilityMonitor.probeNow();
 		yield { type: 'error', message: UNREACHABLE_MESSAGE };
 		return;

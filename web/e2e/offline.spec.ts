@@ -23,5 +23,5 @@ test('shows offline banner and blocks the composer when offline, then recovers',
 	await context.setOffline(false);
 
 	await expect(page.getByText(/you.re offline/i)).toHaveCount(0);
-	await expect(composer).toBeEditable();
+	await expect(sendButton).toBeEnabled();
 });

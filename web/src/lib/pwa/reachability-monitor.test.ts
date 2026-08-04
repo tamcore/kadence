@@ -65,6 +65,35 @@ describe('ReachabilityMonitor', () => {
 		m.stop();
 	});
 
+	it('reschedules onto the unhealthy cadence when probeNow flips healthy to unhealthy', async () => {
+		const fetchFn = vi.fn().mockResolvedValueOnce(okResponse(true));
+		const m = new ReachabilityMonitor(fetchFn, vi.fn(), () => true);
+		m.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchFn).toHaveBeenCalledTimes(1);
+
+		fetchFn.mockRejectedValueOnce(new TypeError('failed to fetch'));
+		await m.probeNow();
+		expect(fetchFn).toHaveBeenCalledTimes(2);
+
+		await vi.advanceTimersByTimeAsync(UNHEALTHY_INTERVAL_MS);
+		expect(fetchFn).toHaveBeenCalledTimes(3);
+		m.stop();
+	});
+
+	it('does not start a timer from probeNow after stop()', async () => {
+		const fetchFn = vi.fn().mockResolvedValueOnce(okResponse(true));
+		const m = new ReachabilityMonitor(fetchFn, vi.fn(), () => true);
+		m.start();
+		await vi.advanceTimersByTimeAsync(0);
+		m.stop();
+
+		fetchFn.mockRejectedValueOnce(new TypeError('failed to fetch'));
+		await m.probeNow();
+		await vi.advanceTimersByTimeAsync(UNHEALTHY_INTERVAL_MS * 3);
+		expect(fetchFn).toHaveBeenCalledTimes(2);
+	});
+
 	it('stops scheduling after stop()', async () => {
 		const fetchFn = vi.fn().mockResolvedValue(okResponse(true));
 		const m = new ReachabilityMonitor(fetchFn, vi.fn(), () => true);
