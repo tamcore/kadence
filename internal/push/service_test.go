@@ -1,6 +1,7 @@
 package push
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
@@ -28,6 +30,16 @@ func testKeys(t *testing.T) (vapidPub, vapidPriv, p256dh, auth string) {
 	if err != nil {
 		t.Fatalf("generate VAPID keys: %v", err)
 	}
+	p256dh, auth = testClientKeys(t)
+
+	return vapidPub, vapidPriv, p256dh, auth
+}
+
+// testClientKeys generates a valid P-256 client subscription keypair so
+// webpush-go's encryption actually succeeds and the request reaches the test
+// HTTP server. Shared by testKeys and testSubscription.
+func testClientKeys(t *testing.T) (p256dh, auth string) {
+	t.Helper()
 
 	clientKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
@@ -41,7 +53,17 @@ func testKeys(t *testing.T) (vapidPub, vapidPriv, p256dh, auth string) {
 	}
 	auth = base64.RawURLEncoding.EncodeToString(authSecret)
 
-	return vapidPub, vapidPriv, p256dh, auth
+	return p256dh, auth
+}
+
+// testSubscription builds a model.PushSubscription with a fresh, valid P-256
+// client keypair pointing at endpoint, for tests exercising the real webpush
+// transport against an httptest server.
+func testSubscription(t *testing.T, endpoint string) model.PushSubscription {
+	t.Helper()
+
+	p256dh, auth := testClientKeys(t)
+	return model.PushSubscription{ID: "sub-1", Endpoint: endpoint, P256dh: p256dh, Auth: auth}
 }
 
 type fakeStore struct {
@@ -211,5 +233,51 @@ func TestNormalizeVAPIDSubject(t *testing.T) {
 	svc := NewService(&fakeStore{}, "pubkey", "privkey", "mailto:"+email, slog.Default())
 	if svc.vapidSubject != email {
 		t.Errorf("NewService vapidSubject = %q, want %q", svc.vapidSubject, email)
+	}
+}
+
+func TestSendOneTimesOutOnHangingGateway(t *testing.T) {
+	restore := pushSendTimeoutForTest(50 * time.Millisecond)
+	t.Cleanup(restore)
+
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-blocked // never responds within the deadline
+	}))
+	t.Cleanup(func() {
+		close(blocked)
+		srv.Close()
+	})
+
+	pub, priv, _, _ := testKeys(t)
+	store := &fakeStore{subs: []model.PushSubscription{testSubscription(t, srv.URL)}}
+	s := NewService(store, pub, priv, "mailto:ops@example.test", slog.Default())
+
+	start := time.Now()
+	err := s.SendToUser(context.Background(), 7, Payload{Title: "t", Body: "b"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error when every send times out")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("send took %s; a hung gateway must not stall the batch", elapsed)
+	}
+}
+
+func TestSendToUserContainsAPanickingSend(t *testing.T) {
+	var logs bytes.Buffer
+	pub, priv, _, _ := testKeys(t)
+	store := &fakeStore{subs: []model.PushSubscription{{
+		ID: "sub-1", Endpoint: "http://127.0.0.1:1/push",
+		P256dh: "!!not-base64!!", Auth: "!!not-base64!!",
+	}}}
+	s := NewService(store, pub, priv, "mailto:ops@example.test",
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	// Must return an error rather than taking the process down, whatever the
+	// transport does with malformed subscription keys.
+	if err := s.SendToUser(context.Background(), 7, Payload{Title: "t"}); err == nil {
+		t.Fatal("expected an error for an unusable subscription")
 	}
 }

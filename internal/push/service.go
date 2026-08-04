@@ -10,15 +10,29 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
+	"github.com/tamcore/kadence/internal/bg"
 	"github.com/tamcore/kadence/internal/model"
 )
 
 // maxPushFailures is the number of consecutive send failures a subscription
 // may accrue before it is pruned as unreachable.
 const maxPushFailures = 5
+
+// pushSendTimeout bounds one push send. Without it a hung gateway stalls the
+// whole dispatch batch, since SendToUser sends to every subscription serially.
+var pushSendTimeout = 30 * time.Second
+
+// pushSendTimeoutForTest shortens the per-send deadline and returns a restore
+// func. Test-only seam; pushSendTimeout is not configurable.
+func pushSendTimeoutForTest(d time.Duration) func() {
+	previous := pushSendTimeout
+	pushSendTimeout = d
+	return func() { pushSendTimeout = previous }
+}
 
 // pushTTLSeconds is the TTL (in seconds) the push service is asked to hold a
 // notification for if the user's device is offline. 24h so a locked phone or a
@@ -91,7 +105,14 @@ func (s *Service) SendToUser(ctx context.Context, userID int64, p Payload) error
 
 	var sent, failed int
 	for _, sub := range subs {
-		if s.sendOne(ctx, sub, msg) {
+		var delivered bool
+		if err := bg.Guard(func() error {
+			delivered = s.sendOne(ctx, sub, msg)
+			return nil
+		}); err != nil {
+			s.log.Error("push send panicked", "subscription", sub.ID, "err", err)
+		}
+		if delivered {
 			sent++
 		} else {
 			failed++
@@ -105,7 +126,9 @@ func (s *Service) SendToUser(ctx context.Context, userID int64, p Payload) error
 
 // sendOne sends msg to a single subscription and reports whether it succeeded.
 func (s *Service) sendOne(ctx context.Context, sub model.PushSubscription, msg []byte) bool {
-	resp, err := webpush.SendNotificationWithContext(ctx, msg, &webpush.Subscription{
+	sendCtx, cancel := context.WithTimeout(ctx, pushSendTimeout)
+	defer cancel()
+	resp, err := webpush.SendNotificationWithContext(sendCtx, msg, &webpush.Subscription{
 		Endpoint: sub.Endpoint,
 		Keys:     webpush.Keys{P256dh: sub.P256dh, Auth: sub.Auth},
 	}, &webpush.Options{
