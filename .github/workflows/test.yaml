@@ -2,7 +2,10 @@ name: Tests
 
 on:
   push:
-    branches: [master]
+    # Every branch, not just master: a feature branch otherwise gets no CI
+    # at all until a pull request exists. The concurrency block below
+    # cancels superseded runs, so the cost of this is bounded.
+    branches: ['**']
   pull_request:
 
 concurrency:
