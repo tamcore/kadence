@@ -51,10 +51,10 @@ func (h *Sessions) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ListByUser returns each session's hashed id (the raw id is never
-	// stored), so the caller's raw cookie value must be hashed the same way
-	// before comparison.
-	currentHash := ""
+	// ListByUser returns each session's hashed id in IDHash (the raw id is
+	// never stored), so the caller's raw cookie value must be hashed the same
+	// way before comparison. The typed hash keeps this hash-to-hash.
+	var currentHash model.SessionIDHash
 	if c, cErr := r.Cookie(sessionCookie); cErr == nil && c.Value != "" {
 		currentHash = store.HashSessionID(c.Value)
 	}
@@ -67,7 +67,7 @@ func (h *Sessions) List(w http.ResponseWriter, r *http.Request) {
 			IP:         s.IP,
 			CreatedAt:  s.CreatedAt.Format(timeFormatRFC3339),
 			LastSeenAt: s.LastSeenAt.Format(timeFormatRFC3339),
-			Current:    currentHash != "" && s.ID == currentHash,
+			Current:    currentHash != "" && s.IDHash == currentHash,
 		})
 	}
 	RespondJSON(w, http.StatusOK, out)

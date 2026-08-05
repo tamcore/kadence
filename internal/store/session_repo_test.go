@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -170,10 +171,11 @@ func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 	if err != nil || len(list) != 2 {
 		t.Fatalf("ListByUser len=%d err=%v", len(list), err)
 	}
-	// ListByUser cannot recover the raw id (only its hash is stored), so
-	// compare against the hash of the raw id used at Create time.
-	if list[0].ID != store.HashSessionID("s2") {
-		t.Fatalf("order: want s2 (hashed) first, got %s", list[0].ID)
+	// ListByUser cannot recover the raw id (only its hash is stored), so it
+	// reports the hash in IDHash and leaves ID empty; compare against the hash
+	// of the raw id used at Create time.
+	if list[0].IDHash != store.HashSessionID("s2") {
+		t.Fatalf("order: want s2 (hashed) first, got %s", list[0].IDHash)
 	}
 	if list[0].IP != "9.9.9.9" {
 		t.Fatalf("touch ip not applied: %q", list[0].IP)
@@ -258,7 +260,7 @@ func assertRawSessionIDAbsentButHashPresent(t *testing.T, pool *pgxpool.Pool, ra
 		t.Fatalf("raw session token found stored in sessions.id: must only store the hash")
 	}
 
-	hash := store.HashSessionID(raw)
+	hash := string(store.HashSessionID(raw))
 	var stillCount int
 	err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id = $1`, hash).Scan(&stillCount)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -266,5 +268,95 @@ func assertRawSessionIDAbsentButHashPresent(t *testing.T, pool *pgxpool.Pool, ra
 	}
 	if stillCount != 1 {
 		t.Fatalf("expected exactly one row stored under the hashed id, got %d", stillCount)
+	}
+}
+
+// TestSessionRawAndHashedIDsCannotBeConfused pins the compile-level guarantee
+// that separates the two id forms. Feeding a ListByUser result's hashed id to a
+// method that takes the RAW id would hash it a second time, match no row, and
+// return a nil error — a silent no-op on an auth-adjacent path. Because
+// HashSessionID returns model.SessionIDHash while Touch/Delete/UpdateExpiry/
+// DeleteOthersByUser take a plain string, that misuse does not compile:
+//
+//	sessions.Touch(ctx, list[0].IDHash, ip, now) // type error, by design
+//
+// A runtime test cannot assert a compile error, so this asserts the two facts
+// that make the compile error impossible to lose by accident: those methods
+// still take a plain string, and the hash type is not assignable to it.
+func TestSessionRawAndHashedIDsCannotBeConfused(t *testing.T) {
+	hashType := reflect.TypeOf(store.HashSessionID("any-raw-value"))
+	stringType := reflect.TypeFor[string]()
+	if hashType == stringType {
+		t.Fatal("HashSessionID returns a plain string: a hashed id would then be accepted wherever a raw id is expected")
+	}
+
+	rawIDTakers := map[string]any{
+		"Touch":              (*store.SessionRepository).Touch,
+		"Delete":             (*store.SessionRepository).Delete,
+		"UpdateExpiry":       (*store.SessionRepository).UpdateExpiry,
+		"DeleteOthersByUser": (*store.SessionRepository).DeleteOthersByUser,
+		"GetByID":            (*store.SessionRepository).GetByID,
+	}
+	for name, fn := range rawIDTakers {
+		fnType := reflect.TypeOf(fn)
+		// In(0) is the receiver, In(1) the context; the id follows, except for
+		// DeleteOthersByUser where the user id comes first.
+		idIndex := 2
+		if name == "DeleteOthersByUser" {
+			idIndex = 3
+		}
+		idParam := fnType.In(idIndex)
+		if idParam != stringType {
+			t.Fatalf("%s takes %s as its id parameter, want plain string (the RAW id)", name, idParam)
+		}
+		if hashType.AssignableTo(idParam) {
+			t.Fatalf("%s would accept a %s without conversion: double-hashing could slip back in", name, hashType)
+		}
+	}
+}
+
+// TestListByUserReportsOnlyTheHashedID asserts ListByUser leaves the raw ID
+// field empty (it can never recover it) and reports the stored hash in IDHash,
+// while the raw id still drives Touch/Delete as before.
+func TestListByUserReportsOnlyTheHashedID(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+	ctx := context.Background()
+	u := newUser(t, users, "karl")
+
+	const raw = "raw-token-for-list-by-user"
+	if err := sessions.Create(ctx, model.Session{ID: raw, UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	list, err := sessions.ListByUser(ctx, u.ID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListByUser len=%d err=%v", len(list), err)
+	}
+	if list[0].ID != "" {
+		t.Fatalf("ListByUser must leave the RAW ID empty, got %q", list[0].ID)
+	}
+	if list[0].IDHash != store.HashSessionID(raw) {
+		t.Fatal("ListByUser did not report the stored hash in IDHash")
+	}
+
+	// The raw id — the only form that works — still drives the write paths.
+	if err := sessions.Touch(ctx, raw, "5.5.5.5", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("Touch with the raw id: %v", err)
+	}
+	touched, err := sessions.ListByUser(ctx, u.ID)
+	if err != nil || len(touched) != 1 {
+		t.Fatalf("ListByUser after touch len=%d err=%v", len(touched), err)
+	}
+	if touched[0].IP != "5.5.5.5" {
+		t.Fatalf("Touch with the raw id did not apply: ip=%q", touched[0].IP)
+	}
+	if err := sessions.Delete(ctx, raw); err != nil {
+		t.Fatalf("Delete with the raw id: %v", err)
+	}
+	if remaining, dErr := sessions.ListByUser(ctx, u.ID); dErr != nil || len(remaining) != 0 {
+		t.Fatalf("Delete with the raw id did not remove the row: len=%d err=%v", len(remaining), dErr)
 	}
 }

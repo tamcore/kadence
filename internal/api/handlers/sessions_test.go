@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,17 +76,21 @@ func doAuthedPostNoCookie(t *testing.T, fn http.HandlerFunc) int {
 }
 
 func TestSessions_List_MarksCurrent_NoRawID(t *testing.T) {
-	// A real SessionRepository.ListByUser only ever returns the hashed id
-	// (the raw value is never stored); the handler must hash the caller's
-	// cookie the same way before comparing. The fake store mirrors that by
-	// storing hashes, not raw values.
+	// A real SessionRepository.ListByUser only ever reports the hashed id, in
+	// IDHash, and leaves the raw ID empty (the raw value is never stored); the
+	// handler must hash the caller's cookie the same way before comparing. The
+	// fake store mirrors that exactly.
 	store := &fakeSessionStore{list: []model.Session{
-		{ID: storepkg.HashSessionID("SECRET-CURRENT"), PublicID: "pub-1", UserAgent: "Mozilla/5.0 (Macintosh; Mac OS X) Chrome/120 Safari/537", IP: "1.1.1.1", CreatedAt: time.Now(), LastSeenAt: time.Now()},
-		{ID: storepkg.HashSessionID("SECRET-OTHER"), PublicID: "pub-2", UserAgent: "", IP: "2.2.2.2", CreatedAt: time.Now(), LastSeenAt: time.Now()},
+		{IDHash: storepkg.HashSessionID("SECRET-CURRENT"), PublicID: "pub-1", UserAgent: "Mozilla/5.0 (Macintosh; Mac OS X) Chrome/120 Safari/537", IP: "1.1.1.1", CreatedAt: time.Now(), LastSeenAt: time.Now()},
+		{IDHash: storepkg.HashSessionID("SECRET-OTHER"), PublicID: "pub-2", UserAgent: "", IP: "2.2.2.2", CreatedAt: time.Now(), LastSeenAt: time.Now()},
 	}}
 	h := handlers.NewSessions(store)
 	body := doAuthedGetWithCookie(t, h.List, "SECRET-CURRENT")
 	assertContains(t, body, `"publicId":"pub-1"`, `"current":true`, `"publicId":"pub-2"`)
+	// The other device must not be flagged current.
+	if n := strings.Count(body, `"current":true`); n != 1 {
+		t.Fatalf(`sessions flagged current = %d, want exactly 1 (the caller's own): %s`, n, body)
+	}
 	assertNotContains(t, body, "SECRET-CURRENT", "SECRET-OTHER")
 }
 
