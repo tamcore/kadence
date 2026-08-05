@@ -458,6 +458,21 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 		r.discard(lc)
 		return existing.client, func() { r.release(existing) }, nil
 	}
+	if lc.closed {
+		// A fan-out peer evicted this shared record AND dropped the last lease
+		// while we were still fanning out, so its transport is already closed.
+		// The record is dead: handing it out would hand out a closed transport,
+		// and re-caching it would poison the cache. Dial a fresh client for
+		// this caller alone — uncached, closed on release, exactly like a
+		// user-defined server. Deliberately not a recursive clientFor call:
+		// repeated eviction could then recurse without bound.
+		r.mu.Unlock()
+		c, err := dialClient(ctx, s, r.httpClient)
+		if err != nil {
+			return nil, noop, err
+		}
+		return c, func() { _ = c.Close() }, nil
+	}
 	if lc.evicted || r.closed {
 		// Evicted (or the whole registry was closed) while this dial was
 		// fanning out. Still usable for this caller, but must not be re-cached;

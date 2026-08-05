@@ -1160,23 +1160,43 @@ func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
 	}
 }
 
-// TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient drives the ACTUAL
-// singleflight fan-out race instead of injecting lease records by hand (which
-// is why the other lease tests missed this): two concurrent clientFor calls
-// share one dial, the first returns, evicts and releases — closing the shared
-// client — and only then does the second waiter run its post-dial insert.
+// fanOutEvictionRound is one reproduction of the singleflight fan-out eviction
+// interleaving, handed to the assert callback of runFanOutEvictionRounds. The
+// callback owns releaseFollower and must call it.
+type fanOutEvictionRound struct {
+	reg *Registry
+	// sharedClient is the product of the one blocked dial the leader owns and
+	// the follower joins. By the time assert runs it is already closed: the
+	// leader evicted it (leases still 1, nothing closes) then released it
+	// (leases -> 0, transport closed).
+	sharedClient *fakeCloseClient
+	// followerClient is what the follower's clientFor handed back.
+	followerClient  mcpClient
+	releaseFollower func()
+	// freshClients are the clients dialed by anyone other than the leader —
+	// i.e. the uncached replacement clientFor dials when it finds the shared
+	// record already closed.
+	freshClients []*fakeCloseClient
+}
+
+// runFanOutEvictionRounds drives the ACTUAL singleflight fan-out race instead
+// of injecting lease records by hand (which is why the earlier lease tests
+// missed the defects here): two concurrent clientFor calls share one dial, the
+// leader returns, evicts and releases — closing the shared client — and only
+// then does the follower resume into its post-dial branch.
 //
-// With the lease record created per-waiter after the dial, the second waiter
-// found an empty map and cached a SECOND record wrapping the now-closed
-// client, so every later cache hit got a dead transport. With the record
-// created inside the singleflight, both waiters share one record: nothing is
-// re-cached after the eviction, and the client is closed exactly once.
+// GOMAXPROCS(1) plus channel handoffs pin the interleaving: the follower only
+// becomes runnable when the leader's dial returns, and the leader then runs its
+// insert/evict/release without a yield point.
 //
-// GOMAXPROCS(1) plus channel handoffs pin the interleaving: the second waiter
-// only becomes runnable when the leader's dial returns, and the leader then
-// runs its insert/evict/release without a yield point. Rounds where the two
-// callers did not actually share one dial are skipped as non-reproductions.
-func TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient(t *testing.T) {
+// Rounds where the follower never joined the fan-out are skipped as
+// non-reproductions. The discriminator is that a follower which DID join can
+// only dial afterwards (the fresh replacement dial), i.e. once the leader has
+// finished, whereas a follower that missed the in-flight dial dials while the
+// leader is still blocked on it. The helper fails if no round reproduced.
+func runFanOutEvictionRounds(t *testing.T, assert func(round int, r fanOutEvictionRound)) {
+	t.Helper()
+
 	prev := runtime.GOMAXPROCS(1)
 	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 
@@ -1184,21 +1204,32 @@ func TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient(t *testing.T) {
 	t.Cleanup(func() { dialClient = restore })
 
 	const rounds = 50
-	shared := 0
+	reproduced := 0
 	for round := range rounds {
 		s := Server{Name: testEnvServerName, Scope: scopeGlobal, FromEnv: true}
 		reg := NewRegistry([]Server{s}, nil, nil)
 
-		client := &fakeCloseClient{}
+		sharedClient := &fakeCloseClient{}
 		var dials atomic.Int32
+		var leaderFinished, dialedAfterLeaderFinished atomic.Bool
+		var freshMu sync.Mutex
+		var fresh []*fakeCloseClient
 		dialStarted := make(chan struct{})
 		releaseDial := make(chan struct{})
 		dialClient = func(context.Context, Server, *http.Client) (mcpClient, error) {
 			if dials.Add(1) == 1 {
 				dialStarted <- struct{}{}
 				<-releaseDial
+				return sharedClient, nil
 			}
-			return client, nil
+			if leaderFinished.Load() {
+				dialedAfterLeaderFinished.Store(true)
+			}
+			c := &fakeCloseClient{}
+			freshMu.Lock()
+			fresh = append(fresh, c)
+			freshMu.Unlock()
+			return c, nil
 		}
 
 		// Leader: dials, then immediately evicts and drops its lease — the
@@ -1214,6 +1245,7 @@ func TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient(t *testing.T) {
 				reg.evictClient(s)
 				release()
 			}
+			leaderFinished.Store(true)
 			leaderDone <- result{c, err}
 		}()
 		<-dialStarted
@@ -1243,26 +1275,50 @@ func TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient(t *testing.T) {
 		if follower.err != nil {
 			t.Fatalf("round %d: follower clientFor: %v", round, follower.err)
 		}
-		if dials.Load() != 1 || follower.c != leader.c {
-			// The follower missed the in-flight dial and dialed on its own;
-			// this round does not exercise the fan-out. Try again.
+		if dials.Load() != 1 && !dialedAfterLeaderFinished.Load() {
 			follower.release()
 			continue
 		}
-		shared++
+		if n := sharedClient.closes.Load(); n != 1 {
+			t.Fatalf("round %d: leader's evict+release closed the shared client %d times, want 1", round, n)
+		}
+		reproduced++
 
-		if n := len(reg.clients); n != 0 {
+		freshMu.Lock()
+		freshCopy := append([]*fakeCloseClient(nil), fresh...)
+		freshMu.Unlock()
+		assert(round, fanOutEvictionRound{
+			reg:             reg,
+			sharedClient:    sharedClient,
+			followerClient:  follower.c,
+			releaseFollower: follower.release,
+			freshClients:    freshCopy,
+		})
+	}
+
+	if reproduced == 0 {
+		t.Fatal("no round observed two callers sharing one dial; the race was never exercised")
+	}
+}
+
+// TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient asserts the fan-out
+// eviction interleaving leaves the cache empty.
+//
+// With the lease record created per-waiter after the dial, the follower found
+// an empty map and cached a SECOND record wrapping the now-closed client, so
+// every later cache hit got a dead transport. With the record created inside
+// the singleflight, both callers share one record: nothing is re-cached after
+// the eviction, and the client is closed exactly once.
+func TestRegistry_FanOutWaiterDoesNotCacheAnEvictedClient(t *testing.T) {
+	runFanOutEvictionRounds(t, func(round int, r fanOutEvictionRound) {
+		if n := len(r.reg.clients); n != 0 {
 			t.Fatalf("round %d: cache holds %d record(s) for a client the leader already evicted and closed; a later cache hit would get a dead transport", round, n)
 		}
-		follower.release()
-		if got := client.closes.Load(); got != 1 {
+		r.releaseFollower()
+		if got := r.sharedClient.closes.Load(); got != 1 {
 			t.Fatalf("round %d: shared client closed %d times, want exactly 1", round, got)
 		}
-	}
-
-	if shared == 0 {
-		t.Fatalf("no round observed two callers sharing one dial; the race was never exercised")
-	}
+	})
 }
 
 // TestRegistry_DialCompletingAfterCloseIsNotCached covers the shutdown edge of
@@ -1313,4 +1369,44 @@ func TestRegistry_DialCompletingAfterCloseIsNotCached(t *testing.T) {
 	if n := client.closes.Load(); n != 1 {
 		t.Fatalf("client closed %d times after its last release, want exactly 1", n)
 	}
+}
+
+// TestRegistry_FanOutWaiterNeverReceivesAClosedClient asserts the stronger
+// property over the same interleaving: a waiter whose peer already evicted AND
+// fully released the shared client must not be handed that dead transport. This
+// is preventable, not a residual — the shared lease record carries `closed`, so
+// the waiter can detect it and dial a fresh, uncached client instead.
+func TestRegistry_FanOutWaiterNeverReceivesAClosedClient(t *testing.T) {
+	runFanOutEvictionRounds(t, func(round int, r fanOutEvictionRound) {
+		fc, ok := r.followerClient.(*fakeCloseClient)
+		if !ok {
+			t.Fatalf("round %d: follower got %T, want *fakeCloseClient", round, r.followerClient)
+		}
+		if fc.closes.Load() != 0 {
+			t.Fatalf("round %d: follower was handed an ALREADY-CLOSED client; its call would fail against a dead transport", round)
+		}
+
+		r.reg.mu.Lock()
+		for key, lc := range r.reg.clients {
+			dead := lc.closed
+			if cc, isFake := lc.client.(*fakeCloseClient); isFake && cc.closes.Load() != 0 {
+				dead = true
+			}
+			if dead {
+				r.reg.mu.Unlock()
+				t.Fatalf("round %d: cache key %q holds a record referencing a closed client", round, key)
+			}
+		}
+		r.reg.mu.Unlock()
+
+		r.releaseFollower()
+		if n := r.sharedClient.closes.Load(); n != 1 {
+			t.Fatalf("round %d: shared client closed %d times, want exactly 1", round, n)
+		}
+		for i, c := range r.freshClients {
+			if n := c.closes.Load(); n != 1 {
+				t.Fatalf("round %d: fresh client %d closed %d times after release, want exactly 1", round, i, n)
+			}
+		}
+	})
 }
