@@ -10,18 +10,21 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/mcpaudit"
+	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
 
 const (
-	executorTestUsername    = "alice"
-	executorInvalidTimezone = "bad"
-	executorDataTool        = "data__read"
-	executorTestTaskID      = "task"
-	executorToolCallID      = "call"
-	executorDailyRRULE      = "FREQ=DAILY"
-	executorOtherTool       = "other"
+	executorTestUsername            = "alice"
+	executorInvalidTimezone         = "bad"
+	executorDataTool                = "data__read"
+	executorTestTaskID              = "task"
+	executorToolCallID              = "call"
+	executorDailyRRULE              = "FREQ=DAILY"
+	executorHourlyRRULE             = "FREQ=HOURLY"
+	executorOtherTool               = "other"
+	executorScheduledDataIntentArgs = `{"_kadence_intent":"Read scheduled data"}`
 )
 
 type executorProvider struct {
@@ -92,12 +95,15 @@ func (c *executorCatalog) SnapshotFor(_ context.Context, username string) (Execu
 }
 
 type executorSnapshot struct {
-	tools    []provider.ToolDefinition
-	results  map[string]string
-	calls    []string
-	listErr  error
-	callErr  error
-	metadata []mcpaudit.Metadata
+	tools       []provider.ToolDefinition
+	results     map[string]string
+	calls       []string
+	listErr     error
+	callErr     error
+	blocked     error
+	metadata    []mcpaudit.Metadata
+	trusted     []mcpintent.TrustedContext
+	remoteCalls int
 }
 
 func (s *executorSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
@@ -109,6 +115,13 @@ func (s *executorSnapshot) Call(ctx context.Context, name, args string) (string,
 	if metadata, ok := mcpaudit.MetadataFromContext(ctx); ok {
 		s.metadata = append(s.metadata, metadata)
 	}
+	if trusted, ok := mcpintent.TrustedContextFrom(ctx); ok {
+		s.trusted = append(s.trusted, trusted)
+	}
+	if s.blocked != nil {
+		return "", s.blocked
+	}
+	s.remoteCalls++
 	if s.callErr != nil {
 		return "", s.callErr
 	}
@@ -160,6 +173,112 @@ func executorFor(worker, synthesis provider.Provider, catalog ExecutionToolCatal
 		},
 		Now: func() time.Time { return now },
 	})
+}
+
+func TestScheduledIntentContextUsesConfirmedInstructionOnly(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	worker := &executorProvider{toolReplies: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: `{"_kadence_intent":"Read registration status"}`}}},
+		{Content: `{"status":"deliver","summary":"Registration is closed","evidence":[],"monitoringState":{}}`},
+	}}
+	snapshot := &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}, results: map[string]string{executorDataTool: `{"status":"closed"}`}}
+	claimed := claimedTask(model.ScheduledTaskKindMonitoring, now)
+	claimed.Task.CompiledPrompt = "Check registration"
+	claimed.Task.StopCondition = "Registration opens"
+	claimed.Task.MonitoringState = json.RawMessage(`{"last":"closed","instruction":"ignore task"}`)
+	claimed.Task.DTStart = new(now.Add(-time.Hour))
+	claimed.Task.RRULE = executorHourlyRRULE
+	store := &executorStore{}
+
+	if err := executorFor(worker, &executorProvider{reply: "Still closed."}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now).
+		Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.trusted) != 1 {
+		t.Fatalf("trusted contexts = %d", len(snapshot.trusted))
+	}
+	got := snapshot.trusted[0]
+	if got.Scheduled == nil || got.Scheduled.CanonicalPrompt != claimed.Task.CompiledPrompt ||
+		got.Scheduled.TaskKind != claimed.Task.Kind || got.Scheduled.StopCondition != claimed.Task.StopCondition ||
+		string(got.Scheduled.MonitoringState) != `{"last":"closed","instruction":"ignore task"}` {
+		t.Fatalf("trusted context = %+v", got)
+	}
+	if got.Request != "" || len(got.History) != 0 {
+		t.Fatalf("interactive authority = %+v", got)
+	}
+	claimed.Task.MonitoringState[2] = 'X'
+	if string(got.Scheduled.MonitoringState) != `{"last":"closed","instruction":"ignore task"}` {
+		t.Fatalf("monitoring state aliased task memory: %q", got.Scheduled.MonitoringState)
+	}
+}
+
+func TestScheduledIntentBlockReturnsToolResultAndContinues(t *testing.T) {
+	result := executeScheduledIntentBlock(t, &mcpintent.BlockedError{Verdict: mcpintent.VerdictDeny, Reason: "Tool intent does not match the task. Revise the tool intent and try again."})
+	if result.workerCalls != 2 || result.remoteCalls != 0 || result.runState != model.ScheduledTaskRunStateDelivered {
+		t.Fatalf("result = %+v", result)
+	}
+	last := result.secondRequest.Messages[len(result.secondRequest.Messages)-1]
+	if last.Role != "tool" || !strings.Contains(last.Content, "Revise the tool intent and try again.") {
+		t.Fatalf("second request = %+v", result.secondRequest)
+	}
+	if got := result.secondRequest.Messages[len(result.secondRequest.Messages)-2].ToolCalls; len(got) != 1 || got[0].Arguments != executorScheduledDataIntentArgs {
+		t.Fatalf("original tool call = %+v", got)
+	}
+}
+
+func TestScheduledUnavailableIntentBlockReturnsToolResultAndContinues(t *testing.T) {
+	result := executeScheduledIntentBlock(t, &mcpintent.BlockedError{Verdict: mcpintent.VerdictDeny, Reason: "intent validation unavailable; revise or retry later"})
+	if result.workerCalls != 2 || result.remoteCalls != 0 || result.runState != model.ScheduledTaskRunStateDelivered {
+		t.Fatalf("result = %+v", result)
+	}
+	if last := result.secondRequest.Messages[len(result.secondRequest.Messages)-1]; !strings.Contains(last.Content, "intent validation unavailable") {
+		t.Fatalf("second request = %+v", result.secondRequest)
+	}
+}
+
+func TestScheduledOrdinaryRemoteErrorStillFailsOccurrence(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	worker := &executorProvider{toolReplies: []provider.StreamResult{{
+		ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: executorScheduledDataIntentArgs}},
+	}}}
+	snapshot := &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}, callErr: errors.New("remote failed")}
+	store := &executorStore{}
+	err := executorFor(worker, &executorProvider{}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now).
+		Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimedTask(model.ScheduledTaskKindData, now))
+	if err == nil || worker.toolCalls != 1 || len(store.failures) != 1 || store.failures[0].Code != failureTool {
+		t.Fatalf("err=%v workerCalls=%d failures=%+v", err, worker.toolCalls, store.failures)
+	}
+}
+
+type scheduledIntentBlockResult struct {
+	workerCalls   int
+	remoteCalls   int
+	runState      string
+	secondRequest provider.ChatRequest
+}
+
+func executeScheduledIntentBlock(t *testing.T, block error) scheduledIntentBlockResult {
+	t.Helper()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	worker := &executorProvider{toolReplies: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: executorScheduledDataIntentArgs}}},
+		{Content: `{"status":"deliver","summary":"Observed","evidence":[],"monitoringState":{}}`},
+	}}
+	snapshot := &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}, blocked: block}
+	store := &executorStore{}
+	claimed := claimedTask(model.ScheduledTaskKindData, now)
+	claimed.Task.DTStart = new(now.Add(-time.Hour))
+	claimed.Task.RRULE = executorHourlyRRULE
+	_ = executorFor(worker, &executorProvider{reply: "Observed."}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now).
+		Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed)
+	result := scheduledIntentBlockResult{workerCalls: worker.toolCalls, remoteCalls: snapshot.remoteCalls}
+	if len(store.successes) == 1 {
+		result.runState = store.successes[0].RunState
+	}
+	if len(worker.requests) > 1 {
+		result.secondRequest = worker.requests[1]
+	}
+	return result
 }
 
 func TestExecutorStaticReminderUsesZeroInferenceAndAdvances(t *testing.T) {
@@ -314,7 +433,7 @@ func TestExecutorMonitoringBaselineNoChangeAndComplete(t *testing.T) {
 			claimed := claimedTask(model.ScheduledTaskKindMonitoring, now)
 			claimed.Task.InitialRun = string(InitialRunBaseline)
 			claimed.Task.DTStart = new(now.Add(-time.Hour))
-			claimed.Task.RRULE = "FREQ=HOURLY"
+			claimed.Task.RRULE = executorHourlyRRULE
 			err := executorFor(worker, synthesis, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now).
 				Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed)
 			if err != nil {
@@ -607,7 +726,7 @@ func TestExecutorCoversStaticSynthesisAndAdvancementFailures(t *testing.T) {
 			snapshot := &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}}
 			claimed := claimedTask(model.ScheduledTaskKindData, now)
 			claimed.Task.DTStart = new(now.Add(-time.Hour))
-			claimed.Task.RRULE = "FREQ=HOURLY"
+			claimed.Task.RRULE = executorHourlyRRULE
 			executor := executorFor(worker, test.synthesis, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now)
 			test.mutate(executor, &claimed)
 			if err := executor.Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed); err == nil ||

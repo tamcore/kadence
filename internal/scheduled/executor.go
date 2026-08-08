@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tamcore/kadence/internal/mcpaudit"
+	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -206,6 +207,7 @@ func (e *Executor) gather(ctx context.Context, actor Actor, claimed model.Claime
 	}
 	streamCtx, cancel := context.WithTimeout(ctx, e.cfg.WorkerTimeout)
 	defer cancel()
+	streamCtx = mcpintent.WithTrustedContext(streamCtx, scheduledIntentContext(claimed.Task))
 	totalToolCalls := 0
 	for range e.cfg.WorkerMaxIterations {
 		result, callErr := boundedToolStream(streamCtx, e.worker, req)
@@ -251,6 +253,10 @@ func (e *Executor) gather(ctx context.Context, actor Actor, claimed model.Claime
 				RequestedTool: call.Name, SafeArguments: call.Arguments,
 			})
 			output, toolErr := snapshot.Call(callCtx, call.Name, call.Arguments)
+			if blocked, ok := mcpintent.AsBlocked(toolErr); ok {
+				output = "error: " + blocked.Error()
+				toolErr = nil
+			}
 			if toolErr != nil {
 				return WorkerOutcome{}, &executionError{failureTool}
 			}
@@ -445,6 +451,13 @@ func workerPrompt(task model.ScheduledTask) string {
 		"Do not include prose or any other tool call in that final response. " +
 		"Data tasks must deliver. Only monitoring may return no_change or complete; complete only when the stopCondition is semantically satisfied.\n<task_json>" +
 		string(payload) + "</task_json>"
+}
+
+func scheduledIntentContext(task model.ScheduledTask) mcpintent.TrustedContext {
+	return mcpintent.TrustedContext{Scheduled: &mcpintent.ScheduledContext{
+		TaskKind: task.Kind, CanonicalPrompt: task.CompiledPrompt, StopCondition: task.StopCondition,
+		MonitoringState: append(json.RawMessage(nil), task.MonitoringState...),
+	}}
 }
 
 func validToolArguments(raw string) bool {
