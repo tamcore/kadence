@@ -75,6 +75,15 @@ func TestAugmentToolRejectsInvalidRequiredEntries(t *testing.T) {
 	}
 }
 
+func TestAugmentToolRejectsDuplicateRequiredEntries(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"object","required":["_kadence_intent","_kadence_intent"]}`,
+		`{"type":"object","required":["city","city"]}`,
+	} {
+		assertSchemaCategory(t, raw, testMalformedRequiredCategory)
+	}
+}
+
 func TestAugmentToolRejectsUnsafeSchemas(t *testing.T) {
 	for _, test := range []struct {
 		raw      string

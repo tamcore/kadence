@@ -54,11 +54,16 @@ func AugmentTool(def provider.ToolDefinition) (provider.ToolDefinition, error) {
 			return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedRequiredCategory}
 		}
 		required = make([]string, 0, len(values))
+		names := make(map[string]struct{}, len(values))
 		for _, value := range values {
 			name, ok := value.(string)
 			if !ok {
 				return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedRequiredCategory}
 			}
+			if _, exists := names[name]; exists {
+				return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedRequiredCategory}
+			}
+			names[name] = struct{}{}
 			required = append(required, name)
 		}
 	}

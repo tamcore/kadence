@@ -71,6 +71,16 @@ func TestExtractArgumentsRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestExtractArgumentsAcceptsUnicodeSurrogatePair(t *testing.T) {
+	got, err := ExtractArguments(`{"_kadence_intent":"Run \ud83d\ude80"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Intent != "Run 🚀" {
+		t.Fatalf("intent=%q", got.Intent)
+	}
+}
+
 func TestStripArgumentsRemovesOnlyIntent(t *testing.T) {
 	got := StripArguments(`{"city":"Bratislava","token":"KADENCE_SECRET_1","_kadence_intent":"weather"}`)
 	if strings.Contains(got, ArgumentName) || !strings.Contains(got, `"city":"Bratislava"`) || !strings.Contains(got, "KADENCE_SECRET_1") {
