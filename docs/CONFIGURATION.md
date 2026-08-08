@@ -75,6 +75,25 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_ALLOWED_TOPICS` | endurance defaults | Approved topics. |
 | `KADENCE_REFUSAL_MESSAGE` | coaching-only default | Reply sent when a message is off-topic. |
 
+## MCP intent safeguard
+
+The MCP intent safeguard is independent of the topic classifier. It reuses the
+guardrail model, base URL, API key, and history-window settings above, including
+their main-provider fallbacks, but does not require
+`KADENCE_GUARDRAIL_ENABLED=true`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_MCP_INTENT_GUARD_ENABLED` | `false` | Require and classify `_kadence_intent` for each LLM-originated remote MCP call, including a remote download made by native FIT analysis. |
+
+When enabled, each remote call adds one classifier request before dispatch, so it
+adds classifier latency to the tool call. The check fails closed: malformed or
+missing intent, unavailable trusted context, a denial, a classifier failure, or an
+invalid response blocks the call. Credential placeholders are substituted only
+after an `ALLOW` decision. When disabled, MCP tool schemas and dispatch keep their
+previous behavior. Startup fails when this flag is enabled and neither
+`KADENCE_GUARDRAIL_API_KEY` nor `KADENCE_LLM_API_KEY` resolves to a non-empty key.
+
 ## Scheduled tasks
 
 Scheduled is opt-in. The main chat model refines a user's request into a
@@ -180,12 +199,14 @@ linked conversation and immutable run audit records.
 
 LLM-selected remote MCP calls from chats and Scheduled workers are recorded with
 their model-visible arguments, secret-redacted result or error, actor, conversation
-UUID, source, tool-call id, model, status, and timing. Audit persistence fails open:
-an audit database error never blocks the tool call. Admins can inspect retained
-records under **MCP Audit**. Health checks, tool discovery, ingestion calls, and
-purely native tools are outside this audit; a native tool's nested remote MCP call
-is included. Existing per-message `tool_calls` remain part of chat history and are
-not governed by this TTL.
+UUID, source, tool-call id, model, status, and timing. Guarded calls also record
+the intent, verdict, and reason; blocked calls have `blocked` status. Audit
+persistence fails open: an audit database error never blocks the tool call. Admins
+can inspect retained records under **MCP Audit** and filter by intent or verdict.
+Full audit records are TTL-only; health checks, tool discovery, ingestion calls,
+and purely native tools are outside this audit, while a native tool's nested remote
+MCP call is included. Existing per-message `tool_calls` remain part of chat history
+and are not governed by this TTL.
 
 ### MCP server env contract
 
@@ -280,18 +301,20 @@ complete, unchanged file successfully.
    unconditional case).
 4. `KADENCE_RATE_LIMIT_GLOBAL` or `KADENCE_RATE_LIMIT_AUTH` is negative.
 5. `KADENCE_LLM_CONTEXT_BUDGET` is not a positive integer.
-6. A `KADENCE_FIT_ROUTE_<N>_*` group is partial, has an invalid scope or prefixed
+6. `KADENCE_MCP_INTENT_GUARD_ENABLED=true` and neither `KADENCE_GUARDRAIL_API_KEY`
+   nor `KADENCE_LLM_API_KEY` is set.
+7. A `KADENCE_FIT_ROUTE_<N>_*` group is partial, has an invalid scope or prefixed
    download-tool name, or duplicates another route's MCP server/scope.
-7. At least one FIT route is configured and `KADENCE_FIT_MAX_BYTES` is not positive.
-8. Scheduled is enabled without a primary `KADENCE_LLM_API_KEY`, or any Scheduled
+8. At least one FIT route is configured and `KADENCE_FIT_MAX_BYTES` is not positive.
+9. Scheduled is enabled without a primary `KADENCE_LLM_API_KEY`, or any Scheduled
    worker budget/concurrency/active-task limit is not positive.
-9. Only some of `KADENCE_PUSH_VAPID_PUBLIC_KEY`, `KADENCE_PUSH_VAPID_PRIVATE_KEY`,
+10. Only some of `KADENCE_PUSH_VAPID_PUBLIC_KEY`, `KADENCE_PUSH_VAPID_PRIVATE_KEY`,
    `KADENCE_PUSH_VAPID_SUBJECT` are set (all three or none are required).
-10. `KADENCE_ENCRYPTION_KEY` is set but fails to base64-decode, or does not decode to
+11. `KADENCE_ENCRYPTION_KEY` is set but fails to base64-decode, or does not decode to
     exactly 32 bytes — **unconditionally**, regardless of whether passkeys or
     user-defined MCP are otherwise enabled. An unset key is not an error; only a
     malformed one is.
-11. Any of these is not a positive integer/duration: `KADENCE_LLM_MAX_TOKENS`,
+12. Any of these is not a positive integer/duration: `KADENCE_LLM_MAX_TOKENS`,
     `KADENCE_LLM_TIMEOUT`, `KADENCE_RAG_TOP_K`, `KADENCE_MCP_MAX_ITERATIONS`,
     `KADENCE_MCP_MAX_TOOLS`, `KADENCE_MCP_AUDIT_TTL`, `KADENCE_UPLOAD_MAX_BYTES`,
     `KADENCE_INGEST_CHUNK_CHARS`. Additionally, `KADENCE_EMBED_DIMENSIONS`,
@@ -320,6 +343,7 @@ weaker CSRF/cookie behavior — rather than failing.
 | Chat | `KADENCE_LLM_API_KEY` set |
 | RAG memory | `KADENCE_EMBED_API_KEY` set |
 | Guardrail | `KADENCE_GUARDRAIL_ENABLED=true` |
+| MCP intent safeguard | `KADENCE_MCP_INTENT_GUARD_ENABLED=true` + resolved guardrail or main API key |
 | Scheduled tasks | `KADENCE_SCHEDULED_ENABLED=true` + `KADENCE_LLM_API_KEY` |
 | Web push | `KADENCE_PUSH_VAPID_PUBLIC_KEY` + `KADENCE_PUSH_VAPID_PRIVATE_KEY` + `KADENCE_PUSH_VAPID_SUBJECT` |
 | Passkeys | `KADENCE_WEBAUTHN_RP_ID` + `KADENCE_TRUSTED_ORIGINS` + 32-byte `KADENCE_ENCRYPTION_KEY` |

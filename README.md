@@ -12,6 +12,9 @@ configurable — the default is endurance running.
   model calls tools, results feed back, it continues).
 - **MCP tools** — external integrations (e.g. Garmin) wired **globally** or
   **per-user**; users can register their own MCP servers by URL + basic auth.
+- **MCP intent safeguard** — optionally requires an explicit tool intent and
+  approves it against the current chat or Scheduled instruction before a remote
+  call can run.
 - **Per-user RAG memory** — past conversations and uploaded documents are embedded
   and retrieved in future chats (private to each user).
 - **Shared corpus** — admins publish material (plans, coaching docs) visible to all.

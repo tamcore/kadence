@@ -208,15 +208,41 @@ short and independent of each server's own filtering. TLS to MCP servers is opti
 (`KADENCE_MCP_CA_FILE` for a custom CA); the deployed sidecars add basic auth and
 network isolation on top.
 
+When the MCP intent safeguard is enabled, Kadence adds the required reserved
+`_kadence_intent` string argument to each accepted remote-tool schema and the
+native FIT analysis schema. Interactive calls use the current user request and
+bounded chat history as trusted context. Scheduled calls use the confirmed task
+instruction and its task state. Tool descriptions and arguments are data, not
+authority.
+
+The guard fails closed before dispatch, in this order:
+
+1. Parse one JSON object, require a non-empty `_kadence_intent`, then remove it
+   from the arguments.
+2. Check the clean arguments, tool definition, intent, and trusted context with
+   the classifier.
+3. Only after `ALLOW`, substitute one-time credential placeholders and invoke the
+   remote tool.
+
+Malformed input, a missing trusted context, a denied decision, a classifier error,
+or an invalid classifier response blocks the call before credential substitution or
+remote dispatch. With the safeguard disabled, schemas and calls retain their prior
+behavior. Native FIT analysis follows the same boundary: its approved intent is
+inherited by the nested download, which is authorized again against that download
+tool and its clean arguments. An inherited intent is not trusted context.
+
 Each LLM-driven remote invocation is independently recorded in `mcp_call_audit`.
 Records attribute the actor, conversation, chat or Scheduled source, model,
-provider tool-call id, remote tool, timing, and terminal status. Arguments are the
-model-visible form before credential substitution; results and errors pass through
-the same broker-secret redaction used by chat persistence. Recording fails open so
-an audit outage cannot change tool availability. Admin list/detail endpoints expose
-retained records; a global TTL hides expired rows at query time and a startup/hourly
-reaper deletes them. Discovery, health, ingestion, and native-only calls are not
-included, while remote calls nested inside native tools are.
+provider tool-call id, remote tool, timing, and terminal status. Guarded records
+also store the intent, guard verdict, and guard reason; a refused call has
+`blocked` status. Arguments are the model-visible form before credential
+substitution; results and errors pass through the same broker-secret redaction used
+by chat persistence. Recording fails open so an audit outage cannot change tool
+availability. Admin list/detail endpoints and the UI can filter by intent and guard
+verdict. Full audit records are retained only for the configured TTL: expired rows
+are hidden at query time and a startup/hourly reaper deletes them. Discovery,
+health, ingestion, and native-only calls are not included, while remote calls
+nested inside native tools are.
 
 ## Native pace conversion (`pace/`)
 
@@ -306,8 +332,9 @@ All timestamps are UTC. Migrations are embedded SQL run by `goose` on startup
 - **documents** / **chunks** — ingested material and their embeddings; `scope`
   distinguishes private from the admin public corpus. Chunks store the embedding model.
 - **user_mcp_servers** — user-registered MCP servers (auth password encrypted).
-- **mcp_call_audit** — bounded full payload/result audit of LLM-driven remote MCP
-  calls, with actor, conversation, source, model, status, and timing snapshots.
+- **mcp_call_audit** — TTL-bounded full payload/result audit of LLM-driven remote
+  MCP calls, with actor, conversation, source, model, intent, guard decision,
+  status, and timing snapshots.
 - **webauthn_credentials** — registered passkeys (credential id, public key, sign
   count, backup flags, transports, last used).
 
@@ -324,8 +351,9 @@ All timestamps are UTC. Migrations are embedded SQL run by `goose` on startup
 - **Credential broker** — when a tool needs a secret (e.g. a service login), the LLM
   only ever sees an opaque one-time placeholder token; the real value is substituted
   at dispatch time and redacted from logs and transcripts.
-- **MCP audit** — stores only model-visible placeholder arguments and broker-redacted
-  outputs/errors; raw substituted credential values are never persisted.
+- **MCP audit** — stores only model-visible placeholder arguments, intent and guard
+  decision fields, and broker-redacted outputs/errors; raw substituted credential
+  values are never persisted.
 - **MCP isolation** — each MCP server is deployed behind a basic-auth nginx sidecar,
   reachable only from the main app by NetworkPolicy, optionally over TLS.
 - **FIT-file isolation** — transient FIT files live in a per-pod `emptyDir`; the
