@@ -25,6 +25,7 @@ const (
 	executorHourlyRRULE             = "FREQ=HOURLY"
 	executorOtherTool               = "other"
 	executorScheduledDataIntentArgs = `{"_kadence_intent":"Read scheduled data"}`
+	executorObservedOutcome         = `{"status":"deliver","summary":"Observed","evidence":[],"monitoringState":{}}`
 )
 
 type executorProvider struct {
@@ -104,6 +105,7 @@ type executorSnapshot struct {
 	metadata    []mcpaudit.Metadata
 	trusted     []mcpintent.TrustedContext
 	remoteCalls int
+	audit       *mcpaudit.Recorder
 }
 
 func (s *executorSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
@@ -121,11 +123,31 @@ func (s *executorSnapshot) Call(ctx context.Context, name, args string) (string,
 	if s.blocked != nil {
 		return "", s.blocked
 	}
+	if s.audit != nil {
+		return s.audit.Call(ctx, name, args, func(context.Context) (string, error) {
+			return s.callRemote(name)
+		})
+	}
+	return s.callRemote(name)
+}
+
+func (s *executorSnapshot) callRemote(name string) (string, error) {
 	s.remoteCalls++
 	if s.callErr != nil {
 		return "", s.callErr
 	}
 	return s.results[name], nil
+}
+
+type executorAuditStore struct{ started []model.MCPAuditCall }
+
+func (s *executorAuditStore) Start(_ context.Context, call model.MCPAuditCall) (int64, error) {
+	s.started = append(s.started, call)
+	return int64(len(s.started)), nil
+}
+
+func (*executorAuditStore) Finish(context.Context, int64, string, string, string, time.Time) error {
+	return nil
 }
 
 type executorStore struct {
@@ -250,6 +272,38 @@ func TestScheduledOrdinaryRemoteErrorStillFailsOccurrence(t *testing.T) {
 	}
 }
 
+func TestScheduledAuditStripsIntentFromRecorderArguments(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	arguments := `{"id":7,"_kadence_intent":"Read scheduled data"}`
+	worker := &executorProvider{toolReplies: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: arguments}}},
+		{Content: executorObservedOutcome},
+	}}
+	auditStore := &executorAuditStore{}
+	snapshot := &executorSnapshot{
+		tools:   []provider.ToolDefinition{{Name: executorDataTool}},
+		results: map[string]string{executorDataTool: `{"status":"observed"}`},
+		audit:   mcpaudit.NewRecorder(auditStore, nil, func() time.Time { return now }),
+	}
+	claimed := claimedTask(model.ScheduledTaskKindData, now)
+	claimed.Task.DTStart = new(now.Add(-time.Hour))
+	claimed.Task.RRULE = executorHourlyRRULE
+	if err := executorFor(worker, &executorProvider{reply: "Observed."}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, &executorStore{}, now).
+		Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed); err != nil {
+		t.Fatal(err)
+	}
+	if len(auditStore.started) != 1 {
+		t.Fatalf("started audit calls = %d", len(auditStore.started))
+	}
+	got := auditStore.started[0]
+	if got.Arguments != `{"id":7}` || strings.Contains(got.Arguments, mcpintent.ArgumentName) || strings.Contains(got.Arguments, "Read scheduled data") || got.Intent != "" {
+		t.Fatalf("audit call = %+v", got)
+	}
+	if got := worker.requests[1].Messages[1].ToolCalls; len(got) != 1 || got[0].Arguments != arguments {
+		t.Fatalf("worker continuation tool calls = %+v", got)
+	}
+}
+
 type scheduledIntentBlockResult struct {
 	workerCalls   int
 	remoteCalls   int
@@ -262,7 +316,7 @@ func executeScheduledIntentBlock(t *testing.T, block error) scheduledIntentBlock
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	worker := &executorProvider{toolReplies: []provider.StreamResult{
 		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: executorScheduledDataIntentArgs}}},
-		{Content: `{"status":"deliver","summary":"Observed","evidence":[],"monitoringState":{}}`},
+		{Content: executorObservedOutcome},
 	}}
 	snapshot := &executorSnapshot{tools: []provider.ToolDefinition{{Name: executorDataTool}}, blocked: block}
 	store := &executorStore{}
@@ -616,7 +670,7 @@ func TestExecutorCoversGatherValidationFailures(t *testing.T) {
 			Name: submitScheduledOutcomeTool, Arguments: `[]`,
 		}}}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureInvalidOutcome},
 		{name: "mixed outcome and data tools", replies: []provider.StreamResult{{ToolCalls: []provider.ToolCall{
-			{Name: submitScheduledOutcomeTool, Arguments: `{"status":"deliver","summary":"Observed","evidence":[],"monitoringState":{}}`},
+			{Name: submitScheduledOutcomeTool, Arguments: executorObservedOutcome},
 			{Name: executorDataTool, Arguments: `{}`},
 		}}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureInvalidOutcome},
 		{name: "malformed arguments", replies: []provider.StreamResult{{ToolCalls: []provider.ToolCall{{Name: executorDataTool, Arguments: `[]`}}}}, mutate: func(*Executor, *model.ClaimedScheduledTask, *executorCatalog, *executorSnapshot) {}, code: failureMalformedToolCall},

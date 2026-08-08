@@ -250,7 +250,7 @@ func (e *Executor) gather(ctx context.Context, actor Actor, claimed model.Claime
 				Source:          model.MCPAuditSourceScheduled,
 				ScheduledTaskID: &claimed.Task.ID, ScheduledRunID: &claimed.Run.ID,
 				Model: e.cfg.WorkerModel, ToolCallID: call.ID,
-				RequestedTool: call.Name, SafeArguments: call.Arguments,
+				RequestedTool: call.Name, SafeArguments: mcpintent.StripArguments(call.Arguments),
 			})
 			output, toolErr := snapshot.Call(callCtx, call.Name, call.Arguments)
 			if blocked, ok := mcpintent.AsBlocked(toolErr); ok {
