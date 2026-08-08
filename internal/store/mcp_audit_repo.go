@@ -27,6 +27,8 @@ type MCPAuditFilter struct {
 	Status          string
 	Model           string
 	Tool            string
+	Intent          string
+	GuardVerdict    string
 	BeforeStartedAt *time.Time
 	BeforeID        int64
 	Limit           int
@@ -45,12 +47,16 @@ func (r *MCPAuditRepository) Start(ctx context.Context, call model.MCPAuditCall)
 		INSERT INTO mcp_call_audit (
 			actor_user_id, actor_username, conversation_id, source,
 			scheduled_task_id, scheduled_run_id, model, tool_call_id,
-			tool_name, arguments, started_at
-		) VALUES ($1, $2, $3::uuid, $4, $5::uuid, $6, $7, $8, $9, $10, $11)
+			tool_name, arguments, intent, guard_verdict, guard_reason,
+			status, started_at, finished_at
+		) VALUES ($1, $2, $3::uuid, $4, $5::uuid, $6, $7, $8, $9, $10, $11,
+			COALESCE(NULLIF($12, ''), 'not_evaluated'), $13,
+			COALESCE(NULLIF($14, ''), 'running'), $15, $16)
 		RETURNING id`,
 		call.ActorUserID, call.ActorUsername, call.ConversationID, call.Source,
 		call.ScheduledTaskID, call.ScheduledRunID, call.Model, call.ToolCallID,
-		call.ToolName, call.Arguments, call.StartedAt,
+		call.ToolName, call.Arguments, call.Intent, call.GuardVerdict, call.GuardReason,
+		call.Status, call.StartedAt, call.FinishedAt,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("start MCP audit: %w", err)
@@ -79,7 +85,8 @@ func (r *MCPAuditRepository) Get(ctx context.Context, id int64, cutoff time.Time
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, actor_user_id, actor_username, conversation_id::text, source,
 		       scheduled_task_id::text, scheduled_run_id, model, tool_call_id,
-		       tool_name, arguments, status, result, error, started_at, finished_at
+		       tool_name, arguments, intent, guard_verdict, guard_reason,
+		       status, result, error, started_at, finished_at
 		  FROM mcp_call_audit
 		 WHERE id = $1 AND started_at >= $2`, id, cutoff)
 	call, err := scanMCPAudit(row)
@@ -103,7 +110,8 @@ func (r *MCPAuditRepository) List(ctx context.Context, f MCPAuditFilter) ([]mode
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, actor_user_id, actor_username, conversation_id::text, source,
 		       scheduled_task_id::text, scheduled_run_id, model, tool_call_id,
-		       tool_name, '' AS arguments, status, '' AS result, '' AS error,
+		       tool_name, '' AS arguments, intent, guard_verdict, '' AS guard_reason,
+		       status, '' AS result, '' AS error,
 		       started_at, finished_at
 		  FROM mcp_call_audit
 		 WHERE started_at >= $1
@@ -115,11 +123,14 @@ func (r *MCPAuditRepository) List(ctx context.Context, f MCPAuditFilter) ([]mode
 		   AND ($7 = '' OR status = $7)
 		   AND ($8 = '' OR model = $8)
 		   AND ($9 = '' OR tool_name = $9)
-		   AND ($10::timestamptz IS NULL OR (started_at, id) < ($10, $11))
+		   AND ($10 = '' OR intent ILIKE '%' || $10 || '%')
+		   AND ($11 = '' OR guard_verdict = $11)
+		   AND ($12::timestamptz IS NULL OR (started_at, id) < ($12, $13))
 		 ORDER BY started_at DESC, id DESC
-		 LIMIT $12`,
+		 LIMIT $14`,
 		f.Cutoff, f.From, f.To, f.ActorUserID, f.ConversationID,
-		f.Source, f.Status, f.Model, f.Tool, f.BeforeStartedAt, f.BeforeID, limit+1)
+		f.Source, f.Status, f.Model, f.Tool, f.Intent, f.GuardVerdict,
+		f.BeforeStartedAt, f.BeforeID, limit+1)
 	if err != nil {
 		return nil, false, fmt.Errorf("list MCP audit: %w", err)
 	}
@@ -160,8 +171,9 @@ func scanMCPAudit(row mcpAuditScanner) (model.MCPAuditCall, error) {
 	err := row.Scan(
 		&call.ID, &call.ActorUserID, &call.ActorUsername, &call.ConversationID,
 		&call.Source, &call.ScheduledTaskID, &call.ScheduledRunID, &call.Model,
-		&call.ToolCallID, &call.ToolName, &call.Arguments, &call.Status,
-		&call.Result, &call.Error, &call.StartedAt, &call.FinishedAt,
+		&call.ToolCallID, &call.ToolName, &call.Arguments, &call.Intent,
+		&call.GuardVerdict, &call.GuardReason, &call.Status, &call.Result,
+		&call.Error, &call.StartedAt, &call.FinishedAt,
 	)
 	return call, err
 }

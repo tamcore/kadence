@@ -16,11 +16,14 @@ const (
 	testConversation  = "chat-id"
 	testModel         = "model-a"
 	testSecretResult  = `{"token":"secret"}`
+	testRedacted      = "[REDACTED]"
 )
 
 type auditStoreFake struct {
 	started          model.MCPAuditCall
 	finished         model.MCPAuditCall
+	startedCalls     []model.MCPAuditCall
+	finishedCalls    []model.MCPAuditCall
 	startErr         error
 	finishErr        error
 	finishContextErr error
@@ -29,6 +32,7 @@ type auditStoreFake struct {
 
 func (f *auditStoreFake) Start(ctx context.Context, call model.MCPAuditCall) (int64, error) {
 	f.started = call
+	f.startedCalls = append(f.startedCalls, call)
 	f.startDeadline, _ = ctx.Deadline()
 	return 42, f.startErr
 }
@@ -38,7 +42,88 @@ func (f *auditStoreFake) Finish(ctx context.Context, id int64, status, result, e
 	f.finished = model.MCPAuditCall{
 		ID: id, Status: status, Result: result, Error: errorText, FinishedAt: &finishedAt,
 	}
+	f.finishedCalls = append(f.finishedCalls, f.finished)
 	return f.finishErr
+}
+
+func TestRecorderCallStoresAllowedDecisionOnce(t *testing.T) {
+	store := &auditStoreFake{}
+	recorder := NewRecorder(store, nil, fixedAuditNow)
+	ctx := WithMetadata(context.Background(), Metadata{
+		ActorUserID: 7, RequestedTool: "mcp__read", SafeArguments: `{"id":1}`,
+		Intent: "Read activity", GuardVerdict: model.MCPAuditGuardAllowed,
+		GuardReason: "Matches request",
+	})
+
+	_, err := recorder.Call(ctx, "mcp__read", `{"id":1}`, func(context.Context) (string, error) {
+		return "ok", nil
+	})
+	if err != nil || len(store.startedCalls) != 1 || len(store.finishedCalls) != 1 {
+		t.Fatalf("start=%d finish=%d err=%v", len(store.startedCalls), len(store.finishedCalls), err)
+	}
+	if got := store.startedCalls[0]; got.Intent != "Read activity" ||
+		got.GuardVerdict != model.MCPAuditGuardAllowed || got.GuardReason != "Matches request" {
+		t.Fatalf("started audit = %+v", got)
+	}
+}
+
+func TestRecorderBlockStoresOneTerminalRow(t *testing.T) {
+	store := &auditStoreFake{}
+	recorder := NewRecorder(store, nil, fixedAuditNow)
+	ctx := WithMetadata(context.Background(), Metadata{
+		ActorUserID: 7,
+		Sanitize: func(value string) string {
+			if value == "Read secret" || value == "Tool mutates secret data" {
+				return testRedacted
+			}
+			return value
+		},
+	})
+
+	recorder.Block(ctx, "mcp__write", `{"id":1}`, "Read secret", model.MCPAuditGuardDenied, "Tool mutates secret data")
+	if len(store.startedCalls) != 1 || len(store.finishedCalls) != 0 {
+		t.Fatalf("start=%d finish=%d", len(store.startedCalls), len(store.finishedCalls))
+	}
+	got := store.startedCalls[0]
+	if got.Status != model.MCPAuditStatusBlocked || got.GuardVerdict != model.MCPAuditGuardDenied ||
+		got.FinishedAt == nil || got.Intent != testRedacted || got.GuardReason != testRedacted {
+		t.Fatalf("blocked audit = %+v", got)
+	}
+}
+
+func TestRecorderBlockIgnoresStartFailure(t *testing.T) {
+	store := &auditStoreFake{startErr: errors.New("database unavailable")}
+	recorder := NewRecorder(store, slog.New(slog.NewTextHandler(io.Discard, nil)), fixedAuditNow)
+	ctx := WithMetadata(context.Background(), Metadata{ActorUserID: 7})
+
+	recorder.Block(ctx, "mcp__write", `{"id":1}`, "Write activity", model.MCPAuditGuardDenied, "Tool mutates data")
+	if len(store.startedCalls) != 1 || len(store.finishedCalls) != 0 {
+		t.Fatalf("start=%d finish=%d", len(store.startedCalls), len(store.finishedCalls))
+	}
+}
+
+func TestRecorderCallRunsOnceWhenPersistenceFails(t *testing.T) {
+	for _, store := range []*auditStoreFake{
+		{startErr: errors.New("start unavailable")},
+		{finishErr: errors.New("finish unavailable")},
+	} {
+		t.Run("persistence failure", func(t *testing.T) {
+			recorder := NewRecorder(store, slog.New(slog.NewTextHandler(io.Discard, nil)), fixedAuditNow)
+			ctx := WithMetadata(context.Background(), Metadata{ActorUserID: 7})
+			calls := 0
+			out, err := recorder.Call(ctx, "mcp__read", `{}`, func(context.Context) (string, error) {
+				calls++
+				return "ok", nil
+			})
+			if out != "ok" || err != nil || calls != 1 {
+				t.Fatalf("out=%q err=%v calls=%d", out, err, calls)
+			}
+		})
+	}
+}
+
+func fixedAuditNow() time.Time {
+	return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 }
 
 func TestRecorderStoresSafeSuccessfulCall(t *testing.T) {

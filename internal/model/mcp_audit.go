@@ -9,6 +9,12 @@ const (
 	MCPAuditStatusRunning   = "running"
 	MCPAuditStatusSucceeded = "succeeded"
 	MCPAuditStatusFailed    = "failed"
+	MCPAuditStatusBlocked   = "blocked"
+
+	MCPAuditGuardNotEvaluated = "not_evaluated"
+	MCPAuditGuardAllowed      = "allowed"
+	MCPAuditGuardDenied       = "denied"
+	MCPAuditGuardError        = "error"
 )
 
 // MCPAuditCall records one remote MCP invocation selected by an LLM.
@@ -26,6 +32,9 @@ type MCPAuditCall struct {
 	ToolCallID      string
 	ToolName        string
 	Arguments       string
+	Intent          string
+	GuardVerdict    string
+	GuardReason     string
 	Status          string
 	Result          string
 	Error           string

@@ -34,6 +34,9 @@ type Metadata struct {
 	ToolCallID      string
 	RequestedTool   string
 	SafeArguments   string
+	Intent          string
+	GuardVerdict    string
+	GuardReason     string
 	Sanitize        func(string) string
 }
 
@@ -101,7 +104,10 @@ func (r *Recorder) Call(
 		ScheduledTaskID: metadata.ScheduledTaskID, ScheduledRunID: metadata.ScheduledRunID,
 		Model: metadata.Model, ToolCallID: metadata.ToolCallID,
 		ToolName: toolName, Arguments: auditArguments,
-		Status: model.MCPAuditStatusRunning, StartedAt: r.now(),
+		Intent:       sanitize(metadata, metadata.Intent),
+		GuardVerdict: guardVerdict(metadata.GuardVerdict),
+		GuardReason:  sanitize(metadata, metadata.GuardReason),
+		Status:       model.MCPAuditStatusRunning, StartedAt: r.now(),
 	}
 	startCtx, cancelStart := context.WithTimeout(persistenceCtx, startTimeout)
 	id, startErr := r.store.Start(startCtx, call)
@@ -131,9 +137,46 @@ func (r *Recorder) Call(
 	return out, callErr
 }
 
+// Block records a denied remote MCP dispatch without executing it.
+func (r *Recorder) Block(
+	ctx context.Context, toolName, arguments, intent, verdict, reason string,
+) {
+	metadata, enabled := MetadataFromContext(ctx)
+	if r == nil || r.store == nil || !enabled {
+		return
+	}
+	auditArguments := arguments
+	if metadata.RequestedTool == toolName {
+		auditArguments = metadata.SafeArguments
+	}
+	finishedAt := r.now()
+	call := model.MCPAuditCall{
+		ActorUserID: metadata.ActorUserID, ActorUsername: metadata.ActorUsername,
+		ConversationID: metadata.ConversationID, Source: metadata.Source,
+		ScheduledTaskID: metadata.ScheduledTaskID, ScheduledRunID: metadata.ScheduledRunID,
+		Model: metadata.Model, ToolCallID: metadata.ToolCallID,
+		ToolName: toolName, Arguments: auditArguments,
+		Intent: sanitize(metadata, intent), GuardVerdict: guardVerdict(verdict),
+		GuardReason: sanitize(metadata, reason),
+		Status:      model.MCPAuditStatusBlocked, StartedAt: finishedAt, FinishedAt: &finishedAt,
+	}
+	startCtx, cancelStart := context.WithTimeout(persistenceContextFrom(ctx), startTimeout)
+	defer cancelStart()
+	if _, err := r.store.Start(startCtx, call); err != nil {
+		r.log.Error("MCP audit blocked start failed", "tool", toolName, "err", err)
+	}
+}
+
 func sanitize(metadata Metadata, value string) string {
 	if metadata.Sanitize != nil {
 		return metadata.Sanitize(value)
+	}
+	return value
+}
+
+func guardVerdict(value string) string {
+	if value == "" {
+		return model.MCPAuditGuardNotEvaluated
 	}
 	return value
 }
