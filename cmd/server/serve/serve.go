@@ -27,6 +27,7 @@ import (
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/mcpaudit"
+	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/reindex"
 	"github.com/tamcore/kadence/internal/scheduled"
@@ -129,6 +130,19 @@ func newScheduledService(
 	return service, tasks
 }
 
+func newIntentGuard(cfg config.Config) mcpintent.Evaluator {
+	if !cfg.MCPIntentGuardEnabled {
+		return nil
+	}
+	guard := mcpintent.NewGuard(
+		provider.NewOpenAICompat(cfg.ResolvedGuardrailBaseURL(), cfg.ResolvedGuardrailAPIKey()),
+		mcpintent.Config{Model: cfg.ResolvedGuardrailModel(), HistoryWindow: cfg.GuardrailHistoryWindow},
+	)
+	slog.Info("MCP intent guard enabled",
+		"model", cfg.ResolvedGuardrailModel(), "base_url", cfg.ResolvedGuardrailBaseURL())
+	return guard
+}
+
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
 func Run() error {
 	cfg := config.Load()
@@ -192,6 +206,7 @@ func Run() error {
 		convs := store.NewConversationRepository(pool)
 		msgs := store.NewMessageRepository(pool)
 		prov := provider.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey)
+		intentGuard := newIntentGuard(cfg)
 		var guardrail *chat.Guardrail
 		if cfg.GuardrailEnabled {
 			gProv := provider.NewOpenAICompat(cfg.ResolvedGuardrailBaseURL(), cfg.ResolvedGuardrailAPIKey())
@@ -293,7 +308,7 @@ func Run() error {
 				})
 			}
 		}
-		unattendedTools := chat.NewUnattendedCatalog(mcpTools, fitRoutes, auditRecorder)
+		unattendedTools := chat.NewUnattendedCatalog(mcpTools, fitRoutes, auditRecorder, intentGuard)
 		skills, err := skill.Load()
 		if err != nil {
 			return fmt.Errorf("load skills: %w", err)
@@ -320,6 +335,7 @@ func Run() error {
 			FITRoutes:   fitRoutes,
 			Secrets:     broker,
 			Audit:       auditRecorder,
+			IntentGuard: intentGuard,
 			Attachments: chatContent.attachments,
 			Documents:   documentsRepo,
 			Scheduled:   scheduledWiring.handoff,

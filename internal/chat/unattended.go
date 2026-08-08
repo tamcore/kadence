@@ -11,6 +11,7 @@ import (
 
 	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/mcpaudit"
+	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/provider"
 )
 
@@ -18,9 +19,11 @@ import (
 // for both chat and unattended workers. Interactive-only built-ins are never
 // included; shared local tools are.
 type UnattendedCatalog struct {
-	mcp       MCPTools
-	fitRoutes []FITRoute
-	audit     *mcpaudit.Recorder
+	mcp         MCPTools
+	fitRoutes   []FITRoute
+	audit       *mcpaudit.Recorder
+	intentGuard mcpintent.Evaluator
+	log         *slog.Logger
 }
 
 type resolvedFITRoute struct {
@@ -30,29 +33,39 @@ type resolvedFITRoute struct {
 }
 
 // NewUnattendedCatalog constructs an owner-scoped tool catalog.
-func NewUnattendedCatalog(mcp MCPTools, fitRoutes []FITRoute, audit ...*mcpaudit.Recorder) *UnattendedCatalog {
-	catalog := &UnattendedCatalog{mcp: mcp, fitRoutes: append([]FITRoute(nil), fitRoutes...)}
-	if len(audit) > 0 {
-		catalog.audit = audit[0]
+func NewUnattendedCatalog(mcp MCPTools, fitRoutes []FITRoute, audit *mcpaudit.Recorder, intentGuard mcpintent.Evaluator) *UnattendedCatalog {
+	return &UnattendedCatalog{
+		mcp:         mcp,
+		fitRoutes:   append([]FITRoute(nil), fitRoutes...),
+		audit:       audit,
+		intentGuard: intentGuard,
+		log:         slog.Default(),
 	}
-	return catalog
 }
 
 // UnattendedSnapshot is one user's immutable tool list and dispatch route.
 type UnattendedSnapshot struct {
-	mcp       MCPUserSnapshot
-	tools     []provider.ToolDefinition
-	allowed   map[string]struct{}
-	fitRoutes []resolvedFITRoute
-	audit     *mcpaudit.Recorder
+	mcp         MCPUserSnapshot
+	tools       []provider.ToolDefinition
+	allowed     map[string]struct{}
+	fitRoutes   []resolvedFITRoute
+	audit       *mcpaudit.Recorder
+	definitions map[string]provider.ToolDefinition
+	intentGuard mcpintent.Evaluator
 }
 
 // SnapshotFor resolves username once, eagerly lists its tools, and freezes the
 // exact definitions and routes used for all later calls.
 func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*UnattendedSnapshot, error) {
+	var intentGuard mcpintent.Evaluator
+	if c != nil {
+		intentGuard = c.intentGuard
+	}
 	snapshot := &UnattendedSnapshot{
-		tools:   []provider.ToolDefinition{paceToolDefinition()},
-		allowed: map[string]struct{}{convertPaceToolName: {}},
+		tools:       []provider.ToolDefinition{paceToolDefinition()},
+		allowed:     map[string]struct{}{convertPaceToolName: {}},
+		definitions: map[string]provider.ToolDefinition{convertPaceToolName: paceToolDefinition()},
+		intentGuard: intentGuard,
 	}
 	if c == nil || c.mcp == nil || !c.mcp.Enabled() {
 		return snapshot, nil
@@ -79,12 +92,45 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 		if _, exists := snapshot.allowed[definition.Name]; exists {
 			continue
 		}
+		if snapshot.intentGuard != nil {
+			guarded, guardErr := mcpintent.AugmentTool(definition)
+			if guardErr != nil {
+				logger := c.log
+				if logger == nil {
+					logger = slog.Default()
+				}
+				category := "invalid"
+				var schemaErr *mcpintent.SchemaError
+				if errors.As(guardErr, &schemaErr) {
+					category = schemaErr.Category
+				}
+				logger.Warn("MCP tool omitted from intent guard catalog", "tool", definition.Name, "category", category)
+				continue
+			}
+			definition = guarded
+		}
 		snapshot.allowed[definition.Name] = struct{}{}
 		snapshot.tools = append(snapshot.tools, definition)
+		snapshot.definitions[definition.Name] = definition
 	}
 	if len(snapshot.fitRoutes) > 0 {
+		definition := fitToolDefinition(snapshot.fitRoutes)
+		if snapshot.intentGuard != nil {
+			guarded, guardErr := mcpintent.AugmentTool(definition)
+			if guardErr == nil {
+				definition = guarded
+			} else {
+				logger := c.log
+				if logger == nil {
+					logger = slog.Default()
+				}
+				logger.Warn("MCP tool omitted from intent guard catalog", "tool", definition.Name, "category", "invalid")
+				return snapshot, nil
+			}
+		}
 		snapshot.allowed[analyzeGarminFITToolName] = struct{}{}
-		snapshot.tools = append(snapshot.tools, fitToolDefinition(snapshot.fitRoutes))
+		snapshot.tools = append(snapshot.tools, definition)
+		snapshot.definitions[definition.Name] = definition
 	}
 	return snapshot, nil
 }
@@ -98,7 +144,15 @@ func (s *UnattendedSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinitio
 }
 
 // Call dispatches only a name present in the frozen tool list.
+type ArgumentTransform func(string) (string, error)
+
+func IdentityArguments(arguments string) (string, error) { return arguments, nil }
+
 func (s *UnattendedSnapshot) Call(ctx context.Context, toolName, argsJSON string) (string, error) {
+	return s.CallWithTransform(ctx, toolName, argsJSON, IdentityArguments)
+}
+
+func (s *UnattendedSnapshot) CallWithTransform(ctx context.Context, toolName, argsJSON string, transform ArgumentTransform) (string, error) {
 	if s == nil {
 		return "", errors.New("chat: no unattended tool snapshot")
 	}
@@ -108,13 +162,27 @@ func (s *UnattendedSnapshot) Call(ctx context.Context, toolName, argsJSON string
 	if toolName == convertPaceToolName {
 		return callPaceTool(argsJSON)
 	}
+	if transform == nil {
+		transform = IdentityArguments
+	}
+	if s.intentGuard != nil {
+		return s.callGuardedDirect(ctx, toolName, argsJSON, transform)
+	}
 	if toolName == analyzeGarminFITToolName {
-		return s.callFIT(ctx, argsJSON)
+		arguments, err := transform(argsJSON)
+		if err != nil {
+			return "", err
+		}
+		return s.callFIT(ctx, arguments)
 	}
 	if s.mcp == nil {
 		return "", errors.New("chat: no MCP snapshot")
 	}
-	return s.callRemote(ctx, toolName, argsJSON)
+	arguments, err := transform(argsJSON)
+	if err != nil {
+		return "", err
+	}
+	return s.callAllowedRemote(ctx, toolName, arguments)
 }
 
 // ToolHints retains the MCPUserSnapshot contract for interactive chat.
@@ -132,6 +200,26 @@ func (s *UnattendedSnapshot) ServerPrefix(name, scope string) (string, bool) {
 		return "", false
 	}
 	return resolver.ServerPrefix(name, scope)
+}
+
+func (s *UnattendedSnapshot) callGuardedDirect(ctx context.Context, toolName, arguments string, transform ArgumentTransform) (string, error) {
+	parsed, err := mcpintent.ExtractArguments(arguments)
+	if err != nil {
+		return "", s.block(ctx, toolName, mcpintent.StripArguments(arguments), "", mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool intent is invalid"})
+	}
+	ctx, err = s.authorize(ctx, toolName, parsed.SafeJSON, parsed.Intent)
+	if err != nil {
+		return "", err
+	}
+	clean, err := transform(parsed.SafeJSON)
+	if err != nil {
+		return "", err
+	}
+	ctx = mcpintent.WithInheritedIntent(ctx, parsed.Intent)
+	if toolName == analyzeGarminFITToolName {
+		return s.callFIT(ctx, clean)
+	}
+	return s.callAllowedRemote(ctx, toolName, clean)
 }
 
 func (s *UnattendedSnapshot) callFIT(ctx context.Context, argsJSON string) (string, error) {
@@ -161,6 +249,9 @@ func (s *UnattendedSnapshot) callFIT(ctx context.Context, argsJSON string) (stri
 	}
 	activity, err := analyzer.Analyze(ctx, remoteCaller{snapshot: s}, args.ActivityID)
 	if err != nil {
+		if _, blocked := mcpintent.AsBlocked(err); blocked {
+			return "", err
+		}
 		slog.Warn("FIT analysis failed", "stage", fitactivity.FailureStage(err))
 		return "", errors.New("could not analyze FIT activity")
 	}
@@ -178,9 +269,67 @@ func (c remoteCaller) Call(ctx context.Context, toolName, arguments string) (str
 }
 
 func (s *UnattendedSnapshot) callRemote(ctx context.Context, toolName, arguments string) (string, error) {
+	if s.intentGuard != nil {
+		intent, ok := mcpintent.InheritedIntentFrom(ctx)
+		if !ok {
+			return "", s.block(ctx, toolName, arguments, "", mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool intent is invalid"})
+		}
+		var err error
+		ctx, err = s.authorize(ctx, toolName, arguments, intent)
+		if err != nil {
+			return "", err
+		}
+	}
+	return s.callAllowedRemote(ctx, toolName, arguments)
+}
+
+func (s *UnattendedSnapshot) callAllowedRemote(ctx context.Context, toolName, arguments string) (string, error) {
 	return s.audit.Call(ctx, toolName, arguments, func(callCtx context.Context) (string, error) {
 		return s.mcp.Call(callCtx, toolName, arguments)
 	})
+}
+
+func (s *UnattendedSnapshot) authorize(ctx context.Context, toolName, arguments, intent string) (context.Context, error) {
+	definition, ok := s.definitions[toolName]
+	if !ok {
+		return ctx, s.block(ctx, toolName, arguments, intent, mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool definition is unavailable"})
+	}
+	decision, err := s.intentGuard.Evaluate(ctx, mcpintent.Input{
+		Intent: intent, ToolName: toolName, ToolDescription: definition.Description, Arguments: arguments,
+	})
+	if err != nil || decision.Verdict != mcpintent.VerdictAllow {
+		if decision.Reason == "" {
+			decision.Reason = "tool intent could not be approved"
+		}
+		return ctx, s.block(ctx, toolName, arguments, intent, decision)
+	}
+	metadata, hasMetadata := mcpaudit.MetadataFromContext(ctx)
+	if hasMetadata {
+		metadata.SafeArguments = arguments
+		metadata.Intent = intent
+		metadata.GuardVerdict = decision.Verdict
+		metadata.GuardReason = decision.Reason
+		ctx = mcpaudit.WithMetadata(ctx, metadata)
+	}
+	return ctx, nil
+}
+
+func (s *UnattendedSnapshot) block(ctx context.Context, toolName, arguments, intent string, decision mcpintent.Decision) error {
+	if decision.Verdict != mcpintent.VerdictDeny {
+		decision.Verdict = mcpintent.VerdictDeny
+	}
+	if decision.Reason == "" {
+		decision.Reason = "tool intent could not be approved"
+	}
+	if metadata, ok := mcpaudit.MetadataFromContext(ctx); ok {
+		metadata.SafeArguments = arguments
+		metadata.Intent = intent
+		metadata.GuardVerdict = decision.Verdict
+		metadata.GuardReason = decision.Reason
+		ctx = mcpaudit.WithMetadata(ctx, metadata)
+	}
+	s.audit.Block(ctx, toolName, arguments, intent, decision.Verdict, decision.Reason)
+	return &mcpintent.BlockedError{Verdict: decision.Verdict, Reason: decision.Reason}
 }
 
 func resolveFITRoutes(mcpSnap MCPUserSnapshot, configured []FITRoute) []resolvedFITRoute {

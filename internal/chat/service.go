@@ -16,6 +16,7 @@ import (
 
 	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/mcpaudit"
+	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/scheduled"
@@ -251,9 +252,10 @@ type Deps struct {
 	// placeholder substitution at MCP dispatch, and secret redaction. Nil
 	// disables the feature entirely: the tool is not offered and no
 	// substitution/redaction runs.
-	Secrets   *secret.Broker
-	FITRoutes []FITRoute
-	Audit     *mcpaudit.Recorder
+	Secrets     *secret.Broker
+	FITRoutes   []FITRoute
+	Audit       *mcpaudit.Recorder
+	IntentGuard mcpintent.Evaluator
 	// Attachments locally validates current-turn files and, after guardrail
 	// classification, extracts document text. Nil supports text-only chat.
 	Attachments *AttachmentProcessor
@@ -292,7 +294,7 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		documents:   deps.Documents,
 		scheduled:   deps.Scheduled,
 		fitRoutes:   append([]FITRoute(nil), deps.FITRoutes...),
-		toolCatalog: NewUnattendedCatalog(deps.MCP, deps.FITRoutes, deps.Audit),
+		toolCatalog: NewUnattendedCatalog(deps.MCP, deps.FITRoutes, deps.Audit, deps.IntentGuard),
 	}
 }
 

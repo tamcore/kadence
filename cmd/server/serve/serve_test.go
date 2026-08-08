@@ -39,6 +39,24 @@ func TestScheduledChatWiringUsesSharedServiceOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestNewIntentGuardRespectsEnabledFlag(t *testing.T) {
+	if guard := newIntentGuard(config.Config{}); guard != nil {
+		t.Fatalf("disabled intent guard = %T, want nil", guard)
+	}
+	guard := newIntentGuard(config.Config{
+		MCPIntentGuardEnabled: true,
+		LLMBaseURL:            "https://chat.example.test/v1",
+		LLMAPIKey:             "chat-key",
+		LLMModel:              "chat-model",
+		GuardrailBaseURL:      "https://guard.example.test/v1",
+		GuardrailAPIKey:       "guard-key",
+		GuardrailModel:        "guard-model",
+	})
+	if guard == nil {
+		t.Fatal("enabled intent guard = nil")
+	}
+}
+
 // buildIngestExtractors is pure enough to unit test without refactoring
 // serve.go: it only depends on config.Config (a value, no DB/network
 // startup) and internal/ingest + internal/mcp constructors that fail fast on
