@@ -215,6 +215,10 @@ bounded chat history as trusted context. Scheduled calls use the confirmed task
 instruction and its task state. Tool descriptions and arguments are data, not
 authority.
 
+The guarded catalog omits a remote tool when its schema is malformed or not an
+object, already defines `_kadence_intent` as a property, or cannot be safely
+augmented.
+
 The guard fails closed before dispatch, in this order:
 
 1. Parse one JSON object, require a non-empty `_kadence_intent`, then remove it
@@ -223,6 +227,10 @@ The guard fails closed before dispatch, in this order:
    the classifier.
 3. Only after `ALLOW`, substitute one-time credential placeholders and invoke the
    remote tool.
+
+The classifier output is capped at 512 tokens. It must be exactly one JSON object
+with uppercase `ALLOW` or `DENY` and a trimmed, non-empty UTF-8 reason of at most
+512 bytes. Extra or invalid output fails closed.
 
 Malformed input, a missing trusted context, a denied decision, a classifier error,
 or an invalid classifier response blocks the call before credential substitution or
@@ -242,7 +250,9 @@ availability. Admin list/detail endpoints and the UI can filter by intent and gu
 verdict. Full audit records are retained only for the configured TTL: expired rows
 are hidden at query time and a startup/hourly reaper deletes them. Discovery,
 health, ingestion, and native-only calls are not included, while remote calls
-nested inside native tools are.
+nested inside native tools are. List API responses and UI summaries omit arguments,
+guard reason, result, and error. Detail responses return the retained safe/redacted
+fields and the UI detail shows the guard reason.
 
 ## Native pace conversion (`pace/`)
 
