@@ -186,6 +186,8 @@ config:
   KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS: 16
   KADENCE_SCHEDULED_WORKER_CONCURRENCY: 1
   KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER: 10
+  # Require and classify intent for every LLM-originated remote MCP call.
+  KADENCE_MCP_INTENT_GUARD_ENABLED: false
   # Full remote MCP call audit retention. Positive Go duration.
   KADENCE_MCP_AUDIT_TTL: 48h
   KADENCE_EMBED_BASE_URL: ""

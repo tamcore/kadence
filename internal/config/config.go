@@ -131,6 +131,9 @@ type Config struct {
 
 	// MCP orchestration.
 	MCPMaxIterations int
+	// MCPIntentGuardEnabled requires and classifies intent for every
+	// LLM-originated remote MCP call.
+	MCPIntentGuardEnabled bool
 	// MCPAuditTTL controls retention for full MCP call audit records.
 	MCPAuditTTL time.Duration
 	// MCPMaxTools caps the number of MCP tool definitions injected into a
@@ -243,6 +246,7 @@ func Load() Config {
 	cfg.DomainName = envOr("KADENCE_DOMAIN_NAME", defaultDomainName)
 	cfg.AllowedTopics = envOr("KADENCE_ALLOWED_TOPICS", defaultAllowedTopics)
 	cfg.RefusalMessage = envOr("KADENCE_REFUSAL_MESSAGE", defaultRefusalMessage)
+	cfg.MCPIntentGuardEnabled = envBoolOr("KADENCE_MCP_INTENT_GUARD_ENABLED", false)
 
 	cfg.ScheduledEnabled = envBoolOr("KADENCE_SCHEDULED_ENABLED", false)
 	cfg.ScheduledWorkerModel = os.Getenv("KADENCE_SCHEDULED_WORKER_MODEL")
@@ -468,6 +472,9 @@ func (c Config) Validate() error {
 	}
 	if c.RAGTopK <= 0 {
 		return errors.New("KADENCE_RAG_TOP_K must be a positive integer")
+	}
+	if c.MCPIntentGuardEnabled && strings.TrimSpace(c.ResolvedGuardrailAPIKey()) == "" {
+		return errors.New("KADENCE_GUARDRAIL_API_KEY or KADENCE_LLM_API_KEY is required when KADENCE_MCP_INTENT_GUARD_ENABLED is true")
 	}
 	if err := c.validateMCP(); err != nil {
 		return err

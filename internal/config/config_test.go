@@ -16,6 +16,7 @@ const (
 	testFITDownloadTool = "download_activity_file"
 	testFITAliceScope   = "USER_alice"
 	testFITBridgeOne    = "http://garmin1:8081"
+	testLLMAPIKey       = "main-key"
 )
 
 // testWebAuthnRPID is a placeholder WebAuthn Relying Party ID used across
@@ -319,10 +320,49 @@ func TestGuardrailDefaults(t *testing.T) {
 	}
 }
 
+func TestMCPIntentGuardDefaultsDisabled(t *testing.T) {
+	t.Setenv("KADENCE_MCP_INTENT_GUARD_ENABLED", "")
+	if Load().MCPIntentGuardEnabled {
+		t.Fatal("intent guard defaulted on")
+	}
+}
+
+func TestMCPIntentGuardLoadsIndependently(t *testing.T) {
+	t.Setenv("KADENCE_MCP_INTENT_GUARD_ENABLED", "true")
+	t.Setenv("KADENCE_GUARDRAIL_ENABLED", "false")
+	t.Setenv("KADENCE_LLM_API_KEY", testLLMAPIKey)
+
+	cfg := Load()
+	if !cfg.MCPIntentGuardEnabled || cfg.GuardrailEnabled {
+		t.Fatalf("cfg=%+v", cfg)
+	}
+}
+
+func TestValidateMCPIntentGuardRequiresResolvedKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.MCPIntentGuardEnabled = true
+	cfg.LLMAPIKey = ""
+	cfg.GuardrailAPIKey = ""
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "KADENCE_GUARDRAIL_API_KEY") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestValidateMCPIntentGuardAllowsLLMKeyFallback(t *testing.T) {
+	cfg := validConfig()
+	cfg.MCPIntentGuardEnabled = true
+	cfg.LLMAPIKey = testLLMAPIKey
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
 func TestGuardrailResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_LLM_MODEL", "main-model")
 	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
-	t.Setenv("KADENCE_LLM_API_KEY", "main-key")
+	t.Setenv("KADENCE_LLM_API_KEY", testLLMAPIKey)
 	t.Setenv("KADENCE_GUARDRAIL_MODEL", "")
 	t.Setenv("KADENCE_GUARDRAIL_BASE_URL", "")
 	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "")

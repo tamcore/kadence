@@ -26,6 +26,8 @@ config:
   KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS: 16
   KADENCE_SCHEDULED_WORKER_CONCURRENCY: 1
   KADENCE_SCHEDULED_MAX_ACTIVE_PER_USER: 10
+  # Require and classify intent for every LLM-originated remote MCP call.
+  KADENCE_MCP_INTENT_GUARD_ENABLED: false
   KADENCE_EMBED_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
   # Changing the embedding model re-embeds existing RAG chunks automatically.
   # ROLLOUT RULE: don't change it in the same deploy that first ships the
