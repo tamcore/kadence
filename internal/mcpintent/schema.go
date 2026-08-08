@@ -7,7 +7,10 @@ import (
 	"github.com/tamcore/kadence/internal/provider"
 )
 
-const schemaMarshalCategory = "marshal"
+const (
+	schemaMalformedRequiredCategory = "malformed_required"
+	schemaMarshalCategory           = "marshal"
+)
 
 type SchemaError struct {
 	Category string
@@ -30,7 +33,7 @@ func AugmentTool(def provider.ToolDefinition) (provider.ToolDefinition, error) {
 
 	properties := map[string]json.RawMessage{}
 	if raw, ok := schema["properties"]; ok {
-		if err := json.Unmarshal(raw, &properties); err != nil {
+		if err := json.Unmarshal(raw, &properties); err != nil || properties == nil {
 			return provider.ToolDefinition{}, &SchemaError{Category: "malformed_properties"}
 		}
 	}
@@ -46,8 +49,17 @@ func AugmentTool(def provider.ToolDefinition) (provider.ToolDefinition, error) {
 
 	var required []string
 	if raw, ok := schema["required"]; ok {
-		if err := json.Unmarshal(raw, &required); err != nil {
-			return provider.ToolDefinition{}, &SchemaError{Category: "malformed_required"}
+		var values []any
+		if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+			return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedRequiredCategory}
+		}
+		required = make([]string, 0, len(values))
+		for _, value := range values {
+			name, ok := value.(string)
+			if !ok {
+				return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedRequiredCategory}
+			}
+			required = append(required, name)
 		}
 	}
 	if !slices.Contains(required, ArgumentName) {

@@ -1,6 +1,7 @@
 package mcpintent
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,32 @@ func TestExtractArgumentsAcceptsIntentAtByteLimit(t *testing.T) {
 	}
 	if got.Intent != intent {
 		t.Fatalf("intent length=%d", len(got.Intent))
+	}
+}
+
+func TestJSONDecoderAcceptsUnpairedSurrogate(t *testing.T) {
+	var decoded string
+	if err := json.Unmarshal([]byte(`"\ud800"`), &decoded); err != nil {
+		t.Fatalf("decoder rejected unpaired surrogate: %v", err)
+	}
+	if decoded != "\uFFFD" {
+		t.Fatalf("decoded=%q", decoded)
+	}
+}
+
+func TestExtractArgumentsRejectsInvalidUTF8(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "source bytes", raw: `{"_kadence_intent":"` + string([]byte{0xff}) + `"}`},
+		{name: "unpaired surrogate", raw: `{"_kadence_intent":"\ud800"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ExtractArguments(test.raw); err == nil {
+				t.Fatalf("accepted invalid UTF-8 %q", test.raw)
+			}
+		})
 	}
 }
 

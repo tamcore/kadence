@@ -10,7 +10,10 @@ import (
 	"github.com/tamcore/kadence/internal/provider"
 )
 
-const testWeatherToolName = "weather__get"
+const (
+	testMalformedRequiredCategory = "malformed_required"
+	testWeatherToolName           = "weather__get"
+)
 
 func TestAugmentToolPreservesSchemaAndRequiresIntent(t *testing.T) {
 	in := provider.ToolDefinition{
@@ -58,6 +61,20 @@ func TestAugmentToolDoesNotDuplicateIntentRequirement(t *testing.T) {
 	assertOnlyRequired(t, got.Parameters, "city", ArgumentName)
 }
 
+func TestAugmentToolRejectsNullProperties(t *testing.T) {
+	assertSchemaCategory(t, `{"type":"object","properties":null}`, "malformed_properties")
+}
+
+func TestAugmentToolRejectsInvalidRequiredEntries(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"object","required":null}`,
+		`{"type":"object","required":[null]}`,
+		`{"type":"object","required":[1]}`,
+	} {
+		assertSchemaCategory(t, raw, testMalformedRequiredCategory)
+	}
+}
+
 func TestAugmentToolRejectsUnsafeSchemas(t *testing.T) {
 	for _, test := range []struct {
 		raw      string
@@ -67,18 +84,23 @@ func TestAugmentToolRejectsUnsafeSchemas(t *testing.T) {
 		{raw: `{"type":"array"}`, category: "non_object"},
 		{raw: `{`, category: "malformed"},
 		{raw: `{"type":"object","properties":[]}`, category: "malformed_properties"},
-		{raw: `{"type":"object","required":{}}`, category: "malformed_required"},
+		{raw: `{"type":"object","required":{}}`, category: testMalformedRequiredCategory},
 	} {
 		t.Run(test.category, func(t *testing.T) {
-			_, err := AugmentTool(provider.ToolDefinition{Name: "bad__tool", Parameters: json.RawMessage(test.raw)})
-			var schemaErr *SchemaError
-			if !errors.As(err, &schemaErr) {
-				t.Fatalf("err=%v is not a SchemaError", err)
-			}
-			if schemaErr.Category != test.category {
-				t.Fatalf("category=%q want %q", schemaErr.Category, test.category)
-			}
+			assertSchemaCategory(t, test.raw, test.category)
 		})
+	}
+}
+
+func assertSchemaCategory(t *testing.T, raw, want string) {
+	t.Helper()
+	_, err := AugmentTool(provider.ToolDefinition{Name: "bad__tool", Parameters: json.RawMessage(raw)})
+	var schemaErr *SchemaError
+	if !errors.As(err, &schemaErr) {
+		t.Fatalf("err=%v is not a SchemaError", err)
+	}
+	if schemaErr.Category != want {
+		t.Fatalf("category=%q want %q", schemaErr.Category, want)
 	}
 }
 
