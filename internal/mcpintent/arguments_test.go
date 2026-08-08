@@ -34,6 +34,36 @@ func TestExtractArgumentsRejectsInvalidIntent(t *testing.T) {
 	}
 }
 
+func TestExtractArgumentsRejectsDuplicateRootKeysBeforeCanonicalization(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "ordinary",
+			raw:  `{"id":1,"id":2,"_kadence_intent":"Read weather"}`,
+		},
+		{
+			name: "reserved",
+			raw:  `{"_kadence_intent":"Read weather","_kadence_intent":"Write weather"}`,
+		},
+		{
+			name: "escaped ordinary equivalent",
+			raw:  `{"id":1,"\u0069d":2,"_kadence_intent":"Read weather"}`,
+		},
+		{
+			name: "escaped reserved equivalent",
+			raw:  `{"_kadence_intent":"Read weather","\u005fkadence_intent":"Write weather"}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ExtractArguments(test.raw); err == nil {
+				t.Fatalf("accepted duplicate root keys: %s", test.raw)
+			}
+		})
+	}
+}
+
 func TestExtractArgumentsAcceptsIntentAtByteLimit(t *testing.T) {
 	intent := strings.Repeat("x", MaxIntentBytes)
 	got, err := ExtractArguments(`{"_kadence_intent":"` + intent + `"}`)

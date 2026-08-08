@@ -68,7 +68,7 @@ func callPaceTool(argsJSON string) (string, error) {
 
 func (s *Service) handlePaceConversion(tc provider.ToolCall, sink EventSink) provider.Message {
 	_ = sink.Send(ChatEvent{
-		Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments,
+		Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: safeMCPArguments(tc.Arguments),
 	})
 	_ = sink.Flush()
 

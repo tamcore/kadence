@@ -95,15 +95,15 @@ func TestGuardRejectsNonStrictResponses(t *testing.T) {
 
 func TestGuardBlocksDenyWithRevisionInstruction(t *testing.T) {
 	decision, err := newGuardWithResponse(`{"verdict":"DENY","reason":"Tool would disclose private data."}`).Evaluate(trustedContext(), validInput())
-	if decision.Verdict != VerdictDeny {
+	if decision != (Decision{Verdict: VerdictDeny, Reason: "Tool would disclose private data."}) {
 		t.Fatalf("decision=%+v", decision)
 	}
 	blocked, ok := AsBlocked(err)
 	if !ok {
 		t.Fatalf("err=%v", err)
 	}
-	if blocked.Reason != "Tool would disclose private data. Revise the tool intent and try again." {
-		t.Fatalf("reason=%q", blocked.Reason)
+	if blocked.Kind != BlockKindDenied || blocked.Reason != "Tool would disclose private data. Revise the tool intent and try again." {
+		t.Fatalf("blocked=%+v", blocked)
 	}
 }
 
@@ -166,7 +166,8 @@ func TestGuardRejectsInvalidInputWithoutProviderCall(t *testing.T) {
 		p := &fakeProvider{content: testAllowResponse}
 		decision, err := NewGuard(p, Config{}).Evaluate(trustedContext(), input)
 		blocked, ok := AsBlocked(err)
-		if !ok || decision.Verdict != VerdictDeny || blocked.Reason != "intent is required and must be non-empty UTF-8 text of at most 512 bytes" {
+		if !ok || decision != (Decision{Reason: "intent is required and must be non-empty UTF-8 text of at most 512 bytes"}) ||
+			blocked.Kind != BlockKindError || blocked.Reason != "intent is required and must be non-empty UTF-8 text of at most 512 bytes" {
 			t.Fatalf("decision=%+v err=%v", decision, err)
 		}
 		if p.called {
@@ -223,7 +224,7 @@ func TestGuardAllowsEmptyArgumentsObjectVerbatim(t *testing.T) {
 }
 
 func TestAsBlockedFindsWrappedBlockedError(t *testing.T) {
-	want := &BlockedError{Verdict: VerdictDeny, Reason: "blocked"}
+	want := &BlockedError{Verdict: VerdictDeny, Kind: BlockKindDenied, Reason: "blocked"}
 	got, ok := AsBlocked(fmt.Errorf("evaluate: %w", want))
 	if !ok || got != want {
 		t.Fatalf("got=%+v ok=%t", got, ok)
@@ -250,7 +251,8 @@ func newGuardWithResponse(response string) *Guard {
 func assertUnavailableBlock(t *testing.T, decision Decision, err error) {
 	t.Helper()
 	blocked, ok := AsBlocked(err)
-	if !ok || decision.Verdict != VerdictDeny || blocked.Reason != "intent validation unavailable; revise or retry later" {
+	if !ok || decision != (Decision{Reason: "intent validation unavailable; revise or retry later"}) ||
+		blocked.Kind != BlockKindError || blocked.Reason != "intent validation unavailable; revise or retry later" {
 		t.Fatalf("decision=%+v err=%v", decision, err)
 	}
 }

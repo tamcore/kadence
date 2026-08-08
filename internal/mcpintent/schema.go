@@ -8,8 +8,10 @@ import (
 )
 
 const (
-	schemaMalformedRequiredCategory = "malformed_required"
-	schemaMarshalCategory           = "marshal"
+	schemaMalformedCategory           = "malformed"
+	schemaMalformedPropertiesCategory = "malformed_properties"
+	schemaMalformedRequiredCategory   = "malformed_required"
+	schemaMarshalCategory             = "marshal"
 )
 
 type SchemaError struct {
@@ -21,9 +23,9 @@ func (e *SchemaError) Error() string {
 }
 
 func AugmentTool(def provider.ToolDefinition) (provider.ToolDefinition, error) {
-	var schema map[string]json.RawMessage
-	if err := json.Unmarshal(def.Parameters, &schema); err != nil {
-		return provider.ToolDefinition{}, &SchemaError{Category: "malformed"}
+	schema, err := parseObject(string(def.Parameters))
+	if err != nil {
+		return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedCategory}
 	}
 
 	var typ string
@@ -33,8 +35,9 @@ func AugmentTool(def provider.ToolDefinition) (provider.ToolDefinition, error) {
 
 	properties := map[string]json.RawMessage{}
 	if raw, ok := schema["properties"]; ok {
-		if err := json.Unmarshal(raw, &properties); err != nil || properties == nil {
-			return provider.ToolDefinition{}, &SchemaError{Category: "malformed_properties"}
+		properties, err = parseObject(string(raw))
+		if err != nil {
+			return provider.ToolDefinition{}, &SchemaError{Category: schemaMalformedPropertiesCategory}
 		}
 	}
 	if _, exists := properties[ArgumentName]; exists {

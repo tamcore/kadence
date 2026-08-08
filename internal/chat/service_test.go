@@ -25,10 +25,12 @@ import (
 )
 
 const (
-	replacementReply       = "replacement"
-	testHandoffOne         = "handoff-one"
-	testTimezoneBerlin     = "Europe/Berlin"
-	testProviderMustNotRun = "must not run"
+	replacementReply        = "replacement"
+	testHandoffOne          = "handoff-one"
+	testStrengthWorkoutTool = "garmin__create_strength_workout"
+	testToolStatusDone      = "done"
+	testTimezoneBerlin      = "Europe/Berlin"
+	testProviderMustNotRun  = "must not run"
 )
 
 type fakeProvider struct {
@@ -2018,7 +2020,7 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 			toolEvents = append(toolEvents, e)
 		}
 	}
-	if len(toolEvents) != 2 || toolEvents[0].Status != "running" || toolEvents[1].Status != "done" {
+	if len(toolEvents) != 2 || toolEvents[0].Status != "running" || toolEvents[1].Status != testToolStatusDone {
 		t.Fatalf("expected running then done tool events, got: %+v", toolEvents)
 	}
 	if toolEvents[0].Tool != testToolName || toolEvents[1].Tool != testToolName {
@@ -2303,11 +2305,11 @@ func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {
 	}
 	convs := &fakeConvs{byID: map[string]model.Conversation{}}
 	msgs := &fakeMsgs{}
-	mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: "garmin__create_strength_workout"}}}
+	mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: testStrengthWorkoutTool}}}
 	prov := &toolThenContentProvider{
-		toolName:   "garmin__create_strength_workout",
+		toolName:   testStrengthWorkoutTool,
 		toolArgs:   `{"name":"x","exercises":[]}`,
-		finalReply: "done",
+		finalReply: testToolStatusDone,
 	}
 	svc := chat.NewService(prov,
 		chat.ServiceConfig{Model: "m", MaxTokens: 32},
@@ -2329,6 +2331,72 @@ func TestPreGateReturnsSkillWithoutCallingMCP(t *testing.T) {
 	}
 	if !strings.Contains(toolMsgContent, "catalog") {
 		t.Fatalf("gated tool message should carry the workout skill body; got: %s", toolMsgContent)
+	}
+}
+
+func TestPreGateSanitizesToolArgumentsWithoutChangingProviderContinuation(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		arguments string
+		wantSafe  string
+	}{
+		{
+			name:      "intent object",
+			arguments: `{"name":"x","_kadence_intent":"Create the requested workout"}`,
+			wantSafe:  `{"name":"x"}`,
+		},
+		{
+			name:      "non-object",
+			arguments: `[{"_kadence_intent":"Create the requested workout"}]`,
+			wantSafe:  `{}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reg, err := skill.Load()
+			if err != nil {
+				t.Fatalf("skill.Load: %v", err)
+			}
+			convs := &fakeConvs{byID: map[string]model.Conversation{}}
+			msgs := &fakeMsgs{}
+			mcp := &countingMCP{tools: []provider.ToolDefinition{{Name: testStrengthWorkoutTool}}}
+			prov := &toolThenContentProvider{
+				toolName: testStrengthWorkoutTool, toolArgs: test.arguments, finalReply: testToolStatusDone,
+			}
+			sink := &capturingSink{}
+			svc := chat.NewService(prov,
+				chat.ServiceConfig{Model: "m", MaxTokens: 32},
+				chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp, Skills: reg})
+
+			if err := svc.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "make a workout", sink); err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			if mcp.calls != 0 {
+				t.Fatalf("pre-gate called MCP %d times", mcp.calls)
+			}
+			var runningArguments string
+			for _, event := range sink.events {
+				if event.Type == chat.EventTool && event.Tool == prov.toolName && event.Status == "running" {
+					runningArguments = event.Arguments
+					break
+				}
+			}
+			if runningArguments != test.wantSafe {
+				t.Fatalf("running arguments=%q want %q", runningArguments, test.wantSafe)
+			}
+			last := msgs.added[len(msgs.added)-1]
+			if len(last.ToolCalls) != 1 || last.ToolCalls[0].Arguments != test.wantSafe {
+				t.Fatalf("persisted tool calls=%+v want arguments %q", last.ToolCalls, test.wantSafe)
+			}
+			var continuationArguments string
+			for _, message := range prov.gotMessages[len(prov.gotMessages)-1] {
+				if len(message.ToolCalls) == 1 && message.ToolCalls[0].Name == prov.toolName {
+					continuationArguments = message.ToolCalls[0].Arguments
+				}
+			}
+			if continuationArguments != test.arguments {
+				t.Fatalf("continuation arguments=%q want original %q", continuationArguments, test.arguments)
+			}
+		})
 	}
 }
 

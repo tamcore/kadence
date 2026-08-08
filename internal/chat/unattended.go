@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,12 +9,17 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	fitactivity "github.com/tamcore/kadence/internal/fit"
 	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/mcpintent"
+	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
 )
+
+const maxLoggedToolNameBytes = 128
 
 // UnattendedCatalog resolves immutable, owner-scoped tool snapshots suitable
 // for both chat and unattended workers. Interactive-only built-ins are never
@@ -104,7 +110,7 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 				if errors.As(guardErr, &schemaErr) {
 					category = schemaErr.Category
 				}
-				logger.Warn("MCP tool omitted from intent guard catalog", "tool", definition.Name, "category", category)
+				logger.Warn("MCP tool omitted from intent guard catalog", "tool", safeLoggedToolName(definition.Name), "category", category)
 				continue
 			}
 			definition = guarded
@@ -124,7 +130,7 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 				if logger == nil {
 					logger = slog.Default()
 				}
-				logger.Warn("MCP tool omitted from intent guard catalog", "tool", definition.Name, "category", "invalid")
+				logger.Warn("MCP tool omitted from intent guard catalog", "tool", safeLoggedToolName(definition.Name), "category", "invalid")
 				return snapshot, nil
 			}
 		}
@@ -133,6 +139,24 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 		snapshot.definitions[definition.Name] = definition
 	}
 	return snapshot, nil
+}
+
+func safeLoggedToolName(name string) string {
+	name = strings.ToValidUTF8(name, "?")
+	name = strings.Map(func(value rune) rune {
+		if unicode.IsControl(value) {
+			return '?'
+		}
+		return value
+	}, name)
+	if len(name) <= maxLoggedToolNameBytes {
+		return name
+	}
+	prefix := name[:maxLoggedToolNameBytes-len("…")]
+	for !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix + "…"
 }
 
 // ToolsFor returns a copy of the exact definitions frozen in this snapshot.
@@ -153,6 +177,25 @@ func (s *UnattendedSnapshot) Call(ctx context.Context, toolName, argsJSON string
 }
 
 func (s *UnattendedSnapshot) CallWithTransform(ctx context.Context, toolName, argsJSON string, transform ArgumentTransform) (string, error) {
+	return s.callWithTransform(ctx, toolName, argsJSON, transform, nil)
+}
+
+func (s *UnattendedSnapshot) CallWithDefinition(
+	ctx context.Context, definition provider.ToolDefinition, argsJSON string,
+) (string, error) {
+	if s == nil {
+		return "", errors.New("chat: no unattended tool snapshot")
+	}
+	frozen, ok := s.definitions[definition.Name]
+	if !ok || !bytes.Equal(frozen.Parameters, definition.Parameters) {
+		return "", fmt.Errorf("chat: tool %q definition is not authorized in snapshot", definition.Name)
+	}
+	return s.callWithTransform(ctx, definition.Name, argsJSON, IdentityArguments, &definition.Description)
+}
+
+func (s *UnattendedSnapshot) callWithTransform(
+	ctx context.Context, toolName, argsJSON string, transform ArgumentTransform, description *string,
+) (string, error) {
 	if s == nil {
 		return "", errors.New("chat: no unattended tool snapshot")
 	}
@@ -166,7 +209,7 @@ func (s *UnattendedSnapshot) CallWithTransform(ctx context.Context, toolName, ar
 		transform = IdentityArguments
 	}
 	if s.intentGuard != nil {
-		return s.callGuardedDirect(ctx, toolName, argsJSON, transform)
+		return s.callGuardedDirect(ctx, toolName, argsJSON, transform, description)
 	}
 	if toolName == analyzeGarminFITToolName {
 		arguments, err := transform(argsJSON)
@@ -202,12 +245,15 @@ func (s *UnattendedSnapshot) ServerPrefix(name, scope string) (string, bool) {
 	return resolver.ServerPrefix(name, scope)
 }
 
-func (s *UnattendedSnapshot) callGuardedDirect(ctx context.Context, toolName, arguments string, transform ArgumentTransform) (string, error) {
+func (s *UnattendedSnapshot) callGuardedDirect(
+	ctx context.Context, toolName, arguments string, transform ArgumentTransform, description *string,
+) (string, error) {
 	parsed, err := mcpintent.ExtractArguments(arguments)
 	if err != nil {
-		return "", s.block(ctx, toolName, `{}`, "", mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool intent is invalid"})
+		blocked := mcpintent.InvalidIntentBlockedError()
+		return "", s.block(ctx, toolName, `{}`, "", model.MCPAuditGuardError, blocked.Error(), blocked)
 	}
-	ctx, err = s.authorize(ctx, toolName, parsed.SafeJSON, parsed.Intent)
+	ctx, err = s.authorize(ctx, toolName, parsed.SafeJSON, parsed.Intent, description)
 	if err != nil {
 		return "", err
 	}
@@ -272,10 +318,11 @@ func (s *UnattendedSnapshot) callRemote(ctx context.Context, toolName, arguments
 	if s.intentGuard != nil {
 		intent, ok := mcpintent.InheritedIntentFrom(ctx)
 		if !ok {
-			return "", s.block(ctx, toolName, arguments, "", mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool intent is invalid"})
+			blocked := mcpintent.InvalidIntentBlockedError()
+			return "", s.block(ctx, toolName, arguments, "", model.MCPAuditGuardError, blocked.Error(), blocked)
 		}
 		var err error
-		ctx, err = s.authorize(ctx, toolName, arguments, intent)
+		ctx, err = s.authorize(ctx, toolName, arguments, intent, nil)
 		if err != nil {
 			return "", err
 		}
@@ -289,47 +336,79 @@ func (s *UnattendedSnapshot) callAllowedRemote(ctx context.Context, toolName, ar
 	})
 }
 
-func (s *UnattendedSnapshot) authorize(ctx context.Context, toolName, arguments, intent string) (context.Context, error) {
+func (s *UnattendedSnapshot) authorize(
+	ctx context.Context, toolName, arguments, intent string, description *string,
+) (context.Context, error) {
 	definition, ok := s.definitions[toolName]
 	if !ok {
-		return ctx, s.block(ctx, toolName, arguments, intent, mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool definition is unavailable"})
+		blocked := mcpintent.UnavailableBlockedError()
+		return ctx, s.block(ctx, toolName, arguments, intent, model.MCPAuditGuardError, blocked.Error(), blocked)
 	}
-	decision, err := s.intentGuard.Evaluate(ctx, mcpintent.Input{
-		Intent: intent, ToolName: toolName, ToolDescription: definition.Description, Arguments: arguments,
+	toolDescription := definition.Description
+	if description != nil {
+		toolDescription = *description
+	}
+	decision, evaluationErr := s.intentGuard.Evaluate(ctx, mcpintent.Input{
+		Intent: intent, ToolName: toolName, ToolDescription: toolDescription, Arguments: arguments,
 	})
-	if err != nil || decision.Verdict != mcpintent.VerdictAllow {
+	if evaluationErr != nil {
+		blocked, ok := mcpintent.AsBlocked(evaluationErr)
+		if !ok {
+			blocked = mcpintent.UnavailableBlockedError()
+			decision.Reason = blocked.Error()
+		}
+		verdict := model.MCPAuditGuardError
+		if blocked.Kind == mcpintent.BlockKindDenied {
+			verdict = model.MCPAuditGuardDenied
+		}
+		if decision.Reason == "" {
+			decision.Reason = blocked.Error()
+		}
+		return ctx, s.block(ctx, toolName, arguments, intent, verdict, decision.Reason, blocked)
+	}
+	if decision.Verdict == mcpintent.VerdictDeny {
 		if decision.Reason == "" {
 			decision.Reason = "tool intent could not be approved"
 		}
-		return ctx, s.block(ctx, toolName, arguments, intent, decision)
+		blocked := mcpintent.DeniedBlockedError(decision.Reason)
+		return ctx, s.block(ctx, toolName, arguments, intent, model.MCPAuditGuardDenied, decision.Reason, blocked)
+	}
+	if decision.Verdict != mcpintent.VerdictAllow {
+		blocked := mcpintent.UnavailableBlockedError()
+		return ctx, s.block(ctx, toolName, arguments, intent, model.MCPAuditGuardError, blocked.Error(), blocked)
 	}
 	metadata, hasMetadata := mcpaudit.MetadataFromContext(ctx)
 	if hasMetadata {
 		metadata.SafeArguments = arguments
 		metadata.Intent = intent
-		metadata.GuardVerdict = decision.Verdict
+		metadata.GuardVerdict = model.MCPAuditGuardAllowed
 		metadata.GuardReason = decision.Reason
 		ctx = mcpaudit.WithMetadata(ctx, metadata)
 	}
 	return ctx, nil
 }
 
-func (s *UnattendedSnapshot) block(ctx context.Context, toolName, arguments, intent string, decision mcpintent.Decision) error {
-	if decision.Verdict != mcpintent.VerdictDeny {
-		decision.Verdict = mcpintent.VerdictDeny
+func (s *UnattendedSnapshot) block(
+	ctx context.Context, toolName, arguments, intent, verdict, reason string, blocked *mcpintent.BlockedError,
+) error {
+	if verdict != model.MCPAuditGuardDenied && verdict != model.MCPAuditGuardError {
+		verdict = model.MCPAuditGuardError
 	}
-	if decision.Reason == "" {
-		decision.Reason = "tool intent could not be approved"
+	if reason == "" {
+		reason = "tool intent could not be approved"
+	}
+	if blocked == nil {
+		blocked = mcpintent.UnavailableBlockedError()
 	}
 	if metadata, ok := mcpaudit.MetadataFromContext(ctx); ok {
 		metadata.SafeArguments = arguments
 		metadata.Intent = intent
-		metadata.GuardVerdict = decision.Verdict
-		metadata.GuardReason = decision.Reason
+		metadata.GuardVerdict = verdict
+		metadata.GuardReason = reason
 		ctx = mcpaudit.WithMetadata(ctx, metadata)
 	}
-	s.audit.Block(ctx, toolName, arguments, intent, decision.Verdict, decision.Reason)
-	return &mcpintent.BlockedError{Verdict: decision.Verdict, Reason: decision.Reason}
+	s.audit.Block(ctx, toolName, arguments, intent, verdict, reason)
+	return blocked
 }
 
 func resolveFITRoutes(mcpSnap MCPUserSnapshot, configured []FITRoute) []resolvedFITRoute {

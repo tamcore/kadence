@@ -156,6 +156,20 @@ func newIntentGuard(cfg config.Config) mcpintent.Evaluator {
 	return guard
 }
 
+func chatServiceConfig(cfg config.Config) chat.ServiceConfig {
+	return chat.ServiceConfig{
+		Model:                  cfg.LLMModel,
+		MaxTokens:              cfg.LLMMaxTokens,
+		Temperature:            cfg.LLMTemperature,
+		SystemPrompt:           cfg.SystemPrompt,
+		Timeout:                cfg.LLMTimeout,
+		MCPMaxIterations:       cfg.MCPMaxIterations,
+		MCPMaxTools:            cfg.MCPMaxTools,
+		ContextBudgetTokens:    cfg.LLMContextBudgetTokens,
+		GuardrailHistoryWindow: cfg.GuardrailHistoryWindow,
+	}
+}
+
 // Run starts the HTTP server and blocks until SIGINT/SIGTERM.
 func Run() error {
 	cfg := config.Load()
@@ -334,16 +348,7 @@ func Run() error {
 			cfg.ScheduledEnabled, pool, cfg, convs, msgs, prov, unattendedTools,
 		)
 		scheduledWiring := newScheduledChatWiring(cfg.ScheduledEnabled, scheduledSvc, scheduledTasks)
-		chatSvc := chat.NewService(prov, chat.ServiceConfig{
-			Model:               cfg.LLMModel,
-			MaxTokens:           cfg.LLMMaxTokens,
-			Temperature:         cfg.LLMTemperature,
-			SystemPrompt:        cfg.SystemPrompt,
-			Timeout:             cfg.LLMTimeout,
-			MCPMaxIterations:    cfg.MCPMaxIterations,
-			MCPMaxTools:         cfg.MCPMaxTools,
-			ContextBudgetTokens: cfg.LLMContextBudgetTokens,
-		}, chat.Deps{
+		chatSvc := chat.NewService(prov, chatServiceConfig(cfg), chat.Deps{
 			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
 			FITRoutes:   fitRoutes,
 			Secrets:     broker,

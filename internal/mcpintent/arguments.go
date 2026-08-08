@@ -48,16 +48,24 @@ func ExtractArguments(raw string) (Arguments, error) {
 }
 
 func StripArguments(raw string) string {
+	safe, ok := SanitizeArguments(raw)
+	if !ok {
+		return raw
+	}
+	return safe
+}
+
+func SanitizeArguments(raw string) (string, bool) {
 	values, err := parseObject(raw)
 	if err != nil {
-		return raw
+		return "{}", false
 	}
 	delete(values, ArgumentName)
 	safe, err := json.Marshal(values)
 	if err != nil {
-		return raw
+		return "{}", false
 	}
-	return string(safe)
+	return string(safe), true
 }
 
 func parseObject(raw string) (map[string]json.RawMessage, error) {
@@ -65,11 +73,42 @@ func parseObject(raw string) (map[string]json.RawMessage, error) {
 		return nil, errors.New("invalid UTF-8")
 	}
 	decoder := json.NewDecoder(strings.NewReader(raw))
-	var values map[string]json.RawMessage
-	if err := decoder.Decode(&values); err != nil || values == nil {
+	token, err := decoder.Token()
+	if err != nil {
 		return nil, errors.New("not an object")
 	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '{' {
+		return nil, errors.New("not an object")
+	}
+	values := make(map[string]json.RawMessage)
+	for decoder.More() {
+		keyToken, keyErr := decoder.Token()
+		if keyErr != nil {
+			return nil, errors.New("invalid object key")
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, errors.New("invalid object key")
+		}
+		if _, exists := values[key]; exists {
+			return nil, errors.New("duplicate object key")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errors.New("invalid object value")
+		}
+		values[key] = value
+	}
+	token, err = decoder.Token()
+	if err != nil {
+		return nil, errors.New("object is not closed")
+	}
+	delimiter, ok = token.(json.Delim)
+	if !ok || delimiter != '}' {
+		return nil, errors.New("object is not closed")
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("trailing JSON")
 	}
 	return values, nil

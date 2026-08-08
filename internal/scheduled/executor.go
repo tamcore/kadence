@@ -52,6 +52,7 @@ type ExecutionToolCatalog interface {
 type ExecutionToolSnapshot interface {
 	ToolsFor(context.Context) ([]provider.ToolDefinition, error)
 	Call(context.Context, string, string) (string, error)
+	CallWithDefinition(context.Context, provider.ToolDefinition, string) (string, error)
 }
 
 // ExecutionSuccess is one atomic successful occurrence transition.
@@ -252,7 +253,7 @@ func (e *Executor) gather(ctx context.Context, actor Actor, claimed model.Claime
 				Model: e.cfg.WorkerModel, ToolCallID: call.ID,
 				RequestedTool: call.Name, SafeArguments: mcpintent.StripArguments(call.Arguments),
 			})
-			output, toolErr := snapshot.Call(callCtx, call.Name, call.Arguments)
+			output, toolErr := snapshot.CallWithDefinition(callCtx, allowed[call.Name], call.Arguments)
 			if blocked, ok := mcpintent.AsBlocked(toolErr); ok {
 				output = "error: " + blocked.Error()
 				toolErr = nil
@@ -375,7 +376,7 @@ func nextSuccessfulState(task model.ScheduledTask, now time.Time, complete bool)
 	return model.ScheduledTaskStateActive, &next, nil
 }
 
-func exactExecutionTools(visible []provider.ToolDefinition, authorized []string) ([]provider.ToolDefinition, map[string]struct{}, string) {
+func exactExecutionTools(visible []provider.ToolDefinition, authorized []string) ([]provider.ToolDefinition, map[string]provider.ToolDefinition, string) {
 	byName := make(map[string]provider.ToolDefinition, len(visible))
 	for _, definition := range visible {
 		if definition.Name == interactiveCredentialsTool || definition.Name == "kadence__load_skill" ||
@@ -387,7 +388,7 @@ func exactExecutionTools(visible []provider.ToolDefinition, authorized []string)
 		}
 	}
 	offered := make([]provider.ToolDefinition, 0, len(authorized))
-	allowed := make(map[string]struct{}, len(authorized))
+	allowed := make(map[string]provider.ToolDefinition, len(authorized))
 	metadataBytes := 0
 	for _, name := range authorized {
 		if _, duplicate := allowed[name]; duplicate {
@@ -406,7 +407,7 @@ func exactExecutionTools(visible []provider.ToolDefinition, authorized []string)
 		if metadataBytes > maxToolMetadataBytes {
 			return nil, nil, failureInvalidTask
 		}
-		allowed[name] = struct{}{}
+		allowed[name] = definition
 		offered = append(offered, definition)
 	}
 	return offered, allowed, ""

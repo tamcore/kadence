@@ -143,6 +143,33 @@ func TestInteractiveIntentContextUsesStableFileOnlyPhrase(t *testing.T) {
 	}
 }
 
+func TestServiceInteractiveIntentContextUsesConfiguredNonBlankTail(t *testing.T) {
+	history := []model.Message{
+		{Role: model.MsgRoleUser, Content: "one"},
+		{Role: model.MsgRoleAssistant, Content: " \t"},
+		{Role: model.MsgRoleUser, Content: "two"},
+		{Role: model.MsgRoleAssistant, Content: "three"},
+		{Role: model.MsgRoleUser, Content: ""},
+		{Role: model.MsgRoleAssistant, Content: "four"},
+		{Role: model.MsgRoleUser, Content: "five"},
+		{Role: model.MsgRoleAssistant, Content: "six"},
+		{Role: model.MsgRoleUser, Content: "seven"},
+		{Role: model.MsgRoleAssistant, Content: "eight"},
+		{Role: model.MsgRoleUser, Content: "nine"},
+	}
+	service := NewService(nil, ServiceConfig{GuardrailHistoryWindow: 8}, Deps{})
+	got := service.interactiveIntentContext(history, "current request")
+	want := []string{"two", "three", "four", "five", "six", "seven", "eight", "nine"}
+	if len(got.History) != len(want) {
+		t.Fatalf("history=%+v want %v", got.History, want)
+	}
+	for index, message := range got.History {
+		if message.Content != want[index] {
+			t.Fatalf("history[%d]=%q want %q", index, message.Content, want[index])
+		}
+	}
+}
+
 type interactiveToolProvider struct {
 	toolCall provider.ToolCall
 	requests []provider.ChatRequest
@@ -176,6 +203,7 @@ type interactiveToolTurnResult struct {
 	persistedArguments    string
 	continuationArguments string
 	auditArguments        string
+	toolResult            string
 }
 
 func runInteractiveToolTurn(t *testing.T, evaluator mcpintent.Evaluator) interactiveToolTurnResult {
@@ -252,6 +280,9 @@ func runInteractiveToolTurnWithArguments(
 			if len(message.ToolCalls) > 0 {
 				result.continuationArguments = message.ToolCalls[0].Arguments
 			}
+			if message.Role == toolMsgRole {
+				result.toolResult = unfencedToolResult(t, message.Content)
+			}
 		}
 	}
 	if recorded, ok := evaluator.(*recordingEvaluator); ok && len(recorded.inputs) > 0 {
@@ -266,6 +297,52 @@ func TestInteractiveDeniedIntentDoesNotConsumeCredential(t *testing.T) {
 	})
 	if result.remoteCalls != 0 || result.remainingArguments != `{"token":"live-secret"}` {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestInteractiveBlockedIntentUsesTypedCorrection(t *testing.T) {
+	tests := []struct {
+		name      string
+		evaluator mcpintent.Evaluator
+		arguments func(string) string
+		want      string
+	}{
+		{
+			name: "semantic denial",
+			evaluator: &recordingEvaluator{decision: mcpintent.Decision{
+				Verdict: mcpintent.VerdictDeny, Reason: "Tool does not serve the request.",
+			}},
+			arguments: func(token string) string {
+				return `{"token":"` + token + `","_kadence_intent":"Read weather"}`
+			},
+			want: "error: Tool does not serve the request. Revise the tool intent and try again.",
+		},
+		{
+			name:      "missing intent",
+			evaluator: allowEvaluator(),
+			arguments: func(token string) string { return `{"token":"` + token + `"}` },
+			want:      "error: intent is required and must be non-empty UTF-8 text of at most 512 bytes",
+		},
+		{
+			name:      "classifier failure",
+			evaluator: &recordingEvaluator{err: errors.New("private provider output")},
+			arguments: func(token string) string {
+				return `{"token":"` + token + `","_kadence_intent":"Read weather"}`
+			},
+			want: "error: intent validation unavailable; revise or retry later",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runInteractiveToolTurnWithArguments(t, test.evaluator, test.arguments)
+			if result.toolResult != test.want {
+				t.Fatalf("tool result=%q want %q", result.toolResult, test.want)
+			}
+			if strings.Contains(result.toolResult, "private provider output") {
+				t.Fatalf("tool result leaked provider output: %q", result.toolResult)
+			}
+		})
 	}
 }
 
@@ -324,6 +401,17 @@ func TestInteractiveNonObjectIntentPayloadNeverReachesDurableSurfaces(t *testing
 	}
 }
 
+func TestSafeMCPArgumentsRejectsDuplicateRootKeys(t *testing.T) {
+	for _, raw := range []string{
+		`{"id":1,"id":2,"_kadence_intent":"Read weather"}`,
+		`{"_kadence_intent":"Read weather","\u005fkadence_intent":"Write weather"}`,
+	} {
+		if got := safeMCPArguments(raw); got != `{}` {
+			t.Fatalf("safe arguments=%q want payload-free object for %s", got, raw)
+		}
+	}
+}
+
 func TestFITAnalysisSanitizesNonObjectIntentPayloadForSSE(t *testing.T) {
 	sink := &fitEventSink{}
 	s := NewService(nil, ServiceConfig{}, Deps{})
@@ -332,6 +420,23 @@ func TestFITAnalysisSanitizesNonObjectIntentPayloadForSSE(t *testing.T) {
 	}, sink)
 	if len(sink.events) == 0 || sink.events[0].Arguments != "{}" {
 		t.Fatalf("FIT events = %+v, want payload-free running arguments", sink.events)
+	}
+}
+
+func TestFITAnalysisUsesTypedIntentCorrection(t *testing.T) {
+	blocked := &mcpintent.BlockedError{
+		Verdict: mcpintent.VerdictDeny,
+		Kind:    mcpintent.BlockKindDenied,
+		Reason:  "FIT download does not serve the request. Revise the tool intent and try again.",
+	}
+	sink := &fitEventSink{}
+	s := NewService(nil, ServiceConfig{}, Deps{})
+	message := s.handleFITAnalysis(t.Context(), fitToolSnapshot{callErr: blocked}, provider.ToolCall{
+		Name: analyzeGarminFITToolName, Arguments: `{"activity_id":42,"_kadence_intent":"Analyze activity"}`,
+	}, sink)
+	want := "error: " + blocked.Error()
+	if got := unfencedToolResult(t, message.Content); got != want {
+		t.Fatalf("tool result=%q want %q", got, want)
 	}
 }
 

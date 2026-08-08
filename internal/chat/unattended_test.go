@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/mcpintent"
@@ -308,6 +310,29 @@ func TestIntentGuardOmitsInvalidDefinitionsWithBoundedMetadataLog(t *testing.T) 
 	}
 }
 
+func TestIntentGuardBoundsAndSanitizesOmittedToolName(t *testing.T) {
+	unsafeName := strings.Repeat("界", 100) + "\n\t" + string([]byte{0xff})
+	catalog := NewUnattendedCatalog(registryWithGuardedTools(provider.ToolDefinition{
+		Name: unsafeName, Description: testInvalidDescription, Parameters: json.RawMessage(`{`),
+	}), nil, nil, allowEvaluator())
+	var logs bytes.Buffer
+	catalog.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	if _, err := catalog.SnapshotFor(t.Context(), testUnattendedUsername); err != nil {
+		t.Fatal(err)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+		t.Fatalf("decode log %q: %v", logs.String(), err)
+	}
+	toolName, ok := entry["tool"].(string)
+	if !ok {
+		t.Fatalf("tool attribute missing from %q", logs.String())
+	}
+	if len(toolName) > 128 || !utf8.ValidString(toolName) || strings.IndexFunc(toolName, unicode.IsControl) >= 0 {
+		t.Fatalf("unsafe logged tool name bytes=%d value=%q", len(toolName), toolName)
+	}
+}
+
 func TestDeniedCallRunsNeitherTransformNorRemote(t *testing.T) {
 	evaluator := &recordingEvaluator{decision: mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: testDeniedReason}}
 	registry := registryWithGuardedTools(guardedRemoteDefinition)
@@ -354,6 +379,31 @@ func TestAllowedCallClassifiesCleanArgumentsBeforeOneTransformAndRemoteCall(t *t
 		ToolDescription: guardedRemoteDefinition.Description, Arguments: testWeatherArguments,
 	}) {
 		t.Fatalf("classifier inputs = %+v", got)
+	}
+}
+
+func TestCallWithDefinitionClassifiesExactAdvertisedDescription(t *testing.T) {
+	evaluator := allowEvaluator()
+	definition := guardedRemoteDefinition
+	definition.Description = strings.Repeat("long advertised description ", 240)
+	registry := registryWithGuardedTools(definition)
+	registry.snapshots[testUnattendedUsername].result = "ok"
+	snapshot, err := NewUnattendedCatalog(registry, nil, nil, evaluator).SnapshotFor(t.Context(), testUnattendedUsername)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := snapshot.ToolsFor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	offered := findTool(t, tools, definition.Name)
+	offered.Description = offered.Description[:4096]
+	ctx := mcpintent.WithTrustedContext(t.Context(), mcpintent.TrustedContext{Request: testWeatherIntent})
+	if _, err := snapshot.CallWithDefinition(ctx, offered, testWeatherIntentArgs); err != nil {
+		t.Fatal(err)
+	}
+	if len(evaluator.inputs) != 1 || evaluator.inputs[0].ToolDescription != offered.Description {
+		t.Fatalf("classifier inputs=%+v want description %q", evaluator.inputs, offered.Description)
 	}
 }
 
@@ -451,8 +501,76 @@ func TestDeniedCallAuditsCleanArgumentsAndGuardDecision(t *testing.T) {
 		t.Fatalf("audit calls = %d, want 1", len(store.calls))
 	}
 	got := store.calls[0]
-	if got.Arguments != testWeatherArguments || got.Intent != testWeatherIntent || got.GuardVerdict != mcpintent.VerdictDeny || got.GuardReason != testDeniedReason {
+	if got.Arguments != testWeatherArguments || got.Intent != testWeatherIntent || got.GuardVerdict != model.MCPAuditGuardDenied || got.GuardReason != testDeniedReason {
 		t.Fatalf("audit call = %+v", got)
+	}
+}
+
+func TestGuardAuditMapsClassifierAndValidationOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		evaluator   mcpintent.Evaluator
+		arguments   string
+		wantVerdict string
+		wantReason  string
+		wantBlocked bool
+	}{
+		{
+			name: "allow", evaluator: allowEvaluator(), arguments: testWeatherIntentArgs,
+			wantVerdict: model.MCPAuditGuardAllowed, wantReason: "needed",
+		},
+		{
+			name: "semantic deny",
+			evaluator: &recordingEvaluator{decision: mcpintent.Decision{
+				Verdict: mcpintent.VerdictDeny, Reason: testDeniedReason,
+			}},
+			arguments: testWeatherIntentArgs, wantVerdict: model.MCPAuditGuardDenied,
+			wantReason: testDeniedReason, wantBlocked: true,
+		},
+		{
+			name: "missing intent", evaluator: allowEvaluator(), arguments: testWeatherArguments,
+			wantVerdict: model.MCPAuditGuardError,
+			wantReason:  "intent is required and must be non-empty UTF-8 text of at most 512 bytes",
+			wantBlocked: true,
+		},
+		{
+			name:      "classifier error",
+			evaluator: &recordingEvaluator{err: errors.New("provider output must stay private")},
+			arguments: testWeatherIntentArgs, wantVerdict: model.MCPAuditGuardError,
+			wantReason: "intent validation unavailable; revise or retry later", wantBlocked: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := registryWithGuardedTools(guardedRemoteDefinition)
+			registry.snapshots[testUnattendedUsername].result = "ok"
+			store := &capturingAuditStore{}
+			recorder := mcpaudit.NewRecorder(store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), time.Now)
+			snapshot, err := NewUnattendedCatalog(registry, nil, recorder, test.evaluator).
+				SnapshotFor(t.Context(), testUnattendedUsername)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := mcpintent.WithTrustedContext(t.Context(), mcpintent.TrustedContext{Request: testWeatherIntent})
+			ctx = mcpaudit.WithMetadata(ctx, mcpaudit.Metadata{
+				RequestedTool: guardedRemoteDefinition.Name,
+				SafeArguments: mcpintent.StripArguments(test.arguments),
+			})
+
+			_, callErr := snapshot.Call(ctx, guardedRemoteDefinition.Name, test.arguments)
+			_, blocked := mcpintent.AsBlocked(callErr)
+			if blocked != test.wantBlocked {
+				t.Fatalf("blocked=%t err=%v want %t", blocked, callErr, test.wantBlocked)
+			}
+			if len(store.calls) != 1 {
+				t.Fatalf("audit calls=%d want 1", len(store.calls))
+			}
+			got := store.calls[0]
+			if got.GuardVerdict != test.wantVerdict || got.GuardReason != test.wantReason {
+				t.Fatalf("audit verdict=%q reason=%q want %q %q", got.GuardVerdict, got.GuardReason, test.wantVerdict, test.wantReason)
+			}
+		})
 	}
 }
 

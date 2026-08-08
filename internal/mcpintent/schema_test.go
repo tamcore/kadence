@@ -62,7 +62,7 @@ func TestAugmentToolDoesNotDuplicateIntentRequirement(t *testing.T) {
 }
 
 func TestAugmentToolRejectsNullProperties(t *testing.T) {
-	assertSchemaCategory(t, `{"type":"object","properties":null}`, "malformed_properties")
+	assertSchemaCategory(t, `{"type":"object","properties":null}`, schemaMalformedPropertiesCategory)
 }
 
 func TestAugmentToolRejectsInvalidRequiredEntries(t *testing.T) {
@@ -84,6 +84,47 @@ func TestAugmentToolRejectsDuplicateRequiredEntries(t *testing.T) {
 	}
 }
 
+func TestAugmentToolRejectsDuplicateSchemaKeysBeforeCanonicalization(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		raw      string
+		category string
+	}{
+		{
+			name: "schema root",
+			raw:  `{"type":"object","type":"object"}`, category: schemaMalformedCategory,
+		},
+		{
+			name: "escaped schema root equivalent",
+			raw:  `{"type":"object","\u0074ype":"object"}`, category: schemaMalformedCategory,
+		},
+		{
+			name:     "ordinary property",
+			raw:      `{"type":"object","properties":{"city":{"type":"string"},"city":{"type":"integer"}}}`,
+			category: schemaMalformedPropertiesCategory,
+		},
+		{
+			name:     "reserved property",
+			raw:      `{"type":"object","properties":{"_kadence_intent":{"type":"string"},"_kadence_intent":{"type":"number"}}}`,
+			category: schemaMalformedPropertiesCategory,
+		},
+		{
+			name:     "escaped property equivalent",
+			raw:      `{"type":"object","properties":{"city":{"type":"string"},"\u0063ity":{"type":"integer"}}}`,
+			category: schemaMalformedPropertiesCategory,
+		},
+		{
+			name:     "escaped reserved property equivalent",
+			raw:      `{"type":"object","properties":{"_kadence_intent":{"type":"string"},"\u005fkadence_intent":{"type":"number"}}}`,
+			category: schemaMalformedPropertiesCategory,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertSchemaCategory(t, test.raw, test.category)
+		})
+	}
+}
+
 func TestAugmentToolRejectsUnsafeSchemas(t *testing.T) {
 	for _, test := range []struct {
 		raw      string
@@ -91,8 +132,8 @@ func TestAugmentToolRejectsUnsafeSchemas(t *testing.T) {
 	}{
 		{raw: `{"type":"object","properties":{"_kadence_intent":{"type":"number"}}}`, category: "reserved_collision"},
 		{raw: `{"type":"array"}`, category: "non_object"},
-		{raw: `{`, category: "malformed"},
-		{raw: `{"type":"object","properties":[]}`, category: "malformed_properties"},
+		{raw: `{`, category: schemaMalformedCategory},
+		{raw: `{"type":"object","properties":[]}`, category: schemaMalformedPropertiesCategory},
 		{raw: `{"type":"object","required":{}}`, category: testMalformedRequiredCategory},
 	} {
 		t.Run(test.category, func(t *testing.T) {

@@ -50,9 +50,17 @@ type Guard struct {
 	cfg      Config
 }
 
+type BlockKind string
+
+const (
+	BlockKindDenied BlockKind = "denied"
+	BlockKindError  BlockKind = "error"
+)
+
 type BlockedError struct {
 	Verdict string
 	Reason  string
+	Kind    BlockKind
 }
 
 func (e *BlockedError) Error() string {
@@ -65,6 +73,18 @@ func AsBlocked(err error) (*BlockedError, bool) {
 	return blocked, ok
 }
 
+func InvalidIntentBlockedError() *BlockedError {
+	return &BlockedError{Kind: BlockKindError, Reason: invalidIntentMessage}
+}
+
+func UnavailableBlockedError() *BlockedError {
+	return &BlockedError{Kind: BlockKindError, Reason: unavailableMessage}
+}
+
+func DeniedBlockedError(reason string) *BlockedError {
+	return &BlockedError{Verdict: VerdictDeny, Kind: BlockKindDenied, Reason: deniedReason(reason)}
+}
+
 func NewGuard(p provider.Provider, cfg Config) *Guard {
 	if cfg.HistoryWindow <= 0 {
 		cfg.HistoryWindow = 6
@@ -74,17 +94,17 @@ func NewGuard(p provider.Provider, cfg Config) *Guard {
 
 func (g *Guard) Evaluate(ctx context.Context, input Input) (Decision, error) {
 	if !validIntent(input.Intent) {
-		return blocked(invalidIntentMessage)
+		return blocked(Decision{Reason: invalidIntentMessage}, InvalidIntentBlockedError())
 	}
 	if !validToolInput(input) {
-		return blocked(unavailableMessage)
+		return blocked(Decision{Reason: unavailableMessage}, UnavailableBlockedError())
 	}
 	if ctx == nil || ctx.Err() != nil {
-		return blocked(unavailableMessage)
+		return blocked(Decision{Reason: unavailableMessage}, UnavailableBlockedError())
 	}
 	trusted, ok := TrustedContextFrom(ctx)
 	if !ok || g == nil || g.provider == nil {
-		return blocked(unavailableMessage)
+		return blocked(Decision{Reason: unavailableMessage}, UnavailableBlockedError())
 	}
 
 	envelope, err := json.Marshal(classifierEnvelope{
@@ -92,7 +112,7 @@ func (g *Guard) Evaluate(ctx context.Context, input Input) (Decision, error) {
 		Input:          input,
 	})
 	if err != nil {
-		return blocked(unavailableMessage)
+		return blocked(Decision{Reason: unavailableMessage}, UnavailableBlockedError())
 	}
 	reply, err := g.provider.StreamChat(ctx, provider.ChatRequest{
 		Model:       g.cfg.Model,
@@ -104,14 +124,14 @@ func (g *Guard) Evaluate(ctx context.Context, input Input) (Decision, error) {
 		},
 	}, func(string) error { return nil })
 	if err != nil || ctx.Err() != nil {
-		return blocked(unavailableMessage)
+		return blocked(Decision{Reason: unavailableMessage}, UnavailableBlockedError())
 	}
 	decision, err := parseDecision(reply)
 	if err != nil {
-		return blocked(unavailableMessage)
+		return blocked(Decision{Reason: unavailableMessage}, UnavailableBlockedError())
 	}
 	if decision.Verdict == VerdictDeny {
-		return blocked(deniedReason(decision.Reason))
+		return blocked(decision, DeniedBlockedError(decision.Reason))
 	}
 	return decision, nil
 }
@@ -279,7 +299,6 @@ func deniedReason(reason string) string {
 	return reason + " " + revisionInstruction
 }
 
-func blocked(reason string) (Decision, error) {
-	decision := Decision{Verdict: VerdictDeny, Reason: reason}
-	return decision, &BlockedError{Verdict: decision.Verdict, Reason: decision.Reason}
+func blocked(decision Decision, err *BlockedError) (Decision, error) {
+	return decision, err
 }

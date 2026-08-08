@@ -86,13 +86,14 @@ type mcpServerPrefixResolver interface {
 
 // ServiceConfig carries model params + system prompt.
 type ServiceConfig struct {
-	Model            string
-	MaxTokens        int
-	Temperature      float64
-	SystemPrompt     string
-	Timeout          time.Duration
-	MCPMaxIterations int
-	MCPMaxTools      int
+	Model                  string
+	MaxTokens              int
+	Temperature            float64
+	SystemPrompt           string
+	Timeout                time.Duration
+	MCPMaxIterations       int
+	MCPMaxTools            int
+	GuardrailHistoryWindow int
 	// ContextBudgetTokens bounds the estimated request context, including
 	// the current message and native images, separate from MaxTokens (the
 	// completion cap). <=0 falls back to
@@ -283,6 +284,9 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 	contextBudget := cfg.ContextBudgetTokens
 	if contextBudget <= 0 {
 		contextBudget = defaultContextBudgetTokens
+	}
+	if cfg.GuardrailHistoryWindow <= 0 {
+		cfg.GuardrailHistoryWindow = interactiveIntentHistoryWindow
 	}
 	now := cfg.Now
 	if now == nil {
@@ -1600,7 +1604,7 @@ func (s *Service) streamPersistedTurn(
 
 	req.Tools = s.assembleTools(streamCtx, mcpSnap)
 	streamCtx = mcpintent.WithTrustedContext(
-		streamCtx, interactiveIntentContext(history, userText, interactiveIntentHistoryWindow),
+		streamCtx, s.interactiveIntentContext(history, userText),
 	)
 
 	redactor := &turnRedactor{}
@@ -1755,10 +1759,21 @@ func interactiveIntentContext(history []model.Message, userText string, historyW
 	}
 }
 
+func (s *Service) interactiveIntentContext(history []model.Message, userText string) mcpintent.TrustedContext {
+	historyWindow := interactiveIntentHistoryWindow
+	if s != nil && s.cfg.GuardrailHistoryWindow > 0 {
+		historyWindow = s.cfg.GuardrailHistoryWindow
+	}
+	return interactiveIntentContext(history, userText, historyWindow)
+}
+
 func trustedTextHistory(history []model.Message, historyWindow int) []provider.Message {
 	trusted := make([]provider.Message, 0, len(history))
 	for _, message := range history {
 		if message.Role != model.MsgRoleUser && message.Role != model.MsgRoleAssistant {
+			continue
+		}
+		if strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 		trusted = append(trusted, provider.Message{Role: message.Role, Content: message.Content})
@@ -2252,8 +2267,8 @@ func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot
 	status := toolStatusDone
 	if err != nil {
 		status = toolStatusError
-		if _, blocked := mcpintent.AsBlocked(err); blocked {
-			out = intentBlockedToolMessage
+		if blocked, ok := mcpintent.AsBlocked(err); ok {
+			out = "error: " + blocked.Error()
 		} else {
 			out = fitAnalysisErrorMessage
 		}
@@ -2279,7 +2294,7 @@ type credentialRequestArgs struct {
 // instruction for the model; on timeout/cancel it carries a benign
 // "not completed" status only.
 func (s *Service) handleRequestCredentials(streamCtx context.Context, userID int64, tc provider.ToolCall, sink EventSink) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: safeMCPArguments(tc.Arguments)})
 	_ = sink.Flush()
 
 	var args credentialRequestArgs
@@ -2340,7 +2355,7 @@ func (s *Service) handleRequestCredentials(streamCtx context.Context, userID int
 func (s *Service) handleLoadSkill(
 	tc provider.ToolCall, gated map[string]bool, sink EventSink,
 ) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: safeMCPArguments(tc.Arguments)})
 	_ = sink.Flush()
 
 	var args struct {
@@ -2370,7 +2385,7 @@ func (s *Service) handleLoadSkill(
 // gateWithSkill returns the skill body in place of executing the tool, prompting
 // the model to review and re-issue the call.
 func (s *Service) gateWithSkill(tc provider.ToolCall, sk skill.Skill, sink EventSink) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: safeMCPArguments(tc.Arguments)})
 	_ = sink.Flush()
 
 	content := sk.Body +
@@ -2422,8 +2437,8 @@ func (s *Service) runToolCall(
 	}
 	status := toolStatusDone
 	if cErr != nil {
-		if _, blocked := mcpintent.AsBlocked(cErr); blocked {
-			out = intentBlockedToolMessage
+		if blocked, ok := mcpintent.AsBlocked(cErr); ok {
+			out = "error: " + blocked.Error()
 		} else {
 			errText := cErr.Error()
 			if s.secrets != nil {
@@ -2452,17 +2467,12 @@ func (s *Service) runToolCall(
 	return fencedToolResultMessage(tc, out)
 }
 
-const intentBlockedToolMessage = "error: tool intent was not approved; revise the tool intent and try again."
-
 func safeMCPArguments(arguments string) string {
-	if !utf8.ValidString(arguments) {
+	safe, ok := mcpintent.SanitizeArguments(arguments)
+	if !ok {
 		return "{}"
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(arguments), &object); err != nil || object == nil {
-		return "{}"
-	}
-	return mcpintent.StripArguments(arguments)
+	return safe
 }
 
 // preview returns s truncated to at most n bytes (with an ellipsis marker),

@@ -57,6 +57,13 @@ func TestNewIntentGuardRespectsEnabledFlag(t *testing.T) {
 	}
 }
 
+func TestChatServiceConfigCarriesGuardrailHistoryWindow(t *testing.T) {
+	got := chatServiceConfig(config.Config{GuardrailHistoryWindow: 9})
+	if got.GuardrailHistoryWindow != 9 {
+		t.Fatalf("history window=%d want 9", got.GuardrailHistoryWindow)
+	}
+}
+
 // buildIngestExtractors is pure enough to unit test without refactoring
 // serve.go: it only depends on config.Config (a value, no DB/network
 // startup) and internal/ingest + internal/mcp constructors that fail fast on

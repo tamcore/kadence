@@ -26,6 +26,7 @@ const (
 	executorOtherTool               = "other"
 	executorScheduledDataIntentArgs = `{"_kadence_intent":"Read scheduled data"}`
 	executorObservedOutcome         = `{"status":"deliver","summary":"Observed","evidence":[],"monitoringState":{}}`
+	executorSummaryReply            = "Observed."
 )
 
 type executorProvider struct {
@@ -106,6 +107,7 @@ type executorSnapshot struct {
 	trusted     []mcpintent.TrustedContext
 	remoteCalls int
 	audit       *mcpaudit.Recorder
+	definitions []provider.ToolDefinition
 }
 
 func (s *executorSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
@@ -129,6 +131,13 @@ func (s *executorSnapshot) Call(ctx context.Context, name, args string) (string,
 		})
 	}
 	return s.callRemote(name)
+}
+
+func (s *executorSnapshot) CallWithDefinition(
+	ctx context.Context, definition provider.ToolDefinition, args string,
+) (string, error) {
+	s.definitions = append(s.definitions, definition)
+	return s.Call(ctx, definition.Name, args)
 }
 
 func (s *executorSnapshot) callRemote(name string) (string, error) {
@@ -288,7 +297,7 @@ func TestScheduledAuditStripsIntentFromRecorderArguments(t *testing.T) {
 	claimed := claimedTask(model.ScheduledTaskKindData, now)
 	claimed.Task.DTStart = new(now.Add(-time.Hour))
 	claimed.Task.RRULE = executorHourlyRRULE
-	if err := executorFor(worker, &executorProvider{reply: "Observed."}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, &executorStore{}, now).
+	if err := executorFor(worker, &executorProvider{reply: executorSummaryReply}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, &executorStore{}, now).
 		Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +332,7 @@ func executeScheduledIntentBlock(t *testing.T, block error) scheduledIntentBlock
 	claimed := claimedTask(model.ScheduledTaskKindData, now)
 	claimed.Task.DTStart = new(now.Add(-time.Hour))
 	claimed.Task.RRULE = executorHourlyRRULE
-	_ = executorFor(worker, &executorProvider{reply: "Observed."}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now).
+	_ = executorFor(worker, &executorProvider{reply: executorSummaryReply}, &executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}}, store, now).
 		Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed)
 	result := scheduledIntentBlockResult{workerCalls: worker.toolCalls, remoteCalls: snapshot.remoteCalls}
 	if len(store.successes) == 1 {
@@ -850,6 +859,44 @@ func TestExecutorHelperBoundsAndMetadata(t *testing.T) {
 	}
 	if _, err := boundedChatStream(ctx, &executorProvider{err: errors.New("x")}, provider.ChatRequest{}); err == nil {
 		t.Fatal("chat error accepted")
+	}
+}
+
+func TestExecutorDispatchesWithExactOfferedDescription(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	longDescription := strings.Repeat("d", maxToolDescriptionBytes+64)
+	worker := &executorProvider{toolReplies: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{ID: executorToolCallID, Name: executorDataTool, Arguments: `{}`}}},
+		{Content: executorObservedOutcome},
+	}}
+	snapshot := &executorSnapshot{
+		tools:   []provider.ToolDefinition{{Name: executorDataTool, Description: longDescription}},
+		results: map[string]string{executorDataTool: `{"status":"ok"}`},
+	}
+	store := &executorStore{}
+	executor := executorFor(
+		worker, &executorProvider{reply: executorSummaryReply},
+		&executorCatalog{byUser: map[string]*executorSnapshot{executorTestUsername: snapshot}},
+		store, now,
+	)
+	claimed := claimedTask(model.ScheduledTaskKindData, now)
+	claimed.Task.DTStart = new(now.Add(-time.Hour))
+	claimed.Task.RRULE = executorHourlyRRULE
+	if err := executor.Execute(t.Context(), Actor{ID: 7, Username: executorTestUsername}, claimed); err != nil {
+		t.Fatal(err)
+	}
+	var offered provider.ToolDefinition
+	for _, definition := range worker.requests[0].Tools {
+		if definition.Name == executorDataTool {
+			offered = definition
+			break
+		}
+	}
+	if len(snapshot.definitions) != 1 {
+		t.Fatalf("dispatch definitions=%d want 1", len(snapshot.definitions))
+	}
+	if snapshot.definitions[0].Description != offered.Description || len(offered.Description) != maxToolDescriptionBytes {
+		t.Fatalf("dispatch description bytes=%d offered bytes=%d", len(snapshot.definitions[0].Description), len(offered.Description))
 	}
 }
 
