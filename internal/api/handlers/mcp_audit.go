@@ -46,15 +46,18 @@ type mcpAuditSummaryDTO struct {
 	ToolCallID      string     `json:"toolCallId"`
 	ToolName        string     `json:"toolName"`
 	Status          string     `json:"status"`
+	Intent          string     `json:"intent"`
+	GuardVerdict    string     `json:"guardVerdict"`
 	StartedAt       time.Time  `json:"startedAt"`
 	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
 }
 
 type mcpAuditDetailDTO struct {
 	mcpAuditSummaryDTO
-	Arguments string `json:"arguments"`
-	Result    string `json:"result"`
-	Error     string `json:"error"`
+	Arguments   string `json:"arguments"`
+	GuardReason string `json:"guardReason"`
+	Result      string `json:"result"`
+	Error       string `json:"error"`
 }
 
 type mcpAuditCursor struct {
@@ -105,7 +108,7 @@ func (h *MCPAudit) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 	RespondJSON(w, http.StatusOK, mcpAuditDetailDTO{
 		mcpAuditSummaryDTO: mcpAuditSummary(call),
-		Arguments:          call.Arguments, Result: call.Result, Error: call.Error,
+		Arguments:          call.Arguments, GuardReason: call.GuardReason, Result: call.Result, Error: call.Error,
 	})
 }
 
@@ -114,6 +117,7 @@ func (h *MCPAudit) parseFilter(r *http.Request) (store.MCPAuditFilter, error) {
 	filter := store.MCPAuditFilter{
 		Cutoff: h.now().Add(-h.ttl), ConversationID: q.Get("conversationId"),
 		Source: q.Get("source"), Status: q.Get("status"), Model: q.Get("model"), Tool: q.Get("tool"),
+		Intent: q.Get("intent"), GuardVerdict: q.Get("guardVerdict"),
 	}
 	if value := q.Get("limit"); value != "" {
 		limit, err := strconv.Atoi(value)
@@ -139,8 +143,14 @@ func (h *MCPAudit) parseFilter(r *http.Request) (store.MCPAuditFilter, error) {
 		return filter, errors.New("source must be chat or scheduled")
 	}
 	if filter.Status != "" && filter.Status != model.MCPAuditStatusRunning &&
-		filter.Status != model.MCPAuditStatusSucceeded && filter.Status != model.MCPAuditStatusFailed {
-		return filter, errors.New("status must be running, succeeded, or failed")
+		filter.Status != model.MCPAuditStatusSucceeded && filter.Status != model.MCPAuditStatusFailed &&
+		filter.Status != model.MCPAuditStatusBlocked {
+		return filter, errors.New("status must be running, succeeded, failed, or blocked")
+	}
+	if filter.GuardVerdict != "" && filter.GuardVerdict != model.MCPAuditGuardNotEvaluated &&
+		filter.GuardVerdict != model.MCPAuditGuardAllowed && filter.GuardVerdict != model.MCPAuditGuardDenied &&
+		filter.GuardVerdict != model.MCPAuditGuardError {
+		return filter, errors.New("guardVerdict must be not_evaluated, allowed, denied, or error")
 	}
 	var err error
 	if filter.From, err = parseOptionalAuditTime(q.Get("from")); err != nil {
@@ -169,7 +179,8 @@ func mcpAuditSummary(call model.MCPAuditCall) mcpAuditSummaryDTO {
 		ConversationID: call.ConversationID, Source: call.Source,
 		ScheduledTaskID: call.ScheduledTaskID, ScheduledRunID: call.ScheduledRunID,
 		Model: call.Model, ToolCallID: call.ToolCallID, ToolName: call.ToolName,
-		Status: call.Status, StartedAt: call.StartedAt, FinishedAt: call.FinishedAt,
+		Status: call.Status, Intent: call.Intent, GuardVerdict: call.GuardVerdict,
+		StartedAt: call.StartedAt, FinishedAt: call.FinishedAt,
 	}
 }
 
