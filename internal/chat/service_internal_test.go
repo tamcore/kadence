@@ -179,6 +179,14 @@ type interactiveToolTurnResult struct {
 }
 
 func runInteractiveToolTurn(t *testing.T, evaluator mcpintent.Evaluator) interactiveToolTurnResult {
+	return runInteractiveToolTurnWithArguments(t, evaluator, func(token string) string {
+		return `{"token":"` + token + `","_kadence_intent":"Read weather"}`
+	})
+}
+
+func runInteractiveToolTurnWithArguments(
+	t *testing.T, evaluator mcpintent.Evaluator, argumentsFor func(string) string,
+) interactiveToolTurnResult {
 	t.Helper()
 	broker := secret.NewBroker()
 	requestID, tokens, err := broker.NewRequest(interactiveTestUserID, []secret.Field{{Name: "token", Secret: true}})
@@ -188,7 +196,7 @@ func runInteractiveToolTurn(t *testing.T, evaluator mcpintent.Evaluator) interac
 	if err := broker.Submit(interactiveTestUserID, requestID, map[string]string{"token": "live-secret"}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	arguments := `{"token":"` + tokens["token"] + `","_kadence_intent":"Read weather"}`
+	arguments := argumentsFor(tokens["token"])
 	registry := registryWithGuardedTools(guardedRemoteDefinition)
 	remote := registry.snapshots[testUnattendedUsername]
 	remote.result = "weather result"
@@ -280,6 +288,50 @@ func TestIntentAbsentFromSSEDebugAndPersistedToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(result.continuationArguments, mcpintent.ArgumentName) {
 		t.Fatalf("provider continuation call shape changed: %q", result.continuationArguments)
+	}
+}
+
+func TestInteractiveNonObjectIntentPayloadNeverReachesDurableSurfaces(t *testing.T) {
+	arguments := `[{"_kadence_intent":"Read weather"}]`
+	for _, testCase := range []struct {
+		name      string
+		evaluator mcpintent.Evaluator
+	}{
+		{name: "disabled"},
+		{name: "enabled", evaluator: allowEvaluator()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result := runInteractiveToolTurnWithArguments(t, testCase.evaluator, func(string) string {
+				return arguments
+			})
+			for _, durable := range []string{
+				result.sseArguments, result.persistedArguments, result.auditArguments,
+			} {
+				if durable != "{}" || strings.Contains(durable, mcpintent.ArgumentName) || strings.Contains(durable, "Read weather") {
+					t.Fatalf("durable arguments = %q, want payload-free object", durable)
+				}
+			}
+			if strings.Contains(result.debugLog, mcpintent.ArgumentName) || strings.Contains(result.debugLog, "Read weather") {
+				t.Fatalf("debug log leaked intent: %q", result.debugLog)
+			}
+			if testCase.evaluator == nil && !strings.Contains(result.debugLog, "args={}") {
+				t.Fatalf("debug log did not retain payload-free arguments: %q", result.debugLog)
+			}
+			if result.continuationArguments != arguments {
+				t.Fatalf("provider continuation arguments = %q, want original %q", result.continuationArguments, arguments)
+			}
+		})
+	}
+}
+
+func TestFITAnalysisSanitizesNonObjectIntentPayloadForSSE(t *testing.T) {
+	sink := &fitEventSink{}
+	s := NewService(nil, ServiceConfig{}, Deps{})
+	s.handleFITAnalysis(t.Context(), fitToolSnapshot{callResult: "fit result"}, provider.ToolCall{
+		Name: analyzeGarminFITToolName, Arguments: `[{"_kadence_intent":"Read weather"}]`,
+	}, sink)
+	if len(sink.events) == 0 || sink.events[0].Arguments != "{}" {
+		t.Fatalf("FIT events = %+v, want payload-free running arguments", sink.events)
 	}
 }
 

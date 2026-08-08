@@ -2455,7 +2455,11 @@ func (s *Service) runToolCall(
 const intentBlockedToolMessage = "error: tool intent was not approved; revise the tool intent and try again."
 
 func safeMCPArguments(arguments string) string {
-	if !utf8.ValidString(arguments) || !json.Valid([]byte(arguments)) {
+	if !utf8.ValidString(arguments) {
+		return "{}"
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &object); err != nil || object == nil {
 		return "{}"
 	}
 	return mcpintent.StripArguments(arguments)
