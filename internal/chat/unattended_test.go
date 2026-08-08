@@ -443,6 +443,49 @@ func TestDeniedCallAuditsCleanArgumentsAndGuardDecision(t *testing.T) {
 	}
 }
 
+func TestMalformedIntentArgumentsAuditPayloadFreeBeforeDispatch(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "reserved intent", raw: `{"_kadence_intent":"sensitive-audit-payload","id":`},
+		{name: "no reserved intent", raw: `{"id":"sensitive-audit-payload",`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			evaluator := allowEvaluator()
+			registry := registryWithGuardedTools(guardedRemoteDefinition)
+			store := &capturingAuditStore{}
+			audit := mcpaudit.NewRecorder(store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), time.Now)
+			snapshot, err := NewUnattendedCatalog(registry, nil, audit, evaluator).SnapshotFor(t.Context(), testUnattendedUsername)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := mcpaudit.WithMetadata(t.Context(), mcpaudit.Metadata{
+				RequestedTool: guardedRemoteDefinition.Name,
+				SafeArguments: tt.raw,
+			})
+			transforms := 0
+			_, err = snapshot.CallWithTransform(ctx, guardedRemoteDefinition.Name, tt.raw, func(arguments string) (string, error) {
+				transforms++
+				return arguments, nil
+			})
+			if _, ok := mcpintent.AsBlocked(err); !ok {
+				t.Fatalf("error = %v, want blocked", err)
+			}
+			if len(evaluator.inputs) != 0 || transforms != 0 || len(registry.snapshots[testUnattendedUsername].calls) != 0 {
+				t.Fatalf("classifier=%d transforms=%d remote=%v", len(evaluator.inputs), transforms, registry.snapshots[testUnattendedUsername].calls)
+			}
+			if len(store.calls) != 1 {
+				t.Fatalf("audit calls = %d, want 1", len(store.calls))
+			}
+			got := store.calls[0]
+			if got.Arguments != `{}` || got.Intent != "" || strings.Contains(got.Arguments, "sensitive-audit-payload") || strings.Contains(got.Arguments, mcpintent.ArgumentName) {
+				t.Fatalf("audit call = %+v", got)
+			}
+		})
+	}
+}
+
 func TestFITPropagatesIntentAndClassifiesGeneratedDownload(t *testing.T) {
 	evaluator := allowEvaluator()
 	download := provider.ToolDefinition{

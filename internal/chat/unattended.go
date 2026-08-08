@@ -205,7 +205,7 @@ func (s *UnattendedSnapshot) ServerPrefix(name, scope string) (string, bool) {
 func (s *UnattendedSnapshot) callGuardedDirect(ctx context.Context, toolName, arguments string, transform ArgumentTransform) (string, error) {
 	parsed, err := mcpintent.ExtractArguments(arguments)
 	if err != nil {
-		return "", s.block(ctx, toolName, mcpintent.StripArguments(arguments), "", mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool intent is invalid"})
+		return "", s.block(ctx, toolName, `{}`, "", mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "tool intent is invalid"})
 	}
 	ctx, err = s.authorize(ctx, toolName, parsed.SafeJSON, parsed.Intent)
 	if err != nil {
