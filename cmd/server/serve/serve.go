@@ -78,6 +78,19 @@ func (a mcpSnapshotAdapter) Call(ctx context.Context, toolName, argsJSON string)
 	return a.snap.Call(ctx, toolName, argsJSON)
 }
 
+func (a mcpSnapshotAdapter) CallWithTransform(
+	ctx context.Context, toolName, argsJSON string, transform chat.ArgumentTransform,
+) (string, error) {
+	if transform != nil {
+		var err error
+		argsJSON, err = transform(argsJSON)
+		if err != nil {
+			return "", err
+		}
+	}
+	return a.snap.Call(ctx, toolName, argsJSON)
+}
+
 func (a mcpSnapshotAdapter) ToolHints() []string {
 	return a.snap.ToolHints()
 }

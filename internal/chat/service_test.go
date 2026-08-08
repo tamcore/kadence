@@ -1964,6 +1964,19 @@ func (s *fakeMCPSnapshot) Call(ctx context.Context, toolName, argsJSON string) (
 	return s.parent.callResult, s.parent.callErr
 }
 
+func (s *fakeMCPSnapshot) CallWithTransform(
+	ctx context.Context, toolName, argsJSON string, transform chat.ArgumentTransform,
+) (string, error) {
+	if transform != nil {
+		var err error
+		argsJSON, err = transform(argsJSON)
+		if err != nil {
+			return "", err
+		}
+	}
+	return s.Call(ctx, toolName, argsJSON)
+}
+
 func (s *fakeMCPSnapshot) ToolHints() []string {
 	return s.parent.hints
 }
@@ -2264,6 +2277,19 @@ func (s *countingMCPSnapshot) Call(_ context.Context, toolName, _ string) (strin
 	s.parent.calls++
 	s.parent.lastTool = toolName
 	return "ok-result", nil
+}
+
+func (s *countingMCPSnapshot) CallWithTransform(
+	ctx context.Context, toolName, argsJSON string, transform chat.ArgumentTransform,
+) (string, error) {
+	if transform != nil {
+		var err error
+		argsJSON, err = transform(argsJSON)
+		if err != nil {
+			return "", err
+		}
+	}
+	return s.Call(ctx, toolName, argsJSON)
 }
 
 func (s *countingMCPSnapshot) ToolHints() []string {

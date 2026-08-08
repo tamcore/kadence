@@ -4,29 +4,33 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tamcore/kadence/internal/mcpaudit"
+	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
+	"github.com/tamcore/kadence/internal/secret"
 )
 
 const (
-	testFITServerOne    = "GARMIN1"
-	testFITServerTwo    = "GARMIN2"
-	testFITDownloadTool = "download_activity_file"
-	testFITRemoteTool   = "garmin__download_activity_file"
-	testFITGenericTool  = "download_fit"
-	testFITBridgeOne    = "http://garmin1:8081"
-	testFITBridgeTwo    = "http://garmin2:8081"
-	testFITBobPassword  = "bob-pass"
-	testFITAlias        = "garmin"
-	testFITGlobalScope  = "GLOBAL"
-	testFITAliceScope   = "USER_alice"
-	testFITBobScope     = "USER_bob"
+	interactiveTestUserID = int64(7)
+	testFITServerOne      = "GARMIN1"
+	testFITServerTwo      = "GARMIN2"
+	testFITDownloadTool   = "download_activity_file"
+	testFITRemoteTool     = "garmin__download_activity_file"
+	testFITGenericTool    = "download_fit"
+	testFITBridgeOne      = "http://garmin1:8081"
+	testFITBridgeTwo      = "http://garmin2:8081"
+	testFITBobPassword    = "bob-pass"
+	testFITAlias          = "garmin"
+	testFITGlobalScope    = "GLOBAL"
+	testFITAliceScope     = "USER_alice"
+	testFITBobScope       = "USER_bob"
 )
 
 type fitToolSnapshot struct {
@@ -46,6 +50,19 @@ func (s fitToolSnapshot) Call(_ context.Context, toolName, _ string) (string, er
 		*s.calledTool = toolName
 	}
 	return s.callResult, s.callErr
+}
+
+func (s fitToolSnapshot) CallWithTransform(
+	ctx context.Context, toolName, arguments string, transform ArgumentTransform,
+) (string, error) {
+	if transform != nil {
+		var err error
+		arguments, err = transform(arguments)
+		if err != nil {
+			return "", err
+		}
+	}
+	return s.Call(ctx, toolName, arguments)
 }
 
 func (fitToolSnapshot) ToolHints() []string { return nil }
@@ -79,6 +96,191 @@ func (s *fitAuditStore) Finish(_ context.Context, id int64, status, result, erro
 		ID: id, Status: status, Result: result, Error: errorText, FinishedAt: &finishedAt,
 	}
 	return nil
+}
+
+func TestInteractiveIntentContextUsesOnlyTrustedText(t *testing.T) {
+	history := []model.Message{
+		{
+			Role:    model.MsgRoleUser,
+			Content: "Earlier request",
+			Attachments: []model.MessageAttachment{{
+				Filename: "private.md", ExtractedMarkdown: "attachment secret",
+			}},
+		},
+		{
+			Role:    model.MsgRoleAssistant,
+			Content: "Earlier answer",
+			ToolCalls: []model.MessageToolCall{{
+				Name: "weather__get", Arguments: `{"secret":"no"}`,
+			}},
+		},
+		{Role: model.MsgRoleSystem, Content: "rag context must stay out"},
+		{Role: model.MsgRoleUser, Content: "Newest request"},
+	}
+
+	got := interactiveIntentContext(history, "  Current request  ", 2)
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal trusted context: %v", err)
+	}
+	if got.Request != "Current request" {
+		t.Fatalf("request = %q, want trimmed current request", got.Request)
+	}
+	if len(got.History) != 2 || got.History[0].Content != "Earlier answer" || got.History[1].Content != "Newest request" {
+		t.Fatalf("history = %+v, want chronological bounded text history", got.History)
+	}
+	for _, prohibited := range []string{"secret", "attachment secret", "private.md", "rag context"} {
+		if strings.Contains(string(raw), prohibited) {
+			t.Fatalf("trusted context leaked %q: %s", prohibited, raw)
+		}
+	}
+}
+
+func TestInteractiveIntentContextUsesStableFileOnlyPhrase(t *testing.T) {
+	got := interactiveIntentContext(nil, " \t", 6)
+	if got.Request != fileOnlyClassifierText {
+		t.Fatalf("request = %q, want %q", got.Request, fileOnlyClassifierText)
+	}
+}
+
+type interactiveToolProvider struct {
+	toolCall provider.ToolCall
+	requests []provider.ChatRequest
+}
+
+func (p *interactiveToolProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", errors.New("StreamChat should not be called during a tool turn")
+}
+
+func (p *interactiveToolProvider) StreamChatWithTools(
+	_ context.Context, req provider.ChatRequest, onToken provider.TokenFunc,
+) (provider.StreamResult, error) {
+	p.requests = append(p.requests, req)
+	if len(p.requests) == 1 {
+		return provider.StreamResult{ToolCalls: []provider.ToolCall{p.toolCall}}, nil
+	}
+	if err := onToken("finished"); err != nil {
+		return provider.StreamResult{}, err
+	}
+	return provider.StreamResult{Content: "finished"}, nil
+}
+
+type interactiveToolTurnResult struct {
+	evaluatorArguments    string
+	safeArguments         string
+	remoteArguments       string
+	remoteCalls           int
+	remainingArguments    string
+	sseArguments          string
+	debugLog              string
+	persistedArguments    string
+	continuationArguments string
+	auditArguments        string
+}
+
+func runInteractiveToolTurn(t *testing.T, evaluator mcpintent.Evaluator) interactiveToolTurnResult {
+	t.Helper()
+	broker := secret.NewBroker()
+	requestID, tokens, err := broker.NewRequest(interactiveTestUserID, []secret.Field{{Name: "token", Secret: true}})
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	if err := broker.Submit(interactiveTestUserID, requestID, map[string]string{"token": "live-secret"}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	arguments := `{"token":"` + tokens["token"] + `","_kadence_intent":"Read weather"}`
+	registry := registryWithGuardedTools(guardedRemoteDefinition)
+	remote := registry.snapshots[testUnattendedUsername]
+	remote.result = "weather result"
+	auditStore := &fitAuditStore{}
+	chatProvider := &interactiveToolProvider{toolCall: provider.ToolCall{
+		ID: "weather-call", Name: guardedRemoteDefinition.Name, Arguments: arguments,
+	}}
+	service := NewService(chatProvider, ServiceConfig{Model: "coach"}, Deps{
+		MCP: registry, Secrets: broker, IntentGuard: evaluator,
+		Audit: mcpaudit.NewRecorder(auditStore, nil, time.Now),
+	})
+	snapshot, err := service.toolCatalog.SnapshotFor(t.Context(), testUnattendedUsername)
+	if err != nil {
+		t.Fatalf("SnapshotFor: %v", err)
+	}
+
+	var logs strings.Builder
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	sink := &fitEventSink{}
+	trustedCtx := mcpintent.WithTrustedContext(t.Context(), mcpintent.TrustedContext{Request: "Read weather"})
+	_, state, err := service.runToolLoop(
+		trustedCtx, trustedCtx, "conversation", interactiveTestUserID, UserContext{Username: testUnattendedUsername},
+		model.Message{Role: model.MsgRoleUser, Content: "Read weather"}, nil, snapshot,
+		provider.ChatRequest{}, &turnRedactor{}, sink,
+	)
+	if err != nil {
+		t.Fatalf("runToolLoop: %v", err)
+	}
+
+	result := interactiveToolTurnResult{
+		remoteCalls:        len(remote.calls),
+		safeArguments:      mcpintent.StripArguments(arguments),
+		remainingArguments: mcpintent.StripArguments(arguments),
+		debugLog:           logs.String(),
+		auditArguments:     auditStore.started.Arguments,
+	}
+	result.remainingArguments, _ = broker.Substitute(interactiveTestUserID, result.remainingArguments)
+	if len(remote.arguments) > 0 {
+		result.remoteArguments = remote.arguments[0]
+	}
+	if len(state.Calls) > 0 {
+		result.persistedArguments = state.Calls[0].Arguments
+	}
+	for _, event := range sink.events {
+		if event.Type == EventTool && event.Status == toolStatusRunning {
+			result.sseArguments = event.Arguments
+		}
+	}
+	if len(chatProvider.requests) > 1 {
+		for _, message := range chatProvider.requests[1].Messages {
+			if len(message.ToolCalls) > 0 {
+				result.continuationArguments = message.ToolCalls[0].Arguments
+			}
+		}
+	}
+	if recorded, ok := evaluator.(*recordingEvaluator); ok && len(recorded.inputs) > 0 {
+		result.evaluatorArguments = recorded.inputs[0].Arguments
+	}
+	return result
+}
+
+func TestInteractiveDeniedIntentDoesNotConsumeCredential(t *testing.T) {
+	result := runInteractiveToolTurn(t, &recordingEvaluator{
+		decision: mcpintent.Decision{Verdict: mcpintent.VerdictDeny, Reason: "not needed"},
+	})
+	if result.remoteCalls != 0 || result.remainingArguments != `{"token":"live-secret"}` {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestInteractiveAllowedIntentSubstitutesAfterClassifier(t *testing.T) {
+	result := runInteractiveToolTurn(t, allowEvaluator())
+	if result.evaluatorArguments != result.safeArguments ||
+		result.remoteArguments != `{"token":"live-secret"}` || result.remoteCalls != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestIntentAbsentFromSSEDebugAndPersistedToolCalls(t *testing.T) {
+	result := runInteractiveToolTurn(t, allowEvaluator())
+	for _, durable := range []string{
+		result.sseArguments, result.debugLog, result.persistedArguments, result.auditArguments,
+	} {
+		if strings.Contains(durable, mcpintent.ArgumentName) || strings.Contains(durable, "Read weather") {
+			t.Fatalf("intent leaked: %q", durable)
+		}
+	}
+	if !strings.Contains(result.continuationArguments, mcpintent.ArgumentName) {
+		t.Fatalf("provider continuation call shape changed: %q", result.continuationArguments)
+	}
 }
 
 func TestFITRoutesForSnapshotSelectsExactUserScopedMCP(t *testing.T) {
@@ -181,7 +383,7 @@ func TestAssembleToolsRequiresSourceWhenMultipleFITRoutesAreVisible(t *testing.T
 	}
 }
 
-func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
+func TestFITAnalysisUsesSharedSnapshot(t *testing.T) {
 	auditStore := &fitAuditStore{}
 	s := NewService(nil, ServiceConfig{Model: "coach"}, Deps{
 		Audit: mcpaudit.NewRecorder(auditStore, nil, time.Now),
@@ -211,16 +413,11 @@ func TestFITAnalysisUsesVisibleUserRoute(t *testing.T) {
 		&fitEventSink{},
 	)
 
-	if calledTool != testFITRemoteTool {
-		t.Fatalf("called tool = %q, want bob's visible download tool", calledTool)
+	if calledTool != analyzeGarminFITToolName {
+		t.Fatalf("called tool = %q, want shared FIT tool", calledTool)
 	}
-	if unfencedToolResult(t, msg.Content) != fitAnalysisErrorMessage {
-		t.Fatalf("tool result = %q, want safe decode failure", msg.Content)
-	}
-	if auditStore.started.ToolName != testFITRemoteTool ||
-		auditStore.started.ConversationID != "chat-id" || auditStore.started.Model != "coach" ||
-		auditStore.finished.Status != model.MCPAuditStatusSucceeded {
-		t.Fatalf("nested FIT audit start=%+v finish=%+v", auditStore.started, auditStore.finished)
+	if unfencedToolResult(t, msg.Content) != snapshot.callResult {
+		t.Fatalf("tool result = %q, want shared snapshot result", msg.Content)
 	}
 }
 

@@ -65,6 +65,19 @@ func (s *catalogMCPSnapshot) Call(_ context.Context, name, arguments string) (st
 	return s.result, s.err
 }
 
+func (s *catalogMCPSnapshot) CallWithTransform(
+	ctx context.Context, name, arguments string, transform ArgumentTransform,
+) (string, error) {
+	if transform != nil {
+		var err error
+		arguments, err = transform(arguments)
+		if err != nil {
+			return "", err
+		}
+	}
+	return s.Call(ctx, name, arguments)
+}
+
 func (*catalogMCPSnapshot) ToolHints() []string { return nil }
 
 func (s *catalogMCPSnapshot) ServerPrefix(name, scope string) (string, bool) {

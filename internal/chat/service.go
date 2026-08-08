@@ -63,13 +63,16 @@ type MCPTools interface {
 
 // MCPUserSnapshot is a per-turn resolved view of the MCP servers applicable
 // to one user, obtained once via MCPTools.SnapshotFor and reused through the
-// whole tool loop. Satisfied by *mcp.UserSnapshot.
+// whole tool loop. Satisfied by *UnattendedSnapshot.
 type MCPUserSnapshot interface {
 	// ToolsFor returns the tool definitions available to this snapshot's user.
 	ToolsFor(ctx context.Context) ([]provider.ToolDefinition, error)
 	// Call invokes a named tool with JSON-encoded arguments and returns its
 	// (also JSON-ish/plain text) result.
 	Call(ctx context.Context, toolName, argsJSON string) (string, error)
+	// CallWithTransform invokes an authorized tool after applying transform to
+	// its clean arguments.
+	CallWithTransform(ctx context.Context, toolName, argsJSON string, transform ArgumentTransform) (string, error)
 	// ToolHints returns one "Tool guide: <prefix>: <hint>" line per server
 	// (applicable to this snapshot's user) that has a usage hint configured.
 	// A server without one contributes no line; an empty slice means none
@@ -103,6 +106,8 @@ type ServiceConfig struct {
 const defaultMaxToolIterations = 16
 const defaultMaxTools = 100
 const maxHistoricalAttachmentPayloadTurns = 8
+const interactiveIntentHistoryWindow = 6
+const fileOnlyClassifierText = "The user submitted files or selected documents without accompanying text."
 
 var (
 	errRewindAttachmentPayload = errors.New("rewind attachment payload unavailable")
@@ -1005,7 +1010,7 @@ func (s *Service) StreamTurn(
 
 	classifierText := input.Text
 	if strings.TrimSpace(classifierText) == "" {
-		classifierText = "The user submitted files or selected documents without accompanying text."
+		classifierText = fileOnlyClassifierText
 	}
 	guardrailMsgs := guardrailMessages(history, classifierText)
 	confirmationCandidate := !newConversation &&
@@ -1594,6 +1599,9 @@ func (s *Service) streamPersistedTurn(
 	}
 
 	req.Tools = s.assembleTools(streamCtx, mcpSnap)
+	streamCtx = mcpintent.WithTrustedContext(
+		streamCtx, interactiveIntentContext(history, userText, interactiveIntentHistoryWindow),
+	)
 
 	redactor := &turnRedactor{}
 	full, turnState, err := s.runToolLoop(
@@ -1734,6 +1742,31 @@ func guardrailMessages(history []model.Message, currentText string) []provider.M
 		})
 	}
 	return append(messages, provider.Message{Role: model.MsgRoleUser, Content: currentText})
+}
+
+func interactiveIntentContext(history []model.Message, userText string, historyWindow int) mcpintent.TrustedContext {
+	request := strings.TrimSpace(userText)
+	if request == "" {
+		request = fileOnlyClassifierText
+	}
+	return mcpintent.TrustedContext{
+		Request: request,
+		History: trustedTextHistory(history, historyWindow),
+	}
+}
+
+func trustedTextHistory(history []model.Message, historyWindow int) []provider.Message {
+	trusted := make([]provider.Message, 0, len(history))
+	for _, message := range history {
+		if message.Role != model.MsgRoleUser && message.Role != model.MsgRoleAssistant {
+			continue
+		}
+		trusted = append(trusted, provider.Message{Role: message.Role, Content: message.Content})
+	}
+	if historyWindow > 0 && len(trusted) > historyWindow {
+		trusted = trusted[len(trusted)-historyWindow:]
+	}
+	return trusted
 }
 
 // classifyGuardrail classifies raw text/history before any document extractor,
@@ -1881,7 +1914,7 @@ func (s *Service) runToolLoop(
 			Role: model.MsgRoleAssistant, Content: result.Content, ToolCalls: result.ToolCalls,
 		})
 		for _, tc := range result.ToolCalls {
-			args := tc.Arguments
+			args := safeMCPArguments(tc.Arguments)
 			if s.secrets != nil {
 				args = secret.Redact(args, redactor.snapshot(s.secrets, userID))
 			}
@@ -1994,6 +2027,7 @@ func (s *Service) completeIfTruncated(
 // request_credentials) plus the built-in tools themselves.
 func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []provider.ToolDefinition {
 	var tools []provider.ToolDefinition
+	var guardedFITTool *provider.ToolDefinition
 	fitRoutes := resolveFITRoutes(mcpSnap, s.fitRoutes)
 	fitEnabled := len(fitRoutes) > 0
 	if mcpSnap != nil {
@@ -2003,8 +2037,12 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 		} else {
 			filtered := mcpTools[:0]
 			for _, definition := range mcpTools {
-				if definition.Name == convertPaceToolName ||
-					(fitEnabled && definition.Name == analyzeGarminFITToolName) {
+				if definition.Name == convertPaceToolName {
+					continue
+				}
+				if fitEnabled && definition.Name == analyzeGarminFITToolName {
+					captured := definition
+					guardedFITTool = &captured
 					continue
 				}
 				filtered = append(filtered, definition)
@@ -2049,7 +2087,11 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 		tools = append(tools, s.credsTool())
 	}
 	if fitEnabled {
-		tools = append(tools, fitToolDefinition(fitRoutes))
+		if guardedFITTool != nil {
+			tools = append(tools, *guardedFITTool)
+		} else {
+			tools = append(tools, fitToolDefinition(fitRoutes))
+		}
 	}
 	return tools
 }
@@ -2157,7 +2199,7 @@ func (s *Service) dispatchToolWithTurn(
 	toolCtx := mcpaudit.WithMetadata(streamCtx, mcpaudit.Metadata{
 		ActorUserID: userID, ActorUsername: uc.Username, ConversationID: conversationID,
 		Source: model.MCPAuditSourceChat, Model: s.cfg.Model, ToolCallID: tc.ID,
-		RequestedTool: tc.Name, SafeArguments: tc.Arguments,
+		RequestedTool: tc.Name, SafeArguments: safeMCPArguments(tc.Arguments),
 		Sanitize: func(value string) string {
 			if s.secrets == nil {
 				return value
@@ -2197,21 +2239,23 @@ func (s *Service) dispatchToolWithTurn(
 }
 
 func (s *Service) handleFITAnalysis(ctx context.Context, mcpSnap MCPUserSnapshot, tc provider.ToolCall, sink EventSink) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	safeArguments := safeMCPArguments(tc.Arguments)
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: safeArguments})
 	_ = sink.Flush()
-	snapshot := &UnattendedSnapshot{
-		mcp:       mcpSnap,
-		allowed:   map[string]struct{}{analyzeGarminFITToolName: {}},
-		fitRoutes: resolveFITRoutes(mcpSnap, s.fitRoutes),
-		audit:     s.audit,
+	var out string
+	var err error
+	if mcpSnap == nil {
+		err = errors.New("no FIT source is available")
+	} else {
+		out, err = mcpSnap.CallWithTransform(ctx, tc.Name, tc.Arguments, IdentityArguments)
 	}
-	out, err := snapshot.Call(ctx, tc.Name, tc.Arguments)
 	status := toolStatusDone
 	if err != nil {
 		status = toolStatusError
-		out = err.Error()
-		if !strings.HasPrefix(out, "error:") {
-			out = "error: " + out
+		if _, blocked := mcpintent.AsBlocked(err); blocked {
+			out = intentBlockedToolMessage
+		} else {
+			out = fitAnalysisErrorMessage
 		}
 	}
 	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: status})
@@ -2343,18 +2387,16 @@ func (s *Service) gateWithSkill(tc provider.ToolCall, sk skill.Skill, sink Event
 // request.
 //
 // Order is security-critical (see docs/superpowers/specs — "Substitution at
-// dispatch"): the running SSE event and debug log below carry the
-// PLACEHOLDER args exactly as the model produced them (tc.Arguments) —
-// UNCHANGED. Only the JSON payload sent to mcpSnap.Call ever holds the real
-// secret value, via broker.Substitute. The MCP result is redacted before it
-// is logged, streamed, or appended to the provider request.
+// dispatch"): only the authorized clean arguments reach broker.Substitute.
+// The MCP result is redacted before it is logged, streamed, or appended to
+// the provider request.
 func (s *Service) runToolCall(
 	ctx context.Context, userID int64, mcpSnap MCPUserSnapshot, tc provider.ToolCall, redactor *turnRedactor, sink EventSink,
 ) provider.Message {
-	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: tc.Arguments})
+	safeArguments := safeMCPArguments(tc.Arguments)
+	_ = sink.Send(ChatEvent{Type: EventTool, Tool: tc.Name, Status: toolStatusRunning, Arguments: safeArguments})
 	_ = sink.Flush()
 
-	callArgs := tc.Arguments
 	// Redaction values are snapshotted into redactor BEFORE Substitute runs:
 	// Substitute consumes (deletes) each token's stored value as it
 	// substitutes it (single-use), so a live value used in THIS call would
@@ -2362,26 +2404,34 @@ func (s *Service) runToolCall(
 	// below (and for the rest of the turn), even though it's still exactly
 	// the value that could leak back in the tool's output or later text.
 	var redactValues []string
+	transform := IdentityArguments
 	if s.secrets != nil {
 		redactValues = redactor.snapshot(s.secrets, userID)
-		callArgs, _ = s.secrets.Substitute(userID, tc.Arguments)
+		transform = func(arguments string) (string, error) {
+			transformed, _ := s.secrets.Substitute(userID, arguments)
+			return transformed, nil
+		}
 	}
 
 	var out string
 	var cErr error
 	if mcpSnap != nil {
-		out, cErr = mcpSnap.Call(ctx, tc.Name, callArgs)
+		out, cErr = mcpSnap.CallWithTransform(ctx, tc.Name, tc.Arguments, transform)
 	} else {
 		cErr = fmt.Errorf("mcp: no MCP servers available for tool %q", tc.Name)
 	}
 	status := toolStatusDone
 	if cErr != nil {
-		errText := cErr.Error()
-		if s.secrets != nil {
-			errText = secret.Redact(errText, redactValues)
+		if _, blocked := mcpintent.AsBlocked(cErr); blocked {
+			out = intentBlockedToolMessage
+		} else {
+			errText := cErr.Error()
+			if s.secrets != nil {
+				errText = secret.Redact(errText, redactValues)
+			}
+			slog.Warn("mcp tool call failed", "tool", tc.Name, "err", errText)
+			out = "error: " + errText
 		}
-		slog.Warn("mcp tool call failed", "tool", tc.Name, "err", errText)
-		out = "error: " + errText
 		status = toolStatusError
 	} else if s.secrets != nil {
 		out = secret.Redact(out, redactValues)
@@ -2390,9 +2440,9 @@ func (s *Service) runToolCall(
 	if cErr == nil {
 		// Debug-only: surfaces exactly what a tool returned (enable via
 		// KADENCE_LOG_LEVEL=debug) to diagnose "tool returned X but the model
-		// said Y" cases. Result is truncated to keep logs bounded. Logs the
-		// PLACEHOLDER args (tc.Arguments) and the already-redacted result.
-		slog.Debug("mcp tool call", "tool", tc.Name, "args", tc.Arguments,
+		// said Y" cases. Result is truncated to keep logs bounded. Logs clean
+		// model arguments and the already-redacted result.
+		slog.Debug("mcp tool call", "tool", tc.Name, "args", safeArguments,
 			"result_bytes", len(out), "result_preview", preview(out, 500))
 	}
 
@@ -2400,6 +2450,15 @@ func (s *Service) runToolCall(
 	_ = sink.Flush()
 
 	return fencedToolResultMessage(tc, out)
+}
+
+const intentBlockedToolMessage = "error: tool intent was not approved; revise the tool intent and try again."
+
+func safeMCPArguments(arguments string) string {
+	if !utf8.ValidString(arguments) || !json.Valid([]byte(arguments)) {
+		return "{}"
+	}
+	return mcpintent.StripArguments(arguments)
 }
 
 // preview returns s truncated to at most n bytes (with an ellipsis marker),
