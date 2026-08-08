@@ -359,6 +359,17 @@ func TestValidateMCPIntentGuardAllowsLLMKeyFallback(t *testing.T) {
 	}
 }
 
+func TestValidateMCPIntentGuardAllowsGuardrailKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.MCPIntentGuardEnabled = true
+	cfg.LLMAPIKey = ""
+	cfg.GuardrailAPIKey = "guardrail-key"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
 func TestGuardrailResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_LLM_MODEL", "main-model")
 	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
