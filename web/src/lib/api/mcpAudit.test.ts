@@ -16,13 +16,16 @@ describe('MCP audit API', () => {
 	it('serializes list filters and cursor', async () => {
 		const fetchMock = vi.fn().mockResolvedValue(response({ items: [], nextCursor: 'next' }));
 		vi.stubGlobal('fetch', fetchMock);
+		const intent = 'Read weather & compare /forecast?city=Berlin+Mitte#today';
 
 		await listMcpAuditCalls({
 			limit: 25,
 			userId: 7,
 			conversationId: '11111111-1111-4111-8111-111111111111',
 			source: 'chat',
-			status: 'succeeded',
+			status: 'blocked',
+			intent,
+			guardVerdict: 'denied',
 			model: 'coach',
 			tool: 'garmin__activities',
 			from: '2026-07-25T10:00:00.000Z',
@@ -38,13 +41,18 @@ describe('MCP audit API', () => {
 			userId: '7',
 			conversationId: '11111111-1111-4111-8111-111111111111',
 			source: 'chat',
-			status: 'succeeded',
+			status: 'blocked',
+			intent,
+			guardVerdict: 'denied',
 			model: 'coach',
 			tool: 'garmin__activities',
 			from: '2026-07-25T10:00:00.000Z',
 			to: '2026-07-25T12:00:00.000Z',
 			cursor: 'next page'
 		});
+		expect(fetchMock.mock.calls[0][0]).toContain(
+			'intent=Read+weather+%26+compare+%2Fforecast%3Fcity%3DBerlin%2BMitte%23today'
+		);
 	});
 
 	it('loads full call detail', async () => {

@@ -13,8 +13,8 @@ const serverUrl =
 const username = 'mobile-layout-verification-user';
 const email = 'mobile-layout-verification-user-with-long-address@example.test';
 const toolName = 'training_calendar__build_progressive_marathon_recovery_recommendations';
-const auditIntent = `Review weather constraints ${'before planning '.repeat(28)}`;
-const auditGuardReason = `Tool mismatch: ${'the requested action does not match this tool. '.repeat(12)}`;
+const auditIntent = `Read weather for recovery planning: ${'x'.repeat(512)}`;
+const auditGuardReason = `Tool mismatch: ${'x'.repeat(512)}`;
 
 const session = {
 	id: 42,
