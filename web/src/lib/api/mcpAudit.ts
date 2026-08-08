@@ -1,7 +1,8 @@
 import { api } from '$lib/api/client';
 
 export type McpAuditSource = 'chat' | 'scheduled';
-export type McpAuditStatus = 'running' | 'succeeded' | 'failed';
+export type McpAuditStatus = 'running' | 'succeeded' | 'failed' | 'blocked';
+export type McpAuditGuardVerdict = 'not_evaluated' | 'allowed' | 'denied' | 'error';
 
 export interface McpAuditSummary {
 	id: number;
@@ -15,12 +16,15 @@ export interface McpAuditSummary {
 	toolCallId: string;
 	toolName: string;
 	status: McpAuditStatus;
+	intent: string;
+	guardVerdict: McpAuditGuardVerdict;
 	startedAt: string;
 	finishedAt?: string;
 }
 
 export interface McpAuditDetail extends McpAuditSummary {
 	arguments: string;
+	guardReason: string;
 	result: string;
 	error: string;
 }
@@ -36,6 +40,8 @@ export interface McpAuditFilters {
 	conversationId?: string;
 	source?: McpAuditSource;
 	status?: McpAuditStatus;
+	intent?: string;
+	guardVerdict?: McpAuditGuardVerdict;
 	model?: string;
 	tool?: string;
 	from?: string;

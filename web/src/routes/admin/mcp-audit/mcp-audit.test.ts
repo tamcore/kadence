@@ -39,6 +39,8 @@ const call = {
 	toolCallId: 'call-42',
 	toolName: 'garmin__activities',
 	status: 'succeeded' as const,
+	intent: '',
+	guardVerdict: 'not_evaluated' as const,
 	startedAt: '2026-07-25T10:00:00Z',
 	finishedAt: '2026-07-25T10:00:01Z'
 };
@@ -61,6 +63,7 @@ describe('/admin/mcp-audit', () => {
 		const detailSpy = vi.spyOn(auditApi, 'getMcpAuditCall').mockResolvedValue({
 			...call,
 			arguments: '{"limit":5}',
+			guardReason: '',
 			result: '{"count":1}',
 			error: ''
 		});
@@ -86,12 +89,57 @@ describe('/admin/mcp-audit', () => {
 		expect(screen.getByText('{"count":1}')).toBeInTheDocument();
 	});
 
+	it('renders an intent decision in the list and its reason only in the detail', async () => {
+		isAdminStore.set(true);
+		const deniedCall = {
+			...call,
+			status: 'blocked' as const,
+			intent: 'Read weather',
+			guardVerdict: 'denied' as const
+		};
+		vi.spyOn(auditApi, 'listMcpAuditCalls').mockResolvedValue({ items: [deniedCall] });
+		vi.spyOn(auditApi, 'getMcpAuditCall').mockResolvedValue({
+			...deniedCall,
+			arguments: '{}',
+			guardReason: 'Tool mismatch',
+			result: '',
+			error: ''
+		});
+
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('Read weather')).toBeInTheDocument());
+		expect(screen.getByText('denied')).toBeInTheDocument();
+		expect(screen.queryByText('Tool mismatch')).not.toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: 'View call 42' }));
+		await waitFor(() => expect(screen.getByText('Tool mismatch')).toBeInTheDocument());
+	});
+
+	it('sends intent, verdict, and blocked status filters', async () => {
+		isAdminStore.set(true);
+		const listSpy = vi.spyOn(auditApi, 'listMcpAuditCalls').mockResolvedValue({ items: [] });
+		render(Page);
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+
+		await fireEvent.input(screen.getByLabelText('Intent'), { target: { value: 'weather' } });
+		await fireEvent.change(screen.getByLabelText('Verdict'), { target: { value: 'denied' } });
+		await fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'blocked' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+		await waitFor(() =>
+			expect(listSpy).toHaveBeenLastCalledWith(
+				expect.objectContaining({ intent: 'weather', guardVerdict: 'denied', status: 'blocked' })
+			)
+		);
+	});
+
 	it('exposes complete mobile summaries and opens detail through the action menu', async () => {
 		isAdminStore.set(true);
 		vi.spyOn(auditApi, 'listMcpAuditCalls').mockResolvedValue({ items: [call] });
 		const detailSpy = vi.spyOn(auditApi, 'getMcpAuditCall').mockResolvedValue({
 			...call,
 			arguments: '{"limit":5}',
+			guardReason: '',
 			result: '{"count":1}',
 			error: ''
 		});
@@ -154,7 +202,7 @@ describe('/admin/mcp-audit', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 		await waitFor(() => expect(screen.getByText('No calls match current filters.')).toBeInTheDocument());
 
-		resolveDetail({ ...call, arguments: 'stale detail', result: '', error: '' });
+		resolveDetail({ ...call, arguments: 'stale detail', guardReason: '', result: '', error: '' });
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(screen.queryByText('stale detail')).not.toBeInTheDocument();

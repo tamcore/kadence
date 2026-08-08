@@ -13,6 +13,8 @@ const serverUrl =
 const username = 'mobile-layout-verification-user';
 const email = 'mobile-layout-verification-user-with-long-address@example.test';
 const toolName = 'training_calendar__build_progressive_marathon_recovery_recommendations';
+const auditIntent = `Review weather constraints ${'before planning '.repeat(28)}`;
+const auditGuardReason = `Tool mismatch: ${'the requested action does not match this tool. '.repeat(12)}`;
 
 const session = {
 	id: 42,
@@ -58,7 +60,9 @@ const auditCall = {
 	model: 'openai-compatible-coaching-model-with-a-long-deployment-name',
 	toolCallId: 'call-mobile-layout-42',
 	toolName,
-	status: 'succeeded' as const,
+	status: 'blocked' as const,
+	intent: auditIntent,
+	guardVerdict: 'denied' as const,
 	startedAt: '2026-07-28T18:00:00Z',
 	finishedAt: '2026-07-28T18:00:01.234Z'
 };
@@ -107,6 +111,7 @@ function fixtureData(path: string): unknown {
 			return {
 				...auditCall,
 				arguments: '{"weeks":16,"goal":"sub-4 marathon"}',
+				guardReason: auditGuardReason,
 				result: '{"recommendation":"easy recovery run"}',
 				error: ''
 			};
@@ -272,10 +277,17 @@ test('MCP audit keeps filters and long trace fields reachable in bounded cards',
 }, testInfo) => {
 	await openPage(page, testInfo, '/admin/mcp-audit');
 	await expect(page.getByLabel('Tool')).toBeVisible();
+	await expect(page.getByLabel('Intent')).toBeVisible();
+	await expect(page.getByLabel('Verdict')).toBeVisible();
 	await page.getByLabel('Tool').fill(toolName);
+	await page.getByLabel('Intent').fill('weather');
+	await page.getByLabel('Verdict').selectOption('denied');
+	await page.getByLabel('Status').selectOption('blocked');
 	await page.getByRole('button', { name: 'Apply filters' }).click();
 	await expect(page.getByText(toolName)).toBeVisible();
 	await expect(page.getByText(auditCall.model)).toBeVisible();
+	await expect(page.getByText(auditIntent)).toBeVisible();
+	await expect(page.getByText('denied')).toBeVisible();
 	await expectCardsInViewport(page, 'table tbody tr');
 	await expectNoHorizontalOverflow(page);
 
@@ -284,6 +296,7 @@ test('MCP audit keeps filters and long trace fields reachable in bounded cards',
 	const detail = page.getByLabel('MCP call 42 detail');
 	await expect(detail).toBeVisible();
 	await expect(detail).toContainText(toolName);
+	await expect(detail).toContainText(auditGuardReason);
 	await expectNoHorizontalOverflow(page);
 	await detail.getByRole('button', { name: 'Close detail' }).click();
 });

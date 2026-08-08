@@ -9,6 +9,7 @@
 		listMcpAuditCalls,
 		type McpAuditDetail,
 		type McpAuditFilters,
+		type McpAuditGuardVerdict,
 		type McpAuditSummary
 	} from '$lib/api/mcpAudit';
 
@@ -26,6 +27,8 @@
 	let conversationId = $state('');
 	let source = $state('');
 	let status = $state('');
+	let intent = $state('');
+	let guardVerdict = $state('');
 	let model = $state('');
 	let tool = $state('');
 	let from = $state('');
@@ -36,9 +39,11 @@
 		if (userId) filters.userId = Number(userId);
 		if (conversationId) filters.conversationId = conversationId.trim();
 		if (source === 'chat' || source === 'scheduled') filters.source = source;
-		if (status === 'running' || status === 'succeeded' || status === 'failed') {
+		if (status === 'running' || status === 'succeeded' || status === 'failed' || status === 'blocked') {
 			filters.status = status;
 		}
+		if (intent) filters.intent = intent.trim();
+		if (isGuardVerdict(guardVerdict)) filters.guardVerdict = guardVerdict;
 		if (model) filters.model = model.trim();
 		if (tool) filters.tool = tool.trim();
 		if (from) filters.from = new Date(from).toISOString();
@@ -103,6 +108,8 @@
 		conversationId = '';
 		source = '';
 		status = '';
+		intent = '';
+		guardVerdict = '';
 		model = '';
 		tool = '';
 		from = '';
@@ -122,6 +129,10 @@
 		const milliseconds = new Date(call.finishedAt).getTime() - new Date(call.startedAt).getTime();
 		if (milliseconds < 1000) return `${milliseconds} ms`;
 		return `${(milliseconds / 1000).toFixed(2)} s`;
+	}
+
+	function isGuardVerdict(value: string): value is McpAuditGuardVerdict {
+		return value === 'not_evaluated' || value === 'allowed' || value === 'denied' || value === 'error';
 	}
 
 	onMount(() => {
@@ -172,7 +183,22 @@
 				<option value="">Any</option>
 				<option value="succeeded">Succeeded</option>
 				<option value="failed">Failed</option>
+				<option value="blocked">Blocked</option>
 				<option value="running">Running</option>
+			</select>
+		</label>
+		<label>
+			<span>Intent</span>
+			<input bind:value={intent} placeholder="Requested action" />
+		</label>
+		<label>
+			<span>Verdict</span>
+			<select bind:value={guardVerdict}>
+				<option value="">Any</option>
+				<option value="allowed">Allowed</option>
+				<option value="denied">Denied</option>
+				<option value="error">Error</option>
+				<option value="not_evaluated">Not evaluated</option>
 			</select>
 		</label>
 		<label class="conversation-filter">
@@ -209,6 +235,8 @@
 								<th>Started</th>
 								<th>Status</th>
 								<th>Tool</th>
+								<th>Intent</th>
+								<th>Verdict</th>
 								<th>Actor</th>
 								<th>Model</th>
 								<th>Duration</th>
@@ -238,6 +266,14 @@
 												<span class="source">{call.source}</span>
 											</span>
 										</span>
+									</td>
+									<td class="intent-cell">
+										<span class="mobile-label">Intent</span>
+										<span class="intent">{call.intent || '—'}</span>
+									</td>
+									<td>
+										<span class="mobile-label">Verdict</span>
+										<span class="verdict {call.guardVerdict}">{call.guardVerdict}</span>
 									</td>
 									<td>
 										<span class="mobile-label">Actor</span>
@@ -285,6 +321,7 @@
 				<div class="detail-head">
 					<div>
 						<span class="status {selected.status}">{selected.status}</span>
+						<span class="verdict {selected.guardVerdict}">{selected.guardVerdict}</span>
 						<h2>{selected.toolName}</h2>
 					</div>
 					<button class="close" type="button" aria-label="Close detail" onclick={closeDetail}>×</button>
@@ -295,6 +332,7 @@
 					<div><dt>Actor</dt><dd>{selected.actorUsername} · user {selected.actorUserId}</dd></div>
 					<div><dt>Model</dt><dd>{selected.model}</dd></div>
 					<div><dt>Source</dt><dd>{selected.source}</dd></div>
+					<div><dt>Intent</dt><dd>{selected.intent || '—'}</dd></div>
 					<div><dt>Chat ID</dt><dd>{selected.conversationId}</dd></div>
 					{#if selected.scheduledTaskId}
 						<div><dt>Scheduled task</dt><dd>{selected.scheduledTaskId}</dd></div>
@@ -303,6 +341,10 @@
 					<div><dt>Duration</dt><dd>{duration(selected)}</dd></div>
 				</dl>
 
+				<section class="payload">
+					<h3>Guard reason</h3>
+					<pre>{selected.guardReason || '—'}</pre>
+				</section>
 				<section class="payload">
 					<h3>Arguments</h3>
 					<pre>{selected.arguments || '—'}</pre>
@@ -431,6 +473,8 @@
 	tbody tr.selected { background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: inset 3px 0 var(--accent); }
 	td strong { display: block; font-size: 0.88rem; }
 	.timestamp, .model, .source { color: var(--text-muted); font-size: 0.78rem; }
+	.intent-cell { min-width: 180px; white-space: normal; }
+	.intent { display: block; overflow-wrap: anywhere; }
 	.source-row { display: block; }
 	.source { display: block; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
 	.mobile-label, .mobile-actions { display: none; }
@@ -447,7 +491,24 @@
 	.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 	.status.succeeded { color: var(--accent-hover); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 	.status.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+	.status.blocked { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 	.status.running { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+	.verdict {
+		display: inline-flex;
+		max-width: 100%;
+		padding: 2px 6px;
+		border: 1px solid currentColor;
+		border-radius: 4px;
+		font-size: 0.68rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		line-height: 1.2;
+		text-transform: uppercase;
+		overflow-wrap: anywhere;
+	}
+	.verdict.allowed { color: var(--accent-hover); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+	.verdict.denied, .verdict.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+	.verdict.not_evaluated { color: var(--text-muted); }
 	.inspect { padding: 5px 9px; font-size: 0.78rem; }
 	.load-more { display: block; margin: 12px auto; padding: 8px 14px; }
 	.state { padding: 24px; margin: 0; color: var(--text-muted); text-align: center; }
@@ -565,6 +626,7 @@
 			text-transform: uppercase;
 		}
 		.tool-value { min-width: 0; }
+		.intent-cell { min-width: 0; }
 		.source-row {
 			display: grid;
 			grid-template-columns: 76px minmax(0, 1fr);
