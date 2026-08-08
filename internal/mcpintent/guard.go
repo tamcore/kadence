@@ -76,6 +76,9 @@ func (g *Guard) Evaluate(ctx context.Context, input Input) (Decision, error) {
 	if !validIntent(input.Intent) {
 		return blocked(invalidIntentMessage)
 	}
+	if !validToolInput(input) {
+		return blocked(unavailableMessage)
+	}
 	if ctx == nil || ctx.Err() != nil {
 		return blocked(unavailableMessage)
 	}
@@ -126,7 +129,7 @@ type classifierReply struct {
 }
 
 func parseDecision(reply string) (Decision, error) {
-	if !utf8.ValidString(reply) {
+	if _, ok := objectKeys(reply); !ok {
 		return Decision{}, errors.New("invalid response")
 	}
 	decoder := json.NewDecoder(strings.NewReader(reply))
@@ -164,6 +167,105 @@ func recentTrustedContext(trusted TrustedContext, historyWindow int) TrustedCont
 func validIntent(intent string) bool {
 	intent = strings.TrimSpace(intent)
 	return intent != "" && len(intent) <= MaxIntentBytes && utf8.ValidString(intent)
+}
+
+func validToolInput(input Input) bool {
+	if !validMetadata(input.ToolName) || !validMetadata(input.ToolDescription) {
+		return false
+	}
+	keys, ok := objectKeys(input.Arguments)
+	if !ok {
+		return false
+	}
+	_, reserved := keys[ArgumentName]
+	return !reserved
+}
+
+func validMetadata(value string) bool {
+	return strings.TrimSpace(value) != "" && utf8.ValidString(value)
+}
+
+func objectKeys(raw string) (map[string]struct{}, bool) {
+	if !utf8.ValidString(raw) || !validUnicodeEscapes(json.RawMessage(raw)) {
+		return nil, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, false
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '{' {
+		return nil, false
+	}
+	keys, err := scanObject(decoder)
+	if err != nil {
+		return nil, false
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return keys, true
+}
+
+func scanObject(decoder *json.Decoder) (map[string]struct{}, error) {
+	keys := make(map[string]struct{})
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil, errors.New("object key is not a string")
+		}
+		if _, exists := keys[key]; exists {
+			return nil, errors.New("duplicate JSON object key")
+		}
+		keys[key] = struct{}{}
+		if err := scanValue(decoder); err != nil {
+			return nil, err
+		}
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '}' {
+		return nil, errors.New("object is not closed")
+	}
+	return keys, nil
+}
+
+func scanValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		_, err := scanObject(decoder)
+		return err
+	case '[':
+		for decoder.More() {
+			if err := scanValue(decoder); err != nil {
+				return err
+			}
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); !ok || delimiter != ']' {
+			return errors.New("array is not closed")
+		}
+	}
+	return nil
 }
 
 func deniedReason(reason string) string {

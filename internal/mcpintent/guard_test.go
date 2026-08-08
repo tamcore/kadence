@@ -2,6 +2,7 @@ package mcpintent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -80,6 +81,8 @@ func TestGuardRejectsNonStrictResponses(t *testing.T) {
 		`{"verdict":"allow","reason":"no"}`,
 		`{"verdict":"DENY","reason":""}`,
 		`{"verdict":"DENY","reason":"no","extra":true}`,
+		`{"verdict":"ALLOW","verdict":"DENY","reason":"no"}`,
+		`{"verdict":"ALLOW","reason":"yes","reason":"no"}`,
 		`{"verdict":"DENY","reason":"` + strings.Repeat("x", MaxReasonBytes+1) + `"}`,
 		`{"verdict":"DENY","reason":"\ud800"}`,
 	} {
@@ -169,6 +172,53 @@ func TestGuardRejectsInvalidInputWithoutProviderCall(t *testing.T) {
 		if p.called {
 			t.Fatal("provider called with invalid input")
 		}
+	}
+}
+
+func TestGuardRejectsInvalidToolInputWithoutProviderCall(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input Input
+	}{
+		{name: "empty tool name", input: Input{Intent: testCheckWeather, ToolDescription: testSearchWeb, Arguments: `{}`}},
+		{name: "whitespace tool name", input: Input{Intent: testCheckWeather, ToolName: " \t", ToolDescription: testSearchWeb, Arguments: `{}`}},
+		{name: "invalid UTF-8 tool name", input: Input{Intent: testCheckWeather, ToolName: string([]byte{0xff}), ToolDescription: testSearchWeb, Arguments: `{}`}},
+		{name: "empty tool description", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, Arguments: `{}`}},
+		{name: "whitespace tool description", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: " \t", Arguments: `{}`}},
+		{name: "invalid UTF-8 tool description", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: string([]byte{0xff}), Arguments: `{}`}},
+		{name: "array arguments", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: `[]`}},
+		{name: "trailing arguments", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: `{} {}`}},
+		{name: "invalid UTF-8 arguments", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: string([]byte{0xff})}},
+		{name: "unpaired surrogate argument", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: `{"q":"\ud800"}`}},
+		{name: "reserved argument", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: `{"_kadence_intent":"weather"}`}},
+		{name: "duplicate reserved argument", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: `{"_kadence_intent":"weather","_kadence_intent":"forecast"}`}},
+		{name: "duplicate ordinary argument", input: Input{Intent: testCheckWeather, ToolName: testWebSearch, ToolDescription: testSearchWeb, Arguments: `{"q":"weather","q":"forecast"}`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := &fakeProvider{content: testAllowResponse}
+			decision, err := NewGuard(p, Config{}).Evaluate(trustedContext(), test.input)
+			if p.called {
+				t.Fatal("provider called with invalid tool input")
+			}
+			assertUnavailableBlock(t, decision, err)
+		})
+	}
+}
+
+func TestGuardAllowsEmptyArgumentsObjectVerbatim(t *testing.T) {
+	p := &fakeProvider{content: testAllowResponse}
+	input := validInput()
+	input.Arguments = `{}`
+	decision, err := NewGuard(p, Config{}).Evaluate(trustedContext(), input)
+	if err != nil || decision.Verdict != VerdictAllow {
+		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+	var envelope classifierEnvelope
+	if err := json.Unmarshal([]byte(p.request.Messages[1].Content), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Input.Arguments != `{}` {
+		t.Fatalf("arguments=%q", envelope.Input.Arguments)
 	}
 }
 
