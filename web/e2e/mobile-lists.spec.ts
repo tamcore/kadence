@@ -287,7 +287,10 @@ test('MCP audit keeps filters and long trace fields reachable in bounded cards',
 	await expect(page.getByText(toolName)).toBeVisible();
 	await expect(page.getByText(auditCall.model)).toBeVisible();
 	await expect(page.getByText(auditIntent)).toBeVisible();
-	await expect(page.getByText('denied')).toBeVisible();
+	const auditResult = page
+		.getByRole('table', { name: 'MCP audit calls' })
+		.getByRole('row', { name: `${toolName} audit call` });
+	await expect(auditResult.getByText('denied', { exact: true })).toBeVisible();
 	await expectCardsInViewport(page, 'table tbody tr');
 	await expectNoHorizontalOverflow(page);
 
