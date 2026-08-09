@@ -62,7 +62,7 @@ async function* streamRequest(
 	signal: AbortSignal
 ): AsyncIterable<ChatEvent> {
 	if (typeof window !== 'undefined' && !canReachServerNow()) {
-		yield { type: 'error', message: UNREACHABLE_MESSAGE };
+		yield { type: 'error', message: UNREACHABLE_MESSAGE, transport: true };
 		return;
 	}
 
@@ -83,7 +83,7 @@ async function* streamRequest(
 	} catch {
 		if (signal.aborted) return;
 		void reachabilityMonitor.probeNow();
-		yield { type: 'error', message: UNREACHABLE_MESSAGE };
+		yield { type: 'error', message: UNREACHABLE_MESSAGE, transport: true };
 		return;
 	}
 	const rotated = resp.headers.get('X-CSRF-Token');
@@ -92,9 +92,9 @@ async function* streamRequest(
 	if (!resp.ok || !resp.body) {
 		if (resp.status === 401) {
 			handleUnauthorized();
-			yield { type: 'error', message: 'unauthorized', code: 401 };
+			yield { type: 'error', message: 'unauthorized', code: 401, transport: true };
 		} else {
-			yield { type: 'error', message: `chat request failed (${resp.status})` };
+			yield { type: 'error', message: `chat request failed (${resp.status})`, transport: true };
 		}
 		return;
 	}

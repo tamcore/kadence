@@ -202,7 +202,7 @@ describe('streamChat', () => {
 			events.push(e);
 		}
 
-		expect(events).toEqual([{ type: 'error', message: 'unauthorized', code: 401 }]);
+		expect(events).toEqual([{ type: 'error', message: 'unauthorized', code: 401, transport: true }]);
 		expect(goto).toHaveBeenCalledWith('/login?returnTo=' + encodeURIComponent('/chat'));
 	});
 
@@ -217,7 +217,7 @@ describe('streamChat', () => {
 			events.push(e);
 		}
 
-		expect(events).toEqual([{ type: 'error', message: 'chat request failed (500)' }]);
+		expect(events).toEqual([{ type: 'error', message: 'chat request failed (500)', transport: true }]);
 		expect(goto).not.toHaveBeenCalled();
 	});
 });
@@ -249,14 +249,14 @@ describe('streamChat reachability', () => {
 		const fetchSpy = vi.spyOn(globalThis, 'fetch');
 		setServerReachable(false);
 		const events = await collect(streamChat({ message: 'hi' }, new AbortController().signal));
-		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE }]);
+		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE, transport: true }]);
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
 	it('probes and yields an error on a fetch rejection', async () => {
 		vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('failed to fetch'));
 		const events = await collect(streamChat({ message: 'hi' }, new AbortController().signal));
-		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE }]);
+		expect(events).toEqual([{ type: 'error', message: UNREACHABLE_MESSAGE, transport: true }]);
 		expect(reachabilityMonitor.probeNow).toHaveBeenCalledTimes(1);
 	});
 
