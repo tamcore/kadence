@@ -100,6 +100,30 @@ requests and are fully parsed before SSE begins, so a rejected upload cannot cre
 partial turn. Responses stream to the browser as Server-Sent Events (`ChatEvent`
 JSON); attachment payloads never appear in message JSON.
 
+### Upload stream and message deletion contracts
+
+A rich chat batch is atomic: every attachment is admitted and prepared before the
+user message, attachment metadata, and assistant generation begin. The browser starts
+each selected file as `Uploading`. The SSE stream then emits `upload` events in file
+ordinal order with `fileOrdinal`, `filename`, and `status`: `processing`, then `done`
+for each completed file. An upload failure emits `error` with `message` and terminates
+the turn without assistant generation. All `upload` completion events arrive before
+`meta`, assistant `token`, `title`, and terminal `done` events. This lets the browser
+show every file as complete before it shows the assistant response.
+
+Deleting a user message rewinds that message and every later message with:
+
+```text
+DELETE /api/conversations/{conversationId}/messages/{messageId}
+200 data: { conversationDeleted: boolean }
+404: unowned/absent conversation or message
+409: target is not a user message
+```
+
+When `conversationDeleted` is true, the client returns to a new chat. Otherwise it
+keeps the prefix before the deleted user message. Deletion does not generate a
+replacement assistant response.
+
 ### Inline Scheduled handoff
 
 Chat can offer future follow-ups, but it may create a Scheduled draft only when
