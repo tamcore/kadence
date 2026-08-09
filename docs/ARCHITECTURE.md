@@ -87,10 +87,11 @@ Each turn runs:
    successful swap, a canonical, sidebar-safe `title` SSE event arrives before
    `done`. The frontend immediately upserts it into its sorted conversation
    store, then reconciles again at the terminal event. Generation, persistence,
-   compare-and-set, and event-delivery failures fail open and keep the successful
-   chat response and its deterministic fallback title. Scheduled handoffs,
-   existing chats, edits, regenerations, and failed assistant responses skip title
-   generation.
+   and compare-and-set misses fail open and retain the deterministic fallback
+   title. A title-event send or flush failure happens after the generated title
+   persists; the chat still succeeds and terminal reconciliation can recover that
+   canonical title. Scheduled handoffs, existing chats, edits, regenerations,
+   guardrail refusals, and failed assistant responses skip title generation.
 
 Text-only turns retain the JSON request contract. Rich turns use bounded multipart
 requests and are fully parsed before SSE begins, so a rejected upload cannot create a
