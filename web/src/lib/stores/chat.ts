@@ -138,6 +138,16 @@ function sortConversations(items: Conversation[]): Conversation[] {
 	return [...pinned, ...recents];
 }
 
+function upsertConversation(updated: Conversation): void {
+	conversations.update((items) =>
+		sortConversations(
+			items.some((item) => item.id === updated.id)
+				? items.map((item) => (item.id === updated.id ? updated : item))
+				: [...items, updated]
+		)
+	);
+}
+
 // pinConversation waits for the canonical server response before changing the
 // list. This deliberately avoids optimistic state so a failed request leaves
 // the rendered Pinned/Recents partition exactly as it was.
@@ -450,6 +460,8 @@ async function consumeStream(
 						return copy;
 					});
 				}
+			} else if (ev.type === 'title') {
+				if (ev.conversation.id === convId) upsertConversation(ev.conversation);
 			} else if (ev.type === 'token') {
 				appendAssistantToken(ev.delta);
 			} else if (ev.type === 'tool') {

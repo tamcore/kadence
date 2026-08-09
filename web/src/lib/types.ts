@@ -94,6 +94,7 @@ export type ChatEvent =
 			attachments?: ChatAttachment[];
 			documentReferences?: ChatDocumentReference[];
 	  }
+	| { type: 'title'; conversation: Conversation }
 	| { type: 'token'; delta: string }
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'scheduled_artifact'; scheduledArtifact: ScheduledArtifact }

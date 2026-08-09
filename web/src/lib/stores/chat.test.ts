@@ -87,6 +87,37 @@ describe('chat store', () => {
 		});
 	});
 
+	it('adds a streamed title before the terminal refresh', async () => {
+		const generatedConversation = {
+			id: '11111111-1111-1111-1111-111111111111',
+			title: 'Weekly Training Review',
+			createdAt: '2026-08-09T08:00:00Z',
+			lastActivityAt: '2026-08-09T08:01:00Z',
+			pinnedAt: null
+		};
+		let markTitleReached!: () => void;
+		let releaseDone!: () => void;
+		const titleReached = new Promise<void>((resolve) => (markTitleReached = resolve));
+		const doneGate = new Promise<void>((resolve) => (releaseDone = resolve));
+		streamChatMock.mockImplementationOnce(async function* () {
+			yield { type: 'meta', conversationId: generatedConversation.id };
+			yield { type: 'title', conversation: generatedConversation };
+			markTitleReached();
+			await doneGate;
+			yield { type: 'done', assistantMessageId: 12 };
+		});
+
+		const send = sendMessage('Review my marathon pacing');
+		await titleReached;
+
+		expect(get(conversations)).toEqual([generatedConversation]);
+		expect(get(sending)).toBe(true);
+		expect(listConversationsMock).not.toHaveBeenCalled();
+
+		releaseDone();
+		await send;
+	});
+
 	it('reconciles optimistic file and document metadata from the persisted meta event', async () => {
 		const file = new File(['image'], 'finish.png', { type: 'image/png' });
 		const selectedDocument = {
@@ -781,6 +812,52 @@ describe('chat store', () => {
 		release();
 
 		await expect(sendPromise).resolves.toBeNull();
+		expect(get(messages)).toEqual(conversationB);
+	});
+
+	it('ignores a stale title after navigation', async () => {
+		activeId.set('conv-a');
+		messages.set([
+			{ id: 1, role: 'user', content: 'conversation A' },
+			{ id: 2, role: 'assistant', content: 'answer A' }
+		]);
+		const conversationA = {
+			id: 'conv-a',
+			title: 'Conversation A',
+			createdAt: '2026-08-09T08:00:00Z',
+			lastActivityAt: '2026-08-09T08:01:00Z',
+			pinnedAt: null
+		};
+		const conversationBEntry = {
+			id: 'conv-b',
+			title: 'Conversation B',
+			createdAt: '2026-08-09T08:02:00Z',
+			lastActivityAt: '2026-08-09T08:03:00Z',
+			pinnedAt: null
+		};
+		conversations.set([conversationA, conversationBEntry]);
+		let releaseTitle!: () => void;
+		const titleGate = new Promise<void>((resolve) => (releaseTitle = resolve));
+		streamChatMock.mockImplementationOnce(async function* () {
+			yield { type: 'meta', conversationId: 'conv-a', userMessageId: 3 };
+			await titleGate;
+			yield {
+				type: 'title',
+				conversation: { ...conversationA, title: 'Late title' }
+			};
+			yield { type: 'done', assistantMessageId: 4 };
+		});
+
+		const sendPromise = sendMessage('new turn in A');
+		await Promise.resolve();
+		const conversationB = navigatedConversation();
+		activeId.set('conv-b');
+		messages.set(conversationB);
+		releaseTitle();
+
+		await expect(sendPromise).resolves.toBeNull();
+		expect(get(conversations)).toEqual([conversationA, conversationBEntry]);
+		expect(get(activeId)).toBe('conv-b');
 		expect(get(messages)).toEqual(conversationB);
 	});
 

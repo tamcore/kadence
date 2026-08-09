@@ -42,6 +42,7 @@ describe('streamChat', () => {
 			'data: {"type":"meta","conversationId":"44444444-4444-4444-4444-444444444444"}\n\n',
 			'data: {"type":"token","delta":"Hel',
 			'lo"}\n\ndata: {"type":"token","delta":" world"}\n\n',
+			'data: {"type":"title","conversation":{"id":"44444444-4444-4444-4444-444444444444","title":"Weekly Training Review","createdAt":"2026-08-09T08:00:00Z","lastActivityAt":"2026-08-09T08:01:00Z","pinnedAt":null}}\n\n',
 			'data: {"type":"done"}\n\n'
 		])));
 
@@ -54,6 +55,16 @@ describe('streamChat', () => {
 			conversationId: '44444444-4444-4444-4444-444444444444'
 		});
 		expect(events.filter((e) => e.type === 'token').map((e: any) => e.delta).join('')).toBe('Hello world');
+		expect(events[3]).toEqual({
+			type: 'title',
+			conversation: {
+				id: '44444444-4444-4444-4444-444444444444',
+				title: 'Weekly Training Review',
+				createdAt: '2026-08-09T08:00:00Z',
+				lastActivityAt: '2026-08-09T08:01:00Z',
+				pinnedAt: null
+			}
+		});
 		expect(events.at(-1)).toEqual({ type: 'done' });
 	});
 
