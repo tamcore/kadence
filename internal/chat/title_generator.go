@@ -100,7 +100,10 @@ func (g *llmConversationTitleGenerator) Generate(
 		},
 	}, func(string) error { return nil })
 	if err != nil {
-		return "", fmt.Errorf("generate conversation title: %w", err)
+		if titleCtx.Err() != nil {
+			return "", fmt.Errorf("generate conversation title: %w", titleCtx.Err())
+		}
+		return "", errors.New("generate conversation title failed")
 	}
 	title := normalizeConversationTitle(full)
 	if title == "" {

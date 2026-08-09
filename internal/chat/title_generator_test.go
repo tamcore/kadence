@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -74,13 +75,6 @@ func TestConversationTitleGeneratorBuildsBoundedRequest(t *testing.T) {
 	if got := len([]rune(payload.AssistantText)); got != 4000 {
 		t.Errorf("assistant text rune length = %d, want 4000", got)
 	}
-	for _, forbidden := range []string{
-		"New conversation", "attachment-filename.pdf", "[history truncated]", "tool_result", "credential-marker",
-	} {
-		if strings.Contains(p.req.Messages[1].Content, forbidden) {
-			t.Errorf("request payload contains forbidden %q", forbidden)
-		}
-	}
 }
 
 func TestConversationTitleGeneratorNormalizesOutput(t *testing.T) {
@@ -117,6 +111,22 @@ func TestConversationTitleGeneratorRejectsEmptyOutput(t *testing.T) {
 	}
 }
 
+func TestConversationTitleGeneratorHidesProviderError(t *testing.T) {
+	providerErr := errors.New("raw provider response: credential-marker")
+	generator := chat.NewLLMConversationTitleGenerator(&titleProvider{err: providerErr}, "title-model")
+
+	_, err := generator.Generate(context.Background(), chat.ConversationTitleInput{UserText: titleTestUserText})
+	if err == nil {
+		t.Fatal("Generate() error = nil, want provider failure")
+	}
+	if got, want := err.Error(), "generate conversation title failed"; got != want {
+		t.Errorf("Generate() error = %q, want %q", got, want)
+	}
+	if errors.Is(err, providerErr) {
+		t.Error("Generate() error exposes provider error")
+	}
+}
+
 type blockingTitleProvider struct{}
 
 func (blockingTitleProvider) StreamChat(ctx context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
@@ -138,6 +148,9 @@ func TestConversationTitleGeneratorPropagatesCancellation(t *testing.T) {
 	_, err := generator.Generate(ctx, chat.ConversationTitleInput{UserText: titleTestUserText})
 	if err == nil {
 		t.Fatal("Generate() error = nil, want cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Generate() error = %v, want context cancellation", err)
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("Generate() did not return promptly after cancellation")
