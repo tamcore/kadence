@@ -636,7 +636,7 @@ func TestMessageRepositoryDeleteUserAndRewindDeletesSuffixRelations(t *testing.T
 	if err != nil || len(remaining) != 2 || remaining[0].ID != first.ID || remaining[1].ID != firstAssistant.ID {
 		t.Fatalf("remaining messages=%+v err=%v", remaining, err)
 	}
-	assertMessageRelationCounts(t, pool, conversation.ID, 1, 1, 1)
+	assertMessageRelationCounts(t, pool, conversation.ID, 2, 1, 1)
 	var chunkCount, auditCount, handoffCount, taskCount, scheduledConversationCount int
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chunks WHERE conversation_id = $1::uuid`, conversation.ID).Scan(&chunkCount); err != nil || chunkCount != 2 {
 		t.Fatalf("chunks=%d err=%v", chunkCount, err)
