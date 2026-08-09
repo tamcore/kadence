@@ -1,5 +1,6 @@
 import { get, writable } from 'svelte/store';
 import { goto } from '$app/navigation';
+import { page } from '$app/stores';
 import { APIError } from '$lib/api/client';
 import type {
 	ChatAttachment,
@@ -127,6 +128,11 @@ export async function removeConversation(id: string): Promise<void> {
 	await refreshConversations();
 }
 
+function isViewingConversation(id: string): boolean {
+	const currentPage = get(page);
+	return currentPage.route.id === '/chat/[id]' && currentPage.params.id === id;
+}
+
 export async function deleteUserMessage(messageId: number): Promise<void> {
 	if (get(messageActionPending)) return;
 	const conversationId = get(activeId);
@@ -142,7 +148,7 @@ export async function deleteUserMessage(messageId: number): Promise<void> {
 	try {
 		const result = await chatApi.deleteMessage(conversationId, messageId);
 		if (result.conversationDeleted) {
-			if (get(activeId) === conversationId) {
+			if (get(activeId) === conversationId && isViewingConversation(conversationId)) {
 				newChat();
 				void goto('/chat');
 			}
@@ -158,7 +164,7 @@ export async function deleteUserMessage(messageId: number): Promise<void> {
 				chatError.set(null);
 			} catch (reloadError) {
 				if (reloadError instanceof APIError && reloadError.status === 404) {
-					if (get(activeId) === conversationId) {
+					if (get(activeId) === conversationId && isViewingConversation(conversationId)) {
 						newChat();
 						void goto('/chat');
 					}

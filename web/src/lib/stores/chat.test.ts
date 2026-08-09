@@ -15,7 +15,19 @@ const pinConversationMock = vi.fn();
 const beginUploadBatchMock = vi.fn();
 const setUploadFileStateMock = vi.fn();
 const failUnsettledUploadFilesMock = vi.fn();
+const pageState = vi.hoisted(() => ({ routeId: '/chat/[id]' as string | null, conversationId: 'conv-1' as string | undefined }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+vi.mock('$app/stores', () => ({
+	page: {
+		subscribe: (run: (value: unknown) => void) => {
+			run({
+				route: { id: pageState.routeId },
+				params: pageState.conversationId === undefined ? {} : { id: pageState.conversationId }
+			});
+			return () => {};
+		}
+	}
+}));
 vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
 	editMessage: (...a: unknown[]) => editMessageMock(...a),
@@ -68,6 +80,8 @@ function navigatedConversation() {
 }
 
 beforeEach(() => {
+	pageState.routeId = '/chat/[id]';
+	pageState.conversationId = 'conv-1';
 	newChat();
 	streamChatMock.mockReset();
 	editMessageMock.mockReset();
@@ -452,6 +466,28 @@ describe('chat store', () => {
 		expect(goto).not.toHaveBeenCalled();
 	});
 
+	it('does not leave a workspace route when a whole-conversation delete completes', async () => {
+		activeId.set('conv-1');
+		const original = [
+			{ id: 1, role: 'user' as const, content: 'delete this conversation' },
+			{ id: 2, role: 'assistant' as const, content: 'old answer' }
+		];
+		messages.set(original);
+		let resolveDelete!: (result: { conversationDeleted: boolean }) => void;
+		deleteMessageMock.mockReturnValueOnce(new Promise((resolve) => (resolveDelete = resolve)));
+
+		const deleting = deleteUserMessage(1);
+		pageState.routeId = '/documents';
+		pageState.conversationId = undefined;
+		resolveDelete({ conversationDeleted: true });
+		await deleting;
+
+		expect(get(activeId)).toBe('conv-1');
+		expect(get(messages)).toEqual(original);
+		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(goto).not.toHaveBeenCalled();
+	});
+
 	it('preserves the transcript and reports an ordinary delete failure', async () => {
 		activeId.set('conv-1');
 		const original = [
@@ -504,6 +540,28 @@ describe('chat store', () => {
 		expect(listConversationsMock).toHaveBeenCalledOnce();
 		expect(goto).toHaveBeenCalledOnce();
 		expect(goto).toHaveBeenCalledWith('/chat');
+	});
+
+	it('does not leave a workspace route when canonical reload finds no conversation', async () => {
+		activeId.set('conv-1');
+		const original = [{ id: 1, role: 'user' as const, content: 'gone conversation' }];
+		messages.set(original);
+		deleteMessageMock.mockRejectedValueOnce(new APIError(404, 'message missing'));
+		let rejectReload!: (error: APIError) => void;
+		getMessagesMock.mockReturnValueOnce(new Promise((_, reject) => (rejectReload = reject)));
+
+		const deleting = deleteUserMessage(1);
+		await Promise.resolve();
+		await Promise.resolve();
+		pageState.routeId = '/documents';
+		pageState.conversationId = undefined;
+		rejectReload(new APIError(404, 'conversation missing'));
+		await deleting;
+
+		expect(get(activeId)).toBe('conv-1');
+		expect(get(messages)).toEqual(original);
+		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(goto).not.toHaveBeenCalled();
 	});
 
 	it('preserves persisted attachments and references through edit and regeneration', async () => {
