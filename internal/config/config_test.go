@@ -411,7 +411,7 @@ func TestTitleResolversFallBackToLLM(t *testing.T) {
 	if cfg.ResolvedTitleModel() != testLLMModel ||
 		cfg.ResolvedTitleBaseURL() != testLLMBaseURL ||
 		cfg.ResolvedTitleAPIKey() != testLLMAPIKey {
-		t.Fatalf("title resolvers should fall back to LLM values: %+v", cfg)
+		t.Fatal("title resolvers should fall back to LLM values")
 	}
 }
 
@@ -424,7 +424,7 @@ func TestTitleSeparateBackend(t *testing.T) {
 	if cfg.ResolvedTitleModel() != "title-model" ||
 		cfg.ResolvedTitleBaseURL() != "https://title.example/v1" ||
 		cfg.ResolvedTitleAPIKey() != "title-key" {
-		t.Fatalf("title resolvers should use title-specific values: %+v", cfg)
+		t.Fatal("title resolvers should use title-specific values")
 	}
 }
 
@@ -440,7 +440,7 @@ func TestTitleModelOverrideFallsBackIndependently(t *testing.T) {
 	if cfg.ResolvedTitleModel() != "title-model" ||
 		cfg.ResolvedTitleBaseURL() != testLLMBaseURL ||
 		cfg.ResolvedTitleAPIKey() != testLLMAPIKey {
-		t.Fatalf("title model override should preserve independent base URL and API key fallbacks: %+v", cfg)
+		t.Fatal("title model override should preserve independent base URL and API key fallbacks")
 	}
 }
 
