@@ -5,11 +5,29 @@ import * as documentsApi from '$lib/api/documents';
 import { APIError } from '$lib/api/client';
 import type { Document } from '$lib/types';
 
-const beginUploadBatchMock = vi.fn();
-const setUploadFileStateMock = vi.fn();
+const { beginUploadBatchMock, setUploadFileStateMock, uploadBatchMock } = vi.hoisted(() => {
+	let value: unknown = null;
+	const listeners = new Set<(next: unknown) => void>();
+	return {
+		beginUploadBatchMock: vi.fn(),
+		setUploadFileStateMock: vi.fn(),
+		uploadBatchMock: {
+			subscribe(listener: (next: unknown) => void) {
+				listeners.add(listener);
+				listener(value);
+				return () => listeners.delete(listener);
+			},
+			set(next: unknown) {
+				value = next;
+				listeners.forEach((listener) => listener(value));
+			}
+		}
+	};
+});
 vi.mock('$lib/stores/upload-progress', () => ({
 	beginUploadBatch: (...args: unknown[]) => beginUploadBatchMock(...args),
-	setUploadFileState: (...args: unknown[]) => setUploadFileStateMock(...args)
+	setUploadFileState: (...args: unknown[]) => setUploadFileStateMock(...args),
+	uploadBatch: uploadBatchMock
 }));
 
 const pdfCapabilities = {
@@ -40,6 +58,28 @@ describe('DocumentUpload', () => {
 		vi.restoreAllMocks();
 		beginUploadBatchMock.mockReset().mockReturnValue(47);
 		setUploadFileStateMock.mockReset();
+		uploadBatchMock.set(null);
+	});
+
+	it('blocks selection, drops, and submission while an external errored batch persists', async () => {
+		uploadBatchMock.set({
+			id: 99,
+			files: [{ ordinal: 0, filename: 'failed.pdf', state: 'error' }]
+		});
+		const upload = vi.spyOn(documentsApi, 'uploadDocument');
+		const { container } = render(DocumentUpload, { capabilities: richCapabilities, onUploaded: vi.fn() });
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		const file = new File(['pdf'], 'plan.pdf', { type: 'application/pdf' });
+
+		expect(input).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Upload 0 files' })).toBeDisabled();
+		Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+		await fireEvent.change(input);
+		await fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [file] } });
+
+		expect(screen.queryByText('plan.pdf')).not.toBeInTheDocument();
+		expect(beginUploadBatchMock).not.toHaveBeenCalled();
+		expect(upload).not.toHaveBeenCalled();
 	});
 
 	it('creates one full shared batch and progresses every file in order after an error', async () => {

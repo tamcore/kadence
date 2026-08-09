@@ -2,7 +2,7 @@
 	import { uploadDocument, type DocumentUploadCapabilities } from '$lib/api/documents';
 	import { APIError } from '$lib/api/client';
 	import Button from '$lib/components/Button.svelte';
-	import { beginUploadBatch, setUploadFileState } from '$lib/stores/upload-progress';
+	import { beginUploadBatch, setUploadFileState, uploadBatch } from '$lib/stores/upload-progress';
 
 	type UploadStatus = 'queued' | 'uploading' | 'success' | 'failure';
 	type UploadItem = {
@@ -29,6 +29,7 @@
 	let nextID = 0;
 
 	const queuedCount = $derived(queue.filter((item) => item.status === 'queued').length);
+	const batchActive = $derived(uploading || $uploadBatch !== null);
 	const uploadLabel = $derived(
 		queuedCount === 1 ? 'Upload 1 file' : `Upload ${queuedCount} files`
 	);
@@ -51,7 +52,7 @@
 
 	function addFiles(files: FileList | File[]): void {
 		const incoming = Array.from(files);
-		if (incoming.length === 0 || uploading) return;
+		if (incoming.length === 0 || batchActive) return;
 		if (!queue.some((item) => item.status === 'queued')) {
 			queue = [];
 		}
@@ -79,7 +80,7 @@
 	function handleDragEnter(event: DragEvent): void {
 		if (!containsFiles(event)) return;
 		event.preventDefault();
-		if (uploading) return;
+		if (batchActive) return;
 		dragDepth += 1;
 		dragActive = true;
 	}
@@ -106,7 +107,7 @@
 	}
 
 	async function handleUpload(): Promise<void> {
-		if (uploading || queuedCount === 0) return;
+		if (batchActive || queuedCount === 0) return;
 		const pending = queue.filter((item) => item.status === 'queued');
 		const batchId = beginUploadBatch(pending.map((item) => item.file));
 		uploading = true;
@@ -168,13 +169,13 @@
 			type="file"
 			multiple
 			accept={capabilities.accept}
-			disabled={uploading}
+			disabled={batchActive}
 			onchange={handleSelection}
 			aria-describedby="supported-formats"
 		/>
 		<p id="supported-formats">Supported: {supportedFormats}. Up to {Math.max(1, Math.round(capabilities.max_bytes / (1024 * 1024)))} MB each.</p>
 	</div>
-	<Button onclick={handleUpload} loading={uploading} disabled={queuedCount === 0}>{uploadLabel}</Button>
+	<Button onclick={handleUpload} loading={uploading} disabled={batchActive || queuedCount === 0}>{uploadLabel}</Button>
 </div>
 
 {#if queue.length > 0}
