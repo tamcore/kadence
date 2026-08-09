@@ -62,6 +62,22 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_SYSTEM_PROMPT` | — | Overrides the built-in chat system prompt. |
 | `KADENCE_LLM_CONTEXT_BUDGET` | `32000` | Estimated request-context budget, separate from `KADENCE_LLM_MAX_TOKENS` (the completion cap). Text uses a `len/4` heuristic and native images reserve `ceil(raw bytes/3)` for encoded transport. The current message and its evidence are mandatory; if they exceed the budget the request is rejected. Optional history is retained newest-first in whole turns and attachment payloads are loaded only for retained user turns. |
 
+## Conversation title provider
+
+Kadence makes one best-effort title request after the first successful assistant
+answer in an ordinary new chat. Each empty title setting falls back independently
+to its matching main LLM setting.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KADENCE_TITLE_MODEL` | `KADENCE_LLM_MODEL` | Title model id. |
+| `KADENCE_TITLE_BASE_URL` | `KADENCE_LLM_BASE_URL` | OpenAI-compatible title provider base URL. |
+| `KADENCE_TITLE_API_KEY` | `KADENCE_LLM_API_KEY` | Title provider API key. |
+
+The request has a fixed three-second timeout and a 32-token completion cap.
+Kadence keeps the deterministic fallback title if title generation fails. It
+does not retry title generation later.
+
 ## Guardrail (topic classifier)
 
 | Variable | Default | Purpose |

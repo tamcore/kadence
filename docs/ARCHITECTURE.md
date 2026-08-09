@@ -78,6 +78,19 @@ Each turn runs:
    own fence or pose as an instruction.
 5. **Persist + embed** — the turn, safe file metadata, raw attachment payloads, and
    reference snapshots are stored transactionally; text is embedded back into RAG.
+6. **Title new chats** — after a first assistant response persists for an ordinary
+   new chat, Kadence sends only the first bounded visible user text and the final
+   visible, redacted assistant text to a tool-free title provider. It excludes
+   system prompts, history, attachments and file names, tool arguments and
+   results, audit data, credentials, and hidden metadata. The owner-scoped
+   current-title compare-and-set preserves a manual or concurrent rename. On a
+   successful swap, a canonical, sidebar-safe `title` SSE event arrives before
+   `done`. The frontend immediately upserts it into its sorted conversation
+   store, then reconciles again at the terminal event. Generation, persistence,
+   compare-and-set, and event-delivery failures fail open and keep the successful
+   chat response and its deterministic fallback title. Scheduled handoffs,
+   existing chats, edits, regenerations, and failed assistant responses skip title
+   generation.
 
 Text-only turns retain the JSON request contract. Rich turns use bounded multipart
 requests and are fully parsed before SSE begins, so a rejected upload cannot create a
