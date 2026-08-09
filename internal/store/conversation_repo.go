@@ -105,6 +105,32 @@ func (r *ConversationRepository) UpdateTitle(ctx context.Context, id string, use
 	return c, nil
 }
 
+// UpdateTitleIfCurrent sets a title only when the conversation belongs to the
+// user and still has currentTitle.
+func (r *ConversationRepository) UpdateTitleIfCurrent(
+	ctx context.Context,
+	id string,
+	userID int64,
+	currentTitle string,
+	newTitle string,
+) (model.Conversation, bool, error) {
+	var c model.Conversation
+	err := r.pool.QueryRow(ctx,
+		`UPDATE conversations
+		    SET title = $1
+		  WHERE id = $2::uuid AND user_id = $3 AND title = $4
+		  RETURNING id::text, user_id, title, kind, pinned_at, last_activity_at, created_at`,
+		newTitle, id, userID, currentTitle,
+	).Scan(&c.ID, &c.UserID, &c.Title, &c.Kind, &c.PinnedAt, &c.LastActivityAt, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Conversation{}, false, nil
+	}
+	if err != nil {
+		return model.Conversation{}, false, fmt.Errorf("conditionally update conversation title: %w", err)
+	}
+	return c, true, nil
+}
+
 // UpdatePinned changes the pin state of an owned ordinary chat conversation.
 // Re-pinning preserves the original pin timestamp and repeated unpins remain
 // no-ops, making both operations idempotent.

@@ -25,6 +25,7 @@ const (
 	testEmailB   = "b@x.io"
 	testEmailO   = "o@x.io"
 	testEmailBob = "bob@x.io"
+	testOwner    = "owner"
 )
 
 // Shared test-fixture values reused across store_test files to avoid
@@ -177,7 +178,7 @@ func TestConversationScopedToOwner(t *testing.T) {
 	convs := store.NewConversationRepository(pool)
 	ctx := context.Background()
 
-	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
+	owner, _ := users.Create(ctx, model.User{Username: testOwner, Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, owner.ID, "secret")
 
@@ -193,7 +194,7 @@ func TestConversationUpdateTitle(t *testing.T) {
 	convs := store.NewConversationRepository(pool)
 	ctx := context.Background()
 
-	owner, _ := users.Create(ctx, model.User{Username: "owner", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
+	owner, _ := users.Create(ctx, model.User{Username: testOwner, Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, owner.ID, "old title")
 
@@ -213,6 +214,43 @@ func TestConversationUpdateTitle(t *testing.T) {
 
 	if _, err := convs.UpdateTitle(ctx, "00000000-0000-0000-0000-000000000000", owner.ID, "x"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing id UpdateTitle err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestConversationUpdateTitleIfCurrent(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	convs := store.NewConversationRepository(pool)
+	ctx := context.Background()
+
+	owner, _ := users.Create(ctx, model.User{Username: testOwner, Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
+	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
+	c, _ := convs.Create(ctx, owner.ID, "fallback title")
+
+	updated, swapped, err := convs.UpdateTitleIfCurrent(ctx, c.ID, owner.ID, "fallback title", "Generated title")
+	if err != nil || !swapped || updated.Title != "Generated title" || updated.ID != c.ID {
+		t.Fatalf("first swap = %+v swapped=%v err=%v", updated, swapped, err)
+	}
+
+	_, swapped, err = convs.UpdateTitleIfCurrent(ctx, c.ID, owner.ID, "fallback title", "Stale overwrite")
+	if err != nil || swapped {
+		t.Fatalf("stale swap = %v err=%v, want false/nil", swapped, err)
+	}
+
+	_, swapped, err = convs.UpdateTitleIfCurrent(ctx, c.ID, other.ID, "Generated title", "Cross-owner overwrite")
+	if err != nil || swapped {
+		t.Fatalf("cross-owner swap = %v err=%v, want false/nil", swapped, err)
+	}
+
+	_, swapped, err = convs.UpdateTitleIfCurrent(ctx, "00000000-0000-0000-0000-000000000000", owner.ID, "Generated title", "Missing overwrite")
+	if err != nil || swapped {
+		t.Fatalf("missing swap = %v err=%v, want false/nil", swapped, err)
+	}
+
+	got, err := convs.GetByID(ctx, c.ID, owner.ID)
+	if err != nil || got.Title != "Generated title" {
+		t.Fatalf("get after conditional update: %v %+v", err, got)
 	}
 }
 
