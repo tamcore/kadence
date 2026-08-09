@@ -116,6 +116,39 @@ jobs:
             echo "expected optional worker model/base/key to be omitted so Scheduled falls back to the main provider; got main-model='$fallback_model' main-base='$fallback_base_url' main-key='$fallback_api_key' worker-config-count=$fallback_worker_config worker-key-count=$fallback_worker_key"
             exit 1
           fi
+      - name: assert title provider configuration wiring
+        run: |
+          helm template kadence ./charts/kadence \
+            --set-string config.KADENCE_TITLE_MODEL=title-model \
+            --set-string config.KADENCE_TITLE_BASE_URL=https://title.example.com/v1 \
+            --set-string secrets.KADENCE_TITLE_API_KEY=title-key \
+            > /tmp/rendered-title-provider.yaml
+          for title_expected in \
+            KADENCE_TITLE_MODEL=title-model \
+            KADENCE_TITLE_BASE_URL=https://title.example.com/v1; do
+            title_key=${title_expected%%=*}
+            title_want=${title_expected#*=}
+            title_actual=$(yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"kadence-config\") | .data.$title_key" /tmp/rendered-title-provider.yaml)
+            if [ "$title_actual" != "$title_want" ]; then
+              echo "expected title ConfigMap $title_key=$title_want, got '$title_actual'"
+              exit 1
+            fi
+          done
+          title_secret=$(yq eval-all 'select(.kind == "Secret" and .metadata.name == "kadence-secret") | .stringData.KADENCE_TITLE_API_KEY' /tmp/rendered-title-provider.yaml)
+          title_key_in_config=$(yq eval-all '[select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data | to_entries[] | select(.key == "KADENCE_TITLE_API_KEY")] | length' /tmp/rendered-title-provider.yaml)
+          title_provider_in_secret=$(yq eval-all '[select(.kind == "Secret" and .metadata.name == "kadence-secret") | .stringData | to_entries[] | select(.key == "KADENCE_TITLE_MODEL" or .key == "KADENCE_TITLE_BASE_URL")] | length' /tmp/rendered-title-provider.yaml)
+          if [ "$title_secret" != "title-key" ] || [ "$title_key_in_config" != "0" ] || [ "$title_provider_in_secret" != "0" ]; then
+            echo "expected title model/base only in ConfigMap and API key only in Secret; got secret-key='$title_secret' config-key-count=$title_key_in_config secret-model-base-count=$title_provider_in_secret"
+            exit 1
+          fi
+
+          helm template kadence ./charts/kadence > /tmp/rendered-title-provider-default.yaml
+          title_config_overrides=$(yq eval-all '[select(.kind == "ConfigMap" and .metadata.name == "kadence-config") | .data | to_entries[] | select(.key == "KADENCE_TITLE_MODEL" or .key == "KADENCE_TITLE_BASE_URL")] | length' /tmp/rendered-title-provider-default.yaml)
+          title_secret_overrides=$(yq eval-all '[select(.kind == "Secret" and .metadata.name == "kadence-secret") | .stringData | to_entries[] | select(.key == "KADENCE_TITLE_API_KEY")] | length' /tmp/rendered-title-provider-default.yaml)
+          if [ "$title_config_overrides" != "0" ] || [ "$title_secret_overrides" != "0" ]; then
+            echo "expected empty title overrides to be omitted; got config-count=$title_config_overrides secret-count=$title_secret_overrides"
+            exit 1
+          fi
       - name: assert markitdown basicAuth password is sticky across renders
         run: |
           # With markitdown enabled and a fixed basicAuth.password, two consecutive

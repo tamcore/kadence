@@ -15,6 +15,8 @@ config:
   KADENCE_ENV: production
   KADENCE_LLM_BASE_URL: "https://your-openai-compatible-endpoint.example.com/v1"
   KADENCE_LLM_MODEL: "your-llm-model"
+  KADENCE_TITLE_MODEL: "your-title-model"
+  KADENCE_TITLE_BASE_URL: "https://your-title-endpoint.example.com/v1"
   # Opt-in conversational task scheduling. The main model refines the task;
   # these worker overrides let unattended executions use a cheaper compatible
   # provider. Leave any override empty to inherit its KADENCE_LLM_* counterpart.
@@ -44,6 +46,7 @@ config:
 secrets:
   KADENCE_CSRF_SECRET: "CHANGEME"
   KADENCE_LLM_API_KEY: "CHANGEME"
+  KADENCE_TITLE_API_KEY: "CHANGEME"
   KADENCE_SCHEDULED_WORKER_API_KEY: "CHANGEME"
   KADENCE_EMBED_API_KEY: "CHANGEME"
   KADENCE_ADMIN_PASSWORD: "CHANGEME"

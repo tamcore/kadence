@@ -173,6 +173,8 @@ config:
   KADENCE_ENV: production
   KADENCE_LLM_BASE_URL: ""
   KADENCE_LLM_MODEL: ""
+  KADENCE_TITLE_MODEL: ""
+  KADENCE_TITLE_BASE_URL: ""
   # Scheduled is opt-in. Definition/refinement always uses the main model.
   # Unattended data gathering may use a cheaper compatible provider through
   # the optional worker overrides below; empty overrides fall
@@ -226,6 +228,7 @@ secrets:
   existingSecret: ""
   KADENCE_CSRF_SECRET: ""
   KADENCE_LLM_API_KEY: ""
+  KADENCE_TITLE_API_KEY: ""
   # Optional Scheduled worker-provider key. Empty falls back to
   # KADENCE_LLM_API_KEY without copying that secret into the ConfigMap.
   KADENCE_SCHEDULED_WORKER_API_KEY: ""

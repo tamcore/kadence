@@ -233,6 +233,8 @@ func Run() error {
 		convs := store.NewConversationRepository(pool)
 		msgs := store.NewMessageRepository(pool)
 		prov := provider.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey)
+		titleProvider := provider.NewOpenAICompat(cfg.ResolvedTitleBaseURL(), cfg.ResolvedTitleAPIKey())
+		titleGenerator := chat.NewLLMConversationTitleGenerator(titleProvider, cfg.ResolvedTitleModel())
 		intentGuard := newIntentGuard(cfg)
 		var guardrail *chat.Guardrail
 		if cfg.GuardrailEnabled {
@@ -350,13 +352,14 @@ func Run() error {
 		scheduledWiring := newScheduledChatWiring(cfg.ScheduledEnabled, scheduledSvc, scheduledTasks)
 		chatSvc := chat.NewService(prov, chatServiceConfig(cfg), chat.Deps{
 			Convs: convs, Msgs: msgs, Guardrail: guardrail, RAG: rag, MCP: mcpTools, Skills: skills,
-			FITRoutes:   fitRoutes,
-			Secrets:     broker,
-			Audit:       auditRecorder,
-			IntentGuard: intentGuard,
-			Attachments: chatContent.attachments,
-			Documents:   documentsRepo,
-			Scheduled:   scheduledWiring.handoff,
+			TitleGenerator: titleGenerator,
+			FITRoutes:      fitRoutes,
+			Secrets:        broker,
+			Audit:          auditRecorder,
+			IntentGuard:    intentGuard,
+			Attachments:    chatContent.attachments,
+			Documents:      documentsRepo,
+			Scheduled:      scheduledWiring.handoff,
 		})
 		if cfg.ScheduledEnabled {
 			deps.Scheduled = handlers.NewScheduled(scheduledSvc)

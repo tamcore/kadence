@@ -16,6 +16,8 @@ const (
 	testFITDownloadTool = "download_activity_file"
 	testFITAliceScope   = "USER_alice"
 	testFITBridgeOne    = "http://garmin1:8081"
+	testLLMBaseURL      = "https://main.example/v1"
+	testLLMModel        = "main-model"
 	testLLMAPIKey       = "main-key"
 )
 
@@ -371,29 +373,74 @@ func TestValidateMCPIntentGuardAllowsGuardrailKey(t *testing.T) {
 }
 
 func TestGuardrailResolversFallBackToLLM(t *testing.T) {
-	t.Setenv("KADENCE_LLM_MODEL", "main-model")
-	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
+	t.Setenv("KADENCE_LLM_MODEL", testLLMModel)
+	t.Setenv("KADENCE_LLM_BASE_URL", testLLMBaseURL)
 	t.Setenv("KADENCE_LLM_API_KEY", testLLMAPIKey)
 	t.Setenv("KADENCE_GUARDRAIL_MODEL", "")
 	t.Setenv("KADENCE_GUARDRAIL_BASE_URL", "")
 	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "")
 
 	cfg := Load()
-	if cfg.ResolvedGuardrailModel() != "main-model" ||
-		cfg.ResolvedGuardrailBaseURL() != "https://main.example/v1" ||
-		cfg.ResolvedGuardrailAPIKey() != "main-key" {
+	if cfg.ResolvedGuardrailModel() != testLLMModel ||
+		cfg.ResolvedGuardrailBaseURL() != testLLMBaseURL ||
+		cfg.ResolvedGuardrailAPIKey() != testLLMAPIKey {
 		t.Fatalf("resolvers should fall back to LLM values: %+v", cfg)
 	}
 }
 
 func TestGuardrailSeparateBackend(t *testing.T) {
-	t.Setenv("KADENCE_LLM_MODEL", "main-model")
+	t.Setenv("KADENCE_LLM_MODEL", testLLMModel)
 	t.Setenv("KADENCE_GUARDRAIL_MODEL", "cheap-model")
 	t.Setenv("KADENCE_GUARDRAIL_BASE_URL", "https://guard.example/v1")
 	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "guard-key")
 	cfg := Load()
 	if cfg.ResolvedGuardrailModel() != "cheap-model" || cfg.ResolvedGuardrailBaseURL() != "https://guard.example/v1" || cfg.ResolvedGuardrailAPIKey() != "guard-key" {
 		t.Fatalf("resolvers should use guardrail-specific values: %+v", cfg)
+	}
+}
+
+func TestTitleResolversFallBackToLLM(t *testing.T) {
+	t.Setenv("KADENCE_LLM_MODEL", testLLMModel)
+	t.Setenv("KADENCE_LLM_BASE_URL", testLLMBaseURL)
+	t.Setenv("KADENCE_LLM_API_KEY", testLLMAPIKey)
+	t.Setenv("KADENCE_TITLE_MODEL", "")
+	t.Setenv("KADENCE_TITLE_BASE_URL", "")
+	t.Setenv("KADENCE_TITLE_API_KEY", "")
+
+	cfg := Load()
+	if cfg.ResolvedTitleModel() != testLLMModel ||
+		cfg.ResolvedTitleBaseURL() != testLLMBaseURL ||
+		cfg.ResolvedTitleAPIKey() != testLLMAPIKey {
+		t.Fatalf("title resolvers should fall back to LLM values: %+v", cfg)
+	}
+}
+
+func TestTitleSeparateBackend(t *testing.T) {
+	t.Setenv("KADENCE_TITLE_MODEL", "title-model")
+	t.Setenv("KADENCE_TITLE_BASE_URL", "https://title.example/v1")
+	t.Setenv("KADENCE_TITLE_API_KEY", "title-key")
+
+	cfg := Load()
+	if cfg.ResolvedTitleModel() != "title-model" ||
+		cfg.ResolvedTitleBaseURL() != "https://title.example/v1" ||
+		cfg.ResolvedTitleAPIKey() != "title-key" {
+		t.Fatalf("title resolvers should use title-specific values: %+v", cfg)
+	}
+}
+
+func TestTitleModelOverrideFallsBackIndependently(t *testing.T) {
+	t.Setenv("KADENCE_LLM_MODEL", testLLMModel)
+	t.Setenv("KADENCE_LLM_BASE_URL", testLLMBaseURL)
+	t.Setenv("KADENCE_LLM_API_KEY", testLLMAPIKey)
+	t.Setenv("KADENCE_TITLE_MODEL", "title-model")
+	t.Setenv("KADENCE_TITLE_BASE_URL", "")
+	t.Setenv("KADENCE_TITLE_API_KEY", "")
+
+	cfg := Load()
+	if cfg.ResolvedTitleModel() != "title-model" ||
+		cfg.ResolvedTitleBaseURL() != testLLMBaseURL ||
+		cfg.ResolvedTitleAPIKey() != testLLMAPIKey {
+		t.Fatalf("title model override should preserve independent base URL and API key fallbacks: %+v", cfg)
 	}
 }
 
@@ -426,9 +473,9 @@ func TestScheduledDefaultsDisabled(t *testing.T) {
 }
 
 func TestScheduledWorkerResolversFallBackToLLM(t *testing.T) {
-	t.Setenv("KADENCE_LLM_MODEL", "main-model")
-	t.Setenv("KADENCE_LLM_BASE_URL", "https://main.example/v1")
-	t.Setenv("KADENCE_LLM_API_KEY", "main-key")
+	t.Setenv("KADENCE_LLM_MODEL", testLLMModel)
+	t.Setenv("KADENCE_LLM_BASE_URL", testLLMBaseURL)
+	t.Setenv("KADENCE_LLM_API_KEY", testLLMAPIKey)
 	t.Setenv("KADENCE_LLM_TEMPERATURE", "0.9")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_MODEL", "")
 	t.Setenv("KADENCE_SCHEDULED_WORKER_BASE_URL", "")
@@ -436,9 +483,9 @@ func TestScheduledWorkerResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_SCHEDULED_WORKER_TEMPERATURE", "")
 
 	cfg := Load()
-	if cfg.ResolvedScheduledWorkerModel() != "main-model" ||
-		cfg.ResolvedScheduledWorkerBaseURL() != "https://main.example/v1" ||
-		cfg.ResolvedScheduledWorkerAPIKey() != "main-key" ||
+	if cfg.ResolvedScheduledWorkerModel() != testLLMModel ||
+		cfg.ResolvedScheduledWorkerBaseURL() != testLLMBaseURL ||
+		cfg.ResolvedScheduledWorkerAPIKey() != testLLMAPIKey ||
 		cfg.ScheduledWorkerTemperature != 0.9 {
 		t.Fatalf("scheduled worker resolvers should fall back to LLM values: %+v", cfg)
 	}

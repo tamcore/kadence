@@ -54,6 +54,9 @@ type Config struct {
 	LLMMaxTokens   int
 	LLMTemperature float64
 	LLMTimeout     time.Duration
+	TitleModel     string
+	TitleBaseURL   string
+	TitleAPIKey    string
 	// SystemPrompt overrides the default chat system prompt.
 	SystemPrompt string
 	// LLMContextBudgetTokens (KADENCE_LLM_CONTEXT_BUDGET) bounds the
@@ -235,6 +238,9 @@ func Load() Config {
 	cfg.LLMMaxTokens = envIntOr("KADENCE_LLM_MAX_TOKENS", 2048)
 	cfg.LLMTemperature = envFloatOr("KADENCE_LLM_TEMPERATURE", 0.3)
 	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 300*time.Second)
+	cfg.TitleModel = os.Getenv("KADENCE_TITLE_MODEL")
+	cfg.TitleBaseURL = os.Getenv("KADENCE_TITLE_BASE_URL")
+	cfg.TitleAPIKey = os.Getenv("KADENCE_TITLE_API_KEY")
 	cfg.SystemPrompt = os.Getenv("KADENCE_SYSTEM_PROMPT")
 	cfg.LLMContextBudgetTokens = envIntOr("KADENCE_LLM_CONTEXT_BUDGET", 32000)
 
@@ -632,6 +638,30 @@ func (c Config) ResolvedScheduledWorkerBaseURL() string {
 func (c Config) ResolvedScheduledWorkerAPIKey() string {
 	if c.ScheduledWorkerAPIKey != "" {
 		return c.ScheduledWorkerAPIKey
+	}
+	return c.LLMAPIKey
+}
+
+// ResolvedTitleModel returns the title model, falling back to the chat model.
+func (c Config) ResolvedTitleModel() string {
+	if c.TitleModel != "" {
+		return c.TitleModel
+	}
+	return c.LLMModel
+}
+
+// ResolvedTitleBaseURL returns the title base URL, falling back to the chat base URL.
+func (c Config) ResolvedTitleBaseURL() string {
+	if c.TitleBaseURL != "" {
+		return c.TitleBaseURL
+	}
+	return c.LLMBaseURL
+}
+
+// ResolvedTitleAPIKey returns the title API key, falling back to the chat API key.
+func (c Config) ResolvedTitleAPIKey() string {
+	if c.TitleAPIKey != "" {
+		return c.TitleAPIKey
 	}
 	return c.LLMAPIKey
 }
