@@ -22,6 +22,8 @@ import (
 
 const (
 	testImagePNGMime       = "image/png"
+	testFirstPNGFilename   = "first.png"
+	testSecondPNGFilename  = "second.png"
 	testHistoryPNGFilename = "history.png"
 	testOldAnswerContent   = "old answer"
 	testSystemPromptCoach  = "coach"
@@ -779,8 +781,8 @@ func TestStreamTurnRejectsCombinedCurrentImagesBeforePersistence(t *testing.T) {
 	err := svc.StreamTurn(
 		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{
-			{Filename: "first.png", MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
-			{Filename: "second.png", MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
+			{Filename: testFirstPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
+			{Filename: testSecondPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
 		}},
 		&capturingSink{},
 	)
@@ -790,6 +792,41 @@ func TestStreamTurnRejectsCombinedCurrentImagesBeforePersistence(t *testing.T) {
 	if msgs.createdConversation != nil || len(msgs.added) != 0 ||
 		len(mainProvider.gotMessages) != 0 || embedder.calls != 0 {
 		t.Fatalf("admission persisted/retrieved/called provider: messages=%+v provider=%d retrieval=%d", msgs.added, len(mainProvider.gotMessages), embedder.calls)
+	}
+}
+
+func TestStreamTurnRejectsOffTopicCurrentImagesBeforePersistence(t *testing.T) {
+	msgs := &fakeMsgs{}
+	mainProvider := &recordingProvider{}
+	guard := chat.NewGuardrail(&verdictProvider{verdict: testGuardrailOffTopic}, chat.GuardrailConfig{
+		Model: testGuardrailClassifierModel, DomainName: testGuardrailDomain,
+		AllowedTopics: testGuardrailTopics, RefusalMessage: testGuardrailRefusal,
+	})
+	svc := chat.NewService(mainProvider,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			SystemPrompt: testSystemPromptCoach, ContextBudgetTokens: 800,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:  msgs, Guardrail: guard,
+			Attachments: chat.NewAttachmentProcessor(nil),
+		},
+	)
+
+	err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{Files: []chat.FileInput{
+			{Filename: testFirstPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
+			{Filename: testSecondPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
+		}},
+		&capturingSink{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "current message and attachments exceed") {
+		t.Fatalf("StreamTurn error = %v", err)
+	}
+	if msgs.createdConversation != nil || len(msgs.added) != 0 || mainProvider.called {
+		t.Fatalf("admission persisted or called provider: messages=%+v provider=%t", msgs.added, mainProvider.called)
 	}
 }
 
@@ -864,6 +901,40 @@ func TestStreamTurnAttachmentFailureEmitsFileErrorAndNoPersistence(t *testing.T)
 	}
 	if msgs.createdConversation != nil || len(msgs.added) != 0 || len(mainProvider.gotMessages) != 0 {
 		t.Fatalf("attachment failure persisted or called provider: messages=%+v provider=%d", msgs.added, len(mainProvider.gotMessages))
+	}
+}
+
+func TestStreamTurnExtractorFailureEmitsFileErrorAndNoPersistence(t *testing.T) {
+	msgs := &fakeMsgs{}
+	mainProvider := &capturingProvider{reply: testProviderMustNotRun}
+	extractor := &turnExtractor{mime: testMimeMarkdown, err: errors.New("extract failed")}
+	sink := &capturingSink{}
+	svc := chat.NewService(mainProvider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs:       &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:        msgs,
+			Attachments: chat.NewAttachmentProcessor([]ingest.Extractor{extractor}),
+		},
+	)
+
+	err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{Files: []chat.FileInput{
+			{Filename: "valid.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
+			{Filename: "notes.md", MIME: testMimeMarkdown, Data: []byte("source")},
+		}}, sink,
+	)
+	if err == nil || !strings.Contains(err.Error(), "could not extract attachment") {
+		t.Fatalf("StreamTurn error = %v", err)
+	}
+	if extractor.calls != 1 || len(sink.events) < 4 || sink.events[2].Type != chat.EventUpload ||
+		sink.events[2].Status != chat.UploadStatusError || sink.events[2].FileOrdinal == nil ||
+		*sink.events[2].FileOrdinal != 1 || sink.events[3].Type != chat.EventError {
+		t.Fatalf("extractor calls=%d events=%+v", extractor.calls, sink.events)
+	}
+	if msgs.createdConversation != nil || len(msgs.added) != 0 || len(mainProvider.gotMessages) != 0 {
+		t.Fatalf("extractor failure persisted or called provider: messages=%+v provider=%d", msgs.added, len(mainProvider.gotMessages))
 	}
 }
 

@@ -1077,12 +1077,10 @@ func (s *Service) StreamTurn(
 		}
 	}
 	resolved := resolvedTurnContext{}
-	if !offTopic {
-		resolved.mcpSnap, resolved.systemPrompt = s.resolveMCPAndSystemPrompt(streamCtx, uc)
-		if estimateTokens(resolved.systemPrompt)+estimateTokens(input.Text)+
-			estimateNativeImageTokens(toPersist) > s.contextBudget {
-			return s.fail(sink, "current message and attachments exceed the configured context budget")
-		}
+	resolved.mcpSnap, resolved.systemPrompt = s.resolveMCPAndSystemPrompt(streamCtx, uc)
+	if estimateTokens(resolved.systemPrompt)+estimateTokens(input.Text)+
+		estimateNativeImageTokens(toPersist) > s.contextBudget {
+		return s.fail(sink, "current message and attachments exceed the configured context budget")
 	}
 	persistedInput := model.ChatUserInput{
 		Content: input.Text, Attachments: toPersist, DocumentIDs: input.DocumentIDs,
