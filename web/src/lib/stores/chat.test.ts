@@ -82,6 +82,25 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('chat store', () => {
+	it('marks every chat file uploading before starting its stream', async () => {
+		const files = [
+			new File(['image'], 'screen.png', { type: 'image/png' }),
+			new File(['text'], 'notes.txt', { type: 'text/plain' })
+		];
+		streamChatMock.mockImplementationOnce(() => {
+			expect(setUploadFileStateMock.mock.calls).toEqual([
+				[73, 0, 'uploading'],
+				[73, 1, 'uploading']
+			]);
+			return events([
+				{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+				{ type: 'done', assistantMessageId: 2 }
+			]);
+		});
+
+		await sendMessage('review these', files);
+	});
+
 	it('tracks uploaded files before the assistant terminal error without reopening done files', async () => {
 		const files = [
 			new File(['image'], 'screen.png', { type: 'image/png' }),
@@ -101,6 +120,8 @@ describe('chat store', () => {
 		expect(beginUploadBatchMock).toHaveBeenCalledWith(files);
 		expect(beginUploadBatchMock.mock.invocationCallOrder[0]).toBeLessThan(streamChatMock.mock.invocationCallOrder[0]);
 		expect(setUploadFileStateMock.mock.calls).toEqual([
+			[73, 0, 'uploading'],
+			[73, 1, 'uploading'],
 			[73, 0, 'processing'],
 			[73, 0, 'done'],
 			[73, 1, 'processing'],

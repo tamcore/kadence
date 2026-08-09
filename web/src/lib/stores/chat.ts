@@ -290,6 +290,9 @@ export async function sendMessage(
 			? {}
 			: { documentIds: documentReferences.map((document) => document.id) })
 	};
+	if (uploadBatchID !== undefined) {
+		files.forEach((_, ordinal) => setUploadFileState(uploadBatchID, ordinal, 'uploading'));
+	}
 	const convId = await consumeStream(
 		chatApi.streamChat(body, localAbort.signal),
 		userIdx,
