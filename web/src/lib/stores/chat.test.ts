@@ -1,9 +1,11 @@
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { APIError } from '$lib/api/client';
 
 const streamChatMock = vi.fn();
 const editMessageMock = vi.fn();
 const regenerateMessageMock = vi.fn();
+const deleteMessageMock = vi.fn();
 const getMessagesMock = vi.fn().mockResolvedValue([]);
 const listConversationsMock = vi.fn().mockResolvedValue([]);
 const renameConversationMock = vi.fn().mockResolvedValue({ id: '1', title: 'renamed' });
@@ -16,6 +18,7 @@ vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
 	editMessage: (...a: unknown[]) => editMessageMock(...a),
 	regenerateMessage: (...a: unknown[]) => regenerateMessageMock(...a),
+	deleteMessage: (...a: unknown[]) => deleteMessageMock(...a),
 	listConversations: (...a: unknown[]) => listConversationsMock(...a),
 	getMessages: (...a: unknown[]) => getMessagesMock(...a),
 	renameConversation: (...a: unknown[]) => renameConversationMock(...a),
@@ -37,7 +40,9 @@ import {
 	messages,
 	newChat,
 	editMessage,
+	deleteUserMessage,
 	loadConversation,
+	messageActionPending,
 	regenerateMessage,
 	refreshConversations,
 	renameConversation,
@@ -65,6 +70,7 @@ beforeEach(() => {
 	streamChatMock.mockReset();
 	editMessageMock.mockReset();
 	regenerateMessageMock.mockReset();
+	deleteMessageMock.mockReset();
 	getMessagesMock.mockReset().mockResolvedValue([]);
 	listConversationsMock.mockReset().mockResolvedValue([]);
 	renameConversationMock.mockReset().mockResolvedValue({ id: '1', title: 'renamed' });
@@ -335,6 +341,98 @@ describe('chat store', () => {
 				parts: [{ kind: 'text', content: 'new response' }]
 			}
 		]);
+	});
+
+	it('deletes only after server success and truncates the selected user suffix', async () => {
+		activeId.set('conv-1');
+		const original = [
+			{ id: 1, role: 'user' as const, content: 'first' },
+			{ id: 2, role: 'assistant' as const, content: 'answer' },
+			{ id: 3, role: 'user' as const, content: 'delete me' },
+			{ id: 4, role: 'assistant' as const, content: 'later answer' }
+		];
+		messages.set(original);
+		let resolveDelete!: (result: { conversationDeleted: boolean }) => void;
+		deleteMessageMock.mockReturnValueOnce(new Promise((resolve) => (resolveDelete = resolve)));
+
+		const deleting = deleteUserMessage(3);
+
+		expect(get(messageActionPending)).toBe(true);
+		expect(get(messages)).toEqual(original);
+		resolveDelete({ conversationDeleted: false });
+		await deleting;
+
+		expect(deleteMessageMock).toHaveBeenCalledWith('conv-1', 3);
+		expect(get(messages)).toEqual(original.slice(0, 2));
+		expect(streamChatMock).not.toHaveBeenCalled();
+		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(get(messageActionPending)).toBe(false);
+	});
+
+	it('starts a new chat when deleting the first message removes the conversation', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'only prompt' },
+			{ id: 2, role: 'assistant', content: 'only answer' }
+		]);
+		deleteMessageMock.mockResolvedValueOnce({ conversationDeleted: true });
+
+		await deleteUserMessage(1);
+
+		expect(get(activeId)).toBeNull();
+		expect(get(messages)).toEqual([]);
+		expect(listConversationsMock).toHaveBeenCalledOnce();
+	});
+
+	it('preserves the transcript and reports an ordinary delete failure', async () => {
+		activeId.set('conv-1');
+		const original = [
+			{ id: 1, role: 'user' as const, content: 'keep me' },
+			{ id: 2, role: 'assistant' as const, content: 'keep answer' }
+		];
+		messages.set(original);
+		deleteMessageMock.mockRejectedValueOnce(new Error('delete rejected'));
+
+		await deleteUserMessage(1);
+
+		expect(get(messages)).toEqual(original);
+		expect(get(chatError)).toBe('delete rejected');
+		expect(listConversationsMock).not.toHaveBeenCalled();
+	});
+
+	it('reloads the canonical transcript after a stale delete conflict', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'stale prompt' },
+			{ id: 2, role: 'assistant', content: 'stale answer' }
+		]);
+		deleteMessageMock.mockRejectedValueOnce(new APIError(404, 'message missing'));
+		getMessagesMock.mockResolvedValueOnce([
+			{ id: 11, role: 'user', content: 'canonical prompt' },
+			{ id: 12, role: 'assistant', content: 'canonical answer' }
+		]);
+
+		await deleteUserMessage(1);
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
+		expect(get(messages)).toEqual([
+			{ id: 11, role: 'user', content: 'canonical prompt' },
+			{ id: 12, role: 'assistant', content: 'canonical answer', parts: [{ kind: 'text', content: 'canonical answer' }] }
+		]);
+		expect(get(chatError)).toBeNull();
+	});
+
+	it('falls back to a new chat when canonical reload finds no conversation', async () => {
+		activeId.set('conv-1');
+		messages.set([{ id: 1, role: 'user', content: 'gone conversation' }]);
+		deleteMessageMock.mockRejectedValueOnce(new APIError(404, 'message missing'));
+		getMessagesMock.mockRejectedValueOnce(new APIError(404, 'conversation missing'));
+
+		await deleteUserMessage(1);
+
+		expect(get(activeId)).toBeNull();
+		expect(get(messages)).toEqual([]);
+		expect(listConversationsMock).toHaveBeenCalledOnce();
 	});
 
 	it('preserves persisted attachments and references through edit and regeneration', async () => {

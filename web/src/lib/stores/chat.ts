@@ -1,4 +1,5 @@
 import { get, writable } from 'svelte/store';
+import { APIError } from '$lib/api/client';
 import type {
 	ChatAttachment,
 	ChatDocumentReference,
@@ -21,6 +22,7 @@ export const messages = writable<ChatMessage[]>([]);
 export const conversations = writable<Conversation[]>([]);
 export const activeId = writable<string | null>(null);
 export const sending = writable(false);
+export const messageActionPending = writable(false);
 export const chatError = writable<string | null>(null);
 export const credentialRequest = writable<CredentialRequest | null>(null);
 // conversationsRefreshError is set when a background/foreground refresh of the
@@ -122,6 +124,48 @@ export async function removeConversation(id: string): Promise<void> {
 	await chatApi.deleteConversation(id);
 	if (get(activeId) === id) newChat();
 	await refreshConversations();
+}
+
+export async function deleteUserMessage(messageId: number): Promise<void> {
+	if (get(messageActionPending)) return;
+	const conversationId = get(activeId);
+	const current = get(messages);
+	const userIdx = current.findIndex((message) => message.id === messageId && message.role === 'user');
+	if (conversationId == null || userIdx < 0) {
+		chatError.set('Could not delete message');
+		return;
+	}
+
+	chatError.set(null);
+	messageActionPending.set(true);
+	try {
+		const result = await chatApi.deleteMessage(conversationId, messageId);
+		if (result.conversationDeleted) {
+			newChat();
+		} else if (get(activeId) === conversationId) {
+			messages.set(current.slice(0, userIdx));
+		}
+		await refreshConversations();
+	} catch (error) {
+		if (error instanceof APIError && error.status === 404) {
+			try {
+				const canonical = await chatApi.getMessages(conversationId);
+				if (get(activeId) === conversationId) messages.set(canonical.map(hydrateMessage));
+				chatError.set(null);
+			} catch (reloadError) {
+				if (reloadError instanceof APIError && reloadError.status === 404) {
+					if (get(activeId) === conversationId) newChat();
+					await refreshConversations();
+				} else {
+					chatError.set(reloadError instanceof Error ? reloadError.message : 'Could not delete message');
+				}
+			}
+		} else {
+			chatError.set(error instanceof Error ? error.message : 'Could not delete message');
+		}
+	} finally {
+		messageActionPending.set(false);
+	}
 }
 
 export async function renameConversation(id: string, title: string): Promise<void> {

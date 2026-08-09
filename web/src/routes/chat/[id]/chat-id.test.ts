@@ -11,7 +11,9 @@ vi.mock('$lib/stores/chat', async () => {
 		chatError: writable(null),
 		activeId: writable(null),
 		credentialRequest: writable(null),
+		messageActionPending: writable(false),
 		sendMessage: vi.fn(),
+		deleteUserMessage: vi.fn(),
 		stopGeneration: vi.fn(),
 		loadConversation: (...a: unknown[]) => loadConversationMock(...a)
 	};

@@ -6,6 +6,7 @@ const sendMessageMock = vi.fn();
 const stopGenerationMock = vi.fn();
 const editMessageMock = vi.fn();
 const regenerateMessageMock = vi.fn();
+const deleteUserMessageMock = vi.fn();
 const streamScheduledDefinitionMock = vi.fn();
 
 vi.mock('$lib/api/scheduled', async (importOriginal) => ({
@@ -33,7 +34,9 @@ vi.mock('$lib/stores/chat', async () => {
 		sendMessage: (...a: unknown[]) => sendMessageMock(...a),
 		stopGeneration: (...a: unknown[]) => stopGenerationMock(...a),
 		editMessage: (...a: unknown[]) => editMessageMock(...a),
-		regenerateMessage: (...a: unknown[]) => regenerateMessageMock(...a)
+		regenerateMessage: (...a: unknown[]) => regenerateMessageMock(...a),
+		deleteUserMessage: (...a: unknown[]) => deleteUserMessageMock(...a),
+		messageActionPending: writable(false)
 	};
 });
 
@@ -45,7 +48,7 @@ vi.mock('$app/stores', async () => {
 });
 
 import ChatView from './ChatView.svelte';
-import { activeId, messages, sending } from '$lib/stores/chat';
+import { activeId, messageActionPending, messages, sending } from '$lib/stores/chat';
 
 beforeEach(() => {
 	Object.defineProperty(navigator, 'clipboard', {
@@ -58,6 +61,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 	(messages as unknown as { set: (v: unknown[]) => void }).set([{ role: 'assistant', content: '**hi**' }]);
 	(sending as unknown as { set: (v: boolean) => void }).set(false);
+	(messageActionPending as unknown as { set: (v: boolean) => void }).set(false);
 	(activeId as unknown as { set: (v: string | null) => void }).set(null);
 });
 
@@ -232,6 +236,74 @@ describe('ChatView', () => {
 
 		expect(navigator.clipboard.writeText).toHaveBeenNthCalledWith(1, 'plain prompt');
 		expect(navigator.clipboard.writeText).toHaveBeenNthCalledWith(2, '**formatted** answer');
+	});
+
+	it('shows Delete only for persisted user messages', () => {
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'persisted prompt' },
+			{ id: 2, role: 'assistant', content: 'persisted answer' },
+			{ role: 'user', content: 'optimistic prompt' }
+		]);
+		render(ChatView, { props: {} });
+
+		expect(screen.getAllByRole('button', { name: 'Copy message' })).toHaveLength(3);
+		expect(screen.getAllByRole('button', { name: 'Edit message' })).toHaveLength(1);
+		expect(screen.getAllByRole('button', { name: 'Delete message' })).toHaveLength(1);
+		expect(screen.getAllByRole('button', { name: 'Regenerate response' })).toHaveLength(1);
+	});
+
+	it('confirms user-message deletion with the irreversible suffix consequence', async () => {
+		deleteUserMessageMock.mockResolvedValueOnce(undefined);
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'delete prompt' },
+			{ id: 2, role: 'assistant', content: 'delete answer' }
+		]);
+		render(ChatView, { props: {} });
+
+		const deleteButton = screen.getByRole('button', { name: 'Delete message' });
+		deleteButton.focus();
+		await fireEvent.click(deleteButton);
+
+		const dialog = screen.getByRole('dialog', { name: 'Delete this message?' });
+		expect(dialog).toHaveTextContent('Delete this message and all later history? This cannot be undone.');
+		const confirm = screen.getByRole('button', { name: 'Delete' });
+		await waitFor(() => expect(confirm).toHaveFocus());
+		await fireEvent.submit(confirm.closest('form')!);
+
+		expect(deleteUserMessageMock).toHaveBeenCalledTimes(1);
+		expect(deleteUserMessageMock).toHaveBeenCalledWith(1);
+		await waitFor(() => expect(deleteButton).toHaveFocus());
+	});
+
+	it('does not delete when its confirmation is cancelled or escaped', async () => {
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'keep prompt' }
+		]);
+		render(ChatView, { props: {} });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete message' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+		expect(deleteUserMessageMock).not.toHaveBeenCalled();
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete message' }));
+		await fireEvent.keyDown(window, { key: 'Escape' });
+		expect(deleteUserMessageMock).not.toHaveBeenCalled();
+	});
+
+	it('disables the composer and message actions while a message action is pending', () => {
+		(messageActionPending as unknown as { set: (v: boolean) => void }).set(true);
+		(messages as unknown as { set: (v: unknown[]) => void }).set([
+			{ id: 1, role: 'user', content: 'persisted prompt' },
+			{ id: 2, role: 'assistant', content: 'persisted answer' }
+		]);
+		render(ChatView, { props: {} });
+
+		expect(screen.getByRole('textbox')).toBeDisabled();
+		for (const button of screen.getAllByRole('button', {
+			name: /copy message|edit message|delete message|regenerate response/i
+		})) {
+			expect(button).toBeDisabled();
+		}
 	});
 
 	it('edits current prompt inline without confirmation', async () => {

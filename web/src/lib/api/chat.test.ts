@@ -6,7 +6,7 @@ vi.mock('$lib/pwa/reachability-monitor', () => ({
 }));
 
 import { goto } from '$app/navigation';
-import { editMessage, pinConversation, regenerateMessage, streamChat } from './chat';
+import { deleteMessage, editMessage, pinConversation, regenerateMessage, streamChat } from './chat';
 import { api } from './client';
 import { setCsrfToken } from './client';
 import { setOnline, setServerReachable, UNREACHABLE_MESSAGE } from '$lib/stores/connection';
@@ -223,6 +223,14 @@ describe('streamChat', () => {
 });
 
 describe('conversation mutations', () => {
+	it('deletes a message through its dedicated endpoint without a body', async () => {
+		const del = vi.spyOn(api, 'del').mockResolvedValue({ conversationDeleted: false });
+
+		await deleteMessage('conv / one', 42);
+
+		expect(del).toHaveBeenCalledWith('/conversations/conv%20%2F%20one/messages/42');
+	});
+
 	it('pins a conversation through the PATCH endpoint', async () => {
 		const patch = vi.spyOn(api, 'patch').mockResolvedValue({
 			id: 'conv-1',

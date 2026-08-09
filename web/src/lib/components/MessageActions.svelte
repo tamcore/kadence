@@ -5,11 +5,13 @@
 		content,
 		disabled = false,
 		onEdit,
+		onDelete,
 		onRegenerate
 	}: {
 		content: string;
 		disabled?: boolean;
 		onEdit?: () => void;
+		onDelete?: () => void;
 		onRegenerate?: () => void;
 	} = $props();
 
@@ -72,6 +74,21 @@
 			</svg>
 		</button>
 	{/if}
+	{#if onDelete}
+		<button
+			class="message-action danger"
+			type="button"
+			aria-label="Delete message"
+			title="Delete message"
+			{disabled}
+			onclick={onDelete}
+		>
+			<svg viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M4 7h16" />
+				<path d="M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+			</svg>
+		</button>
+	{/if}
 	{#if onRegenerate}
 		<button
 			class="message-action"
@@ -114,6 +131,7 @@
 		background: var(--bg);
 		color: var(--text);
 	}
+	.message-action.danger:hover:not(:disabled) { color: var(--danger); }
 	.message-action:focus-visible {
 		outline: 2px solid var(--accent);
 		outline-offset: 1px;

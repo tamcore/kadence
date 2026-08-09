@@ -3,7 +3,9 @@
 		activeId,
 		chatError,
 		credentialRequest,
+		deleteUserMessage,
 		editMessage,
+		messageActionPending,
 		messages,
 		regenerateMessage,
 		sendMessage,
@@ -30,6 +32,7 @@
 	let anchorConsumed = false;
 	let pendingAction = $state<
 		| { kind: 'edit'; messageId: number; text: string }
+		| { kind: 'delete'; messageId: number }
 		| { kind: 'regenerate'; messageId: number }
 		| null
 	>(null);
@@ -119,6 +122,10 @@
 		void regenerateMessage(messageId);
 	}
 
+	function requestDelete(messageId: number): void {
+		pendingAction = { kind: 'delete', messageId };
+	}
+
 	function confirmPending(): void {
 		const action = pendingAction;
 		pendingAction = null;
@@ -126,6 +133,8 @@
 		if (!action) return;
 		if (action.kind === 'edit') {
 			void editMessage(action.messageId, action.text);
+		} else if (action.kind === 'delete') {
+			void deleteUserMessage(action.messageId);
 		} else {
 			void regenerateMessage(action.messageId);
 		}
@@ -155,10 +164,13 @@
 										: `text-${j}`)}
 									{#if part.kind === 'text'}
 										{#if part.content}
-											<MarkdownMessage content={part.content} />
-										{/if}
-									{:else if part.kind === 'scheduled'}
-										<ScheduledArtifactCard artifact={part.artifact} disabled={$sending || !m.id} />
+										<MarkdownMessage content={part.content} />
+									{/if}
+								{:else if part.kind === 'scheduled'}
+										<ScheduledArtifactCard
+											artifact={part.artifact}
+											disabled={$sending || $messageActionPending || !m.id}
+										/>
 									{:else}
 										{@const toolPart = part as Extract<MessagePart, { kind: 'tool' }>}
 										{#if toolPart.arguments}
@@ -182,7 +194,7 @@
 						{:else if m.id !== undefined && m.id === editingMessageId}
 							<MessageEditor
 								initialText={m.content}
-								disabled={$sending}
+								disabled={$sending || $messageActionPending}
 								onSave={(text) => saveEdit(i, m.id!, text)}
 								onCancel={() => (editingMessageId = null)}
 							/>
@@ -199,8 +211,9 @@
 					{#if !(m.role === 'user' && m.id === editingMessageId)}
 						<MessageActions
 							content={m.content}
-							disabled={$sending}
+							disabled={$sending || $messageActionPending}
 							onEdit={m.role === 'user' && m.id !== undefined ? () => beginEdit(m.id!) : undefined}
+							onDelete={m.role === 'user' && m.id !== undefined ? () => requestDelete(m.id!) : undefined}
 							onRegenerate={m.role === 'assistant' && m.id !== undefined
 								? () => requestRegenerate(i, m.id!)
 								: undefined}
@@ -225,7 +238,7 @@
 			{#key $activeId}
 				<Composer
 					richInput
-					disabled={$sending}
+					disabled={$sending || $messageActionPending}
 					onSubmit={(text, files, documents) => submit(text, files, documents)}
 				/>
 			{/key}
@@ -235,11 +248,17 @@
 
 <ConfirmDialog
 	open={pendingAction !== null}
-	title="Rewrite this conversation?"
-	message={pendingAction?.kind === 'edit'
-		? 'Saving this edit will permanently delete all later turns.'
-		: 'Regenerating this response will permanently delete all later turns.'}
-	confirmLabel={pendingAction?.kind === 'edit' ? 'Edit and continue' : 'Regenerate'}
+	title={pendingAction?.kind === 'delete' ? 'Delete this message?' : 'Rewrite this conversation?'}
+	message={pendingAction?.kind === 'delete'
+		? 'Delete this message and all later history? This cannot be undone.'
+		: pendingAction?.kind === 'edit'
+			? 'Saving this edit will permanently delete all later turns.'
+			: 'Regenerating this response will permanently delete all later turns.'}
+	confirmLabel={pendingAction?.kind === 'delete'
+		? 'Delete'
+		: pendingAction?.kind === 'edit'
+			? 'Edit and continue'
+			: 'Regenerate'}
 	onConfirm={confirmPending}
 	onCancel={() => (pendingAction = null)}
 />

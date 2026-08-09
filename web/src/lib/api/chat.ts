@@ -132,3 +132,7 @@ export const renameConversation = (id: string, title: string) =>
 export const pinConversation = (id: string, pinned: boolean) =>
 	api.patch<Conversation>(`/conversations/${id}`, { pinned });
 export const deleteConversation = (id: string) => api.del<{ ok: boolean }>(`/conversations/${id}`);
+export const deleteMessage = (conversationId: string, messageId: number) =>
+	api.del<{ conversationDeleted: boolean }>(
+		'/conversations/' + encodeURIComponent(conversationId) + '/messages/' + messageId
+	);
