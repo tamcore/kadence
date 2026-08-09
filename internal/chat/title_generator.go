@@ -14,7 +14,7 @@ import (
 
 const (
 	titleGenerationInputRunes = 4000
-	titleGenerationMaxTokens  = 32
+	titleGenerationMaxTokens  = 256
 	titleGenerationTimeout    = 3 * time.Second
 )
 

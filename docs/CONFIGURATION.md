@@ -74,7 +74,7 @@ to its matching main LLM setting.
 | `KADENCE_TITLE_BASE_URL` | `KADENCE_LLM_BASE_URL` | OpenAI-compatible title provider base URL. |
 | `KADENCE_TITLE_API_KEY` | `KADENCE_LLM_API_KEY` | Title provider API key. |
 
-The request has a fixed three-second timeout and a 32-token completion cap.
+The request has a fixed three-second timeout and a 256-token completion cap.
 Kadence keeps the deterministic fallback title if title generation fails. It
 does not retry title generation later.
 

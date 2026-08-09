@@ -54,7 +54,7 @@ func TestConversationTitleGeneratorBuildsBoundedRequest(t *testing.T) {
 	if got := p.req.Model; got != "title-model" {
 		t.Fatalf("model = %q, want title-model", got)
 	}
-	if p.req.MaxTokens != 32 || p.req.Temperature != 0 || len(p.req.Tools) != 0 {
+	if p.req.MaxTokens != 256 || p.req.Temperature != 0 || len(p.req.Tools) != 0 {
 		t.Fatalf("request controls = %+v", p.req)
 	}
 	if len(p.req.Messages) != 2 || p.req.Messages[0].Role != model.MsgRoleSystem ||
