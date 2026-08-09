@@ -1651,9 +1651,11 @@ func (s *Service) streamPersistedTurn(
 		}
 	}
 
-	s.generateConversationTitle(
-		ctx, userID, conversationID, fallbackTitle, userText, full, sink,
-	)
+	if len(turnState.Handoffs) == 0 {
+		s.generateConversationTitle(
+			ctx, userID, conversationID, fallbackTitle, userText, full, sink,
+		)
+	}
 
 	if err := sink.Send(ChatEvent{
 		Type: EventDone, AssistantMessageID: assistantMsg.ID, AssistantContent: &full,

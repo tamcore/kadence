@@ -516,6 +516,7 @@ const (
 	testOperationEdit          = "edit"
 	testFirstUserMessage       = "first"
 	testOldAssistantResponse   = "old response"
+	testScheduledTaskOne       = "task-one"
 )
 
 func TestStreamNewConversation(t *testing.T) {
@@ -628,6 +629,40 @@ func TestStreamTitleGenerationFailureKeepsSuccessfulChat(t *testing.T) {
 		t.Fatalf("marshal events: %v", err)
 	}
 	if strings.Contains(string(encoded), "title provider marker") {
+		t.Fatalf("events exposed title error: %s", encoded)
+	}
+}
+
+func TestStreamTitlePersistenceFailureKeepsSuccessfulChat(t *testing.T) {
+	errTitlePersistence := errors.New("title persistence marker")
+	convs := &fakeConvs{
+		byID: map[string]model.Conversation{}, titleUpdateErr: errTitlePersistence,
+	}
+	titles := &fakeTitleGenerator{title: testGeneratedTitle}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
+		chat.Deps{Convs: convs, Msgs: &fakeMsgs{}, TitleGenerator: titles})
+	sink := &capturingSink{}
+
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "Review my marathon pacing", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(convs.titleUpdateCalls) != 1 {
+		t.Fatalf("title update calls = %+v, want one", convs.titleUpdateCalls)
+	}
+	if last := sink.events[len(sink.events)-1]; last.Type != chat.EventDone {
+		t.Fatalf("last event = %+v, want done", last)
+	}
+	for _, event := range sink.events {
+		if event.Type == chat.EventTitle {
+			t.Fatalf("persistence failure emitted title event: %+v", event)
+		}
+	}
+	encoded, err := json.Marshal(sink.events)
+	if err != nil {
+		t.Fatalf("marshal events: %v", err)
+	}
+	if strings.Contains(string(encoded), errTitlePersistence.Error()) {
 		t.Fatalf("events exposed title error: %s", encoded)
 	}
 }
@@ -753,9 +788,52 @@ func TestStreamTitleDeliveryFailureStillAttemptsDone(t *testing.T) {
 	}
 }
 
+func TestStreamNewScheduledConversationSkipsTitleGeneration(t *testing.T) {
+	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{{
+		HandoffID: testHandoffOne, TaskID: testScheduledTaskOne, Ordinal: 1, ArtifactState: testScheduledArtifactReady,
+	}}}
+	provider := &scriptedProvider{results: []provider.StreamResult{
+		{ToolCalls: []provider.ToolCall{{
+			ID: testScheduledCallID, Name: testScheduledToolName, Arguments: testScheduledArguments,
+		}}},
+		{Content: "I drafted a recovery check."},
+	}}
+	convs := &fakeConvs{
+		byID: map[string]model.Conversation{}, titleUpdateSwapped: true,
+		titleUpdateResult: model.Conversation{ID: testNewConvID, Title: testGeneratedTitle},
+	}
+	titles := &fakeTitleGenerator{title: testGeneratedTitle}
+	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, SystemPrompt: testSystemMsg}, chat.Deps{
+		Convs: convs, Msgs: &fakeMsgs{}, Scheduled: handoff, TitleGenerator: titles,
+	})
+	sink := &capturingSink{}
+
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "schedule a recovery check", sink); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(titles.inputs) != 0 || len(convs.titleUpdateCalls) != 0 {
+		t.Fatalf("title calls inputs=%+v updates=%+v", titles.inputs, convs.titleUpdateCalls)
+	}
+	artifactCount := 0
+	for _, event := range sink.events {
+		if event.Type == chat.EventTitle {
+			t.Fatalf("scheduled handoff emitted title event: %+v", event)
+		}
+		if event.Type == chat.EventScheduledArtifact {
+			artifactCount++
+		}
+	}
+	if artifactCount != 1 {
+		t.Fatalf("scheduled artifact events = %d, want one", artifactCount)
+	}
+	if last := sink.events[len(sink.events)-1]; last.Type != chat.EventDone {
+		t.Fatalf("last event = %+v, want done", last)
+	}
+}
+
 func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testing.T) {
 	handoff := &fakeScheduledHandoff{artifacts: []scheduled.ChatArtifact{
-		{HandoffID: testHandoffOne, TaskID: "task-one", Ordinal: 1, ArtifactState: testScheduledArtifactReady},
+		{HandoffID: testHandoffOne, TaskID: testScheduledTaskOne, Ordinal: 1, ArtifactState: testScheduledArtifactReady},
 		{HandoffID: "handoff-two", TaskID: "task-two", Ordinal: 2, ArtifactState: testScheduledArtifactReady},
 	}}
 	provider := &scriptedProvider{results: []provider.StreamResult{
@@ -904,7 +982,7 @@ func TestServiceRejectsLegacyScheduledToolCallWithoutMCPOrHandoff(t *testing.T) 
 
 func TestServicePlainAffirmationConfirmsSoleScheduledDraftWithoutProvider(t *testing.T) {
 	artifact := scheduled.ChatArtifact{
-		HandoffID: testHandoffOne, TaskID: "task-one", Ordinal: 1,
+		HandoffID: testHandoffOne, TaskID: testScheduledTaskOne, Ordinal: 1,
 		ArtifactState: testScheduledArtifactReady, TaskState: model.ScheduledTaskStateActive,
 		Proposal: &scheduled.Proposal{Name: "Race weather"},
 	}
