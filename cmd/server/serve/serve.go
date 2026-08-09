@@ -233,7 +233,7 @@ func Run() error {
 		convs := store.NewConversationRepository(pool)
 		msgs := store.NewMessageRepository(pool)
 		prov := provider.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey)
-		titleProvider := provider.NewOpenAICompat(cfg.ResolvedTitleBaseURL(), cfg.ResolvedTitleAPIKey())
+		titleProvider := provider.NewTitleOpenAICompat(cfg.ResolvedTitleBaseURL(), cfg.ResolvedTitleAPIKey())
 		titleGenerator := chat.NewLLMConversationTitleGenerator(titleProvider, cfg.ResolvedTitleModel())
 		intentGuard := newIntentGuard(cfg)
 		var guardrail *chat.Guardrail

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -38,6 +39,48 @@ const toolCallSSEBody = "" +
 	"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"5}\"}}]}}]}\n\n" +
 	"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 	"data: [DONE]\n\n"
+
+func retryableResponseServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"retryable","type":"rate_limit_error","code":"rate_limit_exceeded"}}`))
+	}))
+	t.Cleanup(server.Close)
+	return server, &requests
+}
+
+func TestOpenAICompatRetainsDefaultRetries(t *testing.T) {
+	server, requests := retryableResponseServer(t)
+
+	_, err := NewOpenAICompat(server.URL, "test-key").StreamChat(
+		t.Context(), ChatRequest{Model: testModel}, func(string) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("StreamChat succeeded, want retryable response error")
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("HTTP requests=%d, want SDK default of 3 total attempts", got)
+	}
+}
+
+func TestTitleOpenAICompatDoesNotRetry(t *testing.T) {
+	server, requests := retryableResponseServer(t)
+
+	_, err := NewTitleOpenAICompat(server.URL, "test-key").StreamChat(
+		t.Context(), ChatRequest{Model: testModel}, func(string) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("StreamChat succeeded, want retryable response error")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("HTTP requests=%d, want 1 without retries", got)
+	}
+}
 
 func TestOpenAICompatStreamChat(t *testing.T) {
 	var requestBody struct {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
+	"github.com/tamcore/kadence/internal/conversationdto"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/scheduled"
 	"github.com/tamcore/kadence/internal/store"
@@ -202,29 +203,10 @@ func (h *Chat) Send(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type conversationDTO struct {
-	ID             string  `json:"id"`
-	Title          string  `json:"title"`
-	PinnedAt       *string `json:"pinnedAt"`
-	LastActivityAt string  `json:"lastActivityAt"`
-	CreatedAt      string  `json:"createdAt"`
-}
-
-func formatConversationTimestamp(value time.Time) string {
-	return value.UTC().Format("2006-01-02T15:04:05.000000Z")
-}
+type conversationDTO = conversationdto.Conversation
 
 func toConversationDTO(c model.Conversation) conversationDTO {
-	var pinnedAt *string
-	if c.PinnedAt != nil {
-		formatted := formatConversationTimestamp(*c.PinnedAt)
-		pinnedAt = &formatted
-	}
-	return conversationDTO{
-		ID: c.ID, Title: c.Title, PinnedAt: pinnedAt,
-		LastActivityAt: formatConversationTimestamp(c.LastActivityAt),
-		CreatedAt:      formatConversationTimestamp(c.CreatedAt),
-	}
+	return conversationdto.FromModel(c)
 }
 
 // ListConversations handles GET /api/conversations.

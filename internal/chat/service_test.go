@@ -594,10 +594,13 @@ func TestStreamNewConversationEmitsGeneratedTitleBeforeDone(t *testing.T) {
 	}, []string{chat.EventMeta, chat.EventToken, chat.EventToken, chat.EventTitle, chat.EventDone}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("event order = %v, want %v", got, want)
 	}
-	if got, want := sink.events[3].Conversation, (&chat.EventConversation{
-		ID: testNewConvID, Title: testGeneratedTitle, PinnedAt: &pinnedAt,
-		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
-	}); !reflect.DeepEqual(got, want) {
+	wantPinnedAt := "2026-08-09T08:00:00.000000Z"
+	wantConversation := chat.EventConversation{
+		ID: testNewConvID, Title: testGeneratedTitle, PinnedAt: &wantPinnedAt,
+		LastActivityAt: "2026-08-09T08:01:00.000000Z",
+		CreatedAt:      "2026-08-09T07:59:00.000000Z",
+	}
+	if got, want := sink.events[3].Conversation, &wantConversation; !reflect.DeepEqual(got, want) {
 		t.Fatalf("title conversation = %+v, want %+v", got, want)
 	}
 }
@@ -783,6 +786,105 @@ func TestStreamTitleDeliveryFailureStillAttemptsDone(t *testing.T) {
 			}
 			if last := sink.events[len(sink.events)-1]; last.Type != chat.EventDone {
 				t.Fatalf("last event = %+v, want done", last)
+			}
+		})
+	}
+}
+
+func TestStreamTitleFailureWarningsIncludeSafeStageElapsedMilliseconds(t *testing.T) {
+	const (
+		userPayload      = "private user title payload"
+		assistantPayload = "private assistant title payload"
+		generatedTitle   = "private generated title"
+	)
+	tests := []struct {
+		name      string
+		message   string
+		errorText string
+		setup     func() (*fakeConvs, *fakeTitleGenerator, chat.EventSink)
+	}{
+		{
+			name: "generation", message: "conversation title generation skipped",
+			errorText: "private generation error",
+			setup: func() (*fakeConvs, *fakeTitleGenerator, chat.EventSink) {
+				return &fakeConvs{byID: map[string]model.Conversation{}},
+					&fakeTitleGenerator{err: errors.New("private generation error")},
+					&capturingSink{}
+			},
+		},
+		{
+			name: "persistence", message: "conversation title persistence skipped",
+			errorText: "private persistence error",
+			setup: func() (*fakeConvs, *fakeTitleGenerator, chat.EventSink) {
+				return &fakeConvs{
+					byID:           map[string]model.Conversation{},
+					titleUpdateErr: errors.New("private persistence error"),
+				}, &fakeTitleGenerator{title: generatedTitle}, &capturingSink{}
+			},
+		},
+		{
+			name: "delivery send", message: "conversation title delivery skipped",
+			errorText: "title delivery marker",
+			setup: func() (*fakeConvs, *fakeTitleGenerator, chat.EventSink) {
+				return &fakeConvs{
+					byID: map[string]model.Conversation{}, titleUpdateSwapped: true,
+					titleUpdateResult: model.Conversation{ID: testNewConvID, Title: generatedTitle},
+				}, &fakeTitleGenerator{title: generatedTitle}, &titleDeliveryFailSink{failSend: true}
+			},
+		},
+		{
+			name: "delivery flush", message: "conversation title delivery skipped",
+			errorText: "title delivery marker",
+			setup: func() (*fakeConvs, *fakeTitleGenerator, chat.EventSink) {
+				return &fakeConvs{
+					byID: map[string]model.Conversation{}, titleUpdateSwapped: true,
+					titleUpdateResult: model.Conversation{ID: testNewConvID, Title: generatedTitle},
+				}, &fakeTitleGenerator{title: generatedTitle}, &titleDeliveryFailSink{failFlush: true}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			convs, titles, sink := test.setup()
+			svc := chat.NewService(fakeProvider{reply: assistantPayload},
+				chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+				chat.Deps{Convs: convs, Msgs: &fakeMsgs{}, TitleGenerator: titles})
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", userPayload, sink)
+			slog.SetDefault(previousLogger)
+			if err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			for _, privateValue := range []string{userPayload, assistantPayload, generatedTitle, test.errorText} {
+				if strings.Contains(logs.String(), privateValue) {
+					t.Fatalf("logs exposed private value %q: %s", privateValue, logs.String())
+				}
+			}
+			decoder := json.NewDecoder(bytes.NewReader(logs.Bytes()))
+			var warning struct {
+				Message   string `json:"msg"`
+				ElapsedMS *int64 `json:"elapsed_ms"`
+			}
+			for decoder.More() {
+				var entry struct {
+					Message   string `json:"msg"`
+					ElapsedMS *int64 `json:"elapsed_ms"`
+				}
+				if err := decoder.Decode(&entry); err != nil {
+					t.Fatalf("decode log: %v", err)
+				}
+				if entry.Message == test.message {
+					warning = entry
+					break
+				}
+			}
+			if warning.Message == "" {
+				t.Fatalf("warning %q missing from logs: %s", test.message, logs.String())
+			}
+			if warning.ElapsedMS == nil || *warning.ElapsedMS < 0 {
+				t.Fatalf("elapsed_ms=%v, want non-negative integer in warning: %s", warning.ElapsedMS, logs.String())
 			}
 		})
 	}

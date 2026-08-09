@@ -2,8 +2,7 @@
 package chat
 
 import (
-	"time"
-
+	"github.com/tamcore/kadence/internal/conversationdto"
 	"github.com/tamcore/kadence/internal/scheduled"
 )
 
@@ -44,13 +43,7 @@ const (
 )
 
 // EventConversation is the sidebar-safe conversation state in a title event.
-type EventConversation struct {
-	ID             string     `json:"id"`
-	Title          string     `json:"title"`
-	PinnedAt       *time.Time `json:"pinnedAt"`
-	LastActivityAt time.Time  `json:"lastActivityAt"`
-	CreatedAt      time.Time  `json:"createdAt"`
-}
+type EventConversation = conversationdto.Conversation
 
 // ChatEvent is a single server-sent event in a chat stream.
 type ChatEvent struct {

@@ -14,6 +14,7 @@ import (
 	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
+	"github.com/tamcore/kadence/internal/conversationdto"
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/scheduled"
 	"github.com/tamcore/kadence/internal/store"
@@ -318,6 +319,53 @@ func TestListConversationsFormatsNavigationTimestampsAsCanonicalPostgresPrecisio
 	}
 	if got.CreatedAt != "2026-07-26T12:00:00.000001Z" {
 		t.Fatalf("createdAt=%q, want canonical UTC microseconds", got.CreatedAt)
+	}
+}
+
+func TestTitleEventConversationJSONMatchesCanonicalRESTConversation(t *testing.T) {
+	sourceZone := time.FixedZone("source", 2*60*60)
+	pinnedAt := time.Date(2026, time.August, 9, 14, 0, 0, 123456789, sourceZone)
+	lastActivityAt := time.Date(2026, time.August, 9, 14, 1, 0, 654321987, sourceZone)
+	createdAt := time.Date(2026, time.August, 9, 13, 59, 0, 1_999, sourceZone)
+	conversation := model.Conversation{
+		ID: testStreamConvUUID, Title: "Marathon Pacing Review", PinnedAt: &pinnedAt,
+		LastActivityAt: lastActivityAt, CreatedAt: createdAt,
+	}
+	h := handlers.NewChat(
+		&fakeStreamer{}, &fakeConvLister{list: []model.Conversation{conversation}},
+		fakeMsgLister{}, nil, nil,
+	)
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/conversations", nil), 7)
+	rec := httptest.NewRecorder()
+
+	h.ListConversations(rec, req)
+
+	var rest struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rest); err != nil || rec.Code != http.StatusOK || len(rest.Data) != 1 {
+		t.Fatalf("REST status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+	}
+	eventConversation := conversationdto.FromModel(conversation)
+	eventJSON, err := json.Marshal(chat.ChatEvent{
+		Type:         chat.EventTitle,
+		Conversation: &eventConversation,
+	})
+	if err != nil {
+		t.Fatalf("marshal title event: %v", err)
+	}
+	var event struct {
+		Conversation json.RawMessage `json:"conversation"`
+	}
+	if err := json.Unmarshal(eventJSON, &event); err != nil {
+		t.Fatalf("unmarshal title event: %v", err)
+	}
+	const want = `{"id":"conv-uuid-1","title":"Marathon Pacing Review","pinnedAt":"2026-08-09T12:00:00.123456Z","lastActivityAt":"2026-08-09T12:01:00.654321Z","createdAt":"2026-08-09T11:59:00.000001Z"}`
+	if got := string(rest.Data[0]); got != want {
+		t.Fatalf("REST conversation JSON=%s, want %s", got, want)
+	}
+	if got := string(event.Conversation); got != want {
+		t.Fatalf("title event conversation JSON=%s, want %s", got, want)
 	}
 }
 

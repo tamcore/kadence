@@ -27,11 +27,21 @@ type OpenAICompat struct {
 
 // NewOpenAICompat builds an OpenAI-compatible provider for the given base URL + key.
 func NewOpenAICompat(baseURL, apiKey string) *OpenAICompat {
+	return newOpenAICompat(baseURL, apiKey)
+}
+
+// NewTitleOpenAICompat builds an OpenAI-compatible title provider without retries.
+func NewTitleOpenAICompat(baseURL, apiKey string) *OpenAICompat {
+	return newOpenAICompat(baseURL, apiKey, option.WithMaxRetries(0))
+}
+
+func newOpenAICompat(baseURL, apiKey string, options ...option.RequestOption) *OpenAICompat {
+	options = append([]option.RequestOption{
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey(apiKey),
+	}, options...)
 	return &OpenAICompat{
-		client: openai.NewClient(
-			option.WithBaseURL(baseURL),
-			option.WithAPIKey(apiKey),
-		),
+		client: openai.NewClient(options...),
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tamcore/kadence/internal/chat/skill"
+	"github.com/tamcore/kadence/internal/conversationdto"
 	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/model"
@@ -1677,47 +1678,52 @@ func (s *Service) generateConversationTitle(
 	if s.titleGenerator == nil || fallbackTitle == "" {
 		return
 	}
+	generationStarted := time.Now()
 	title, err := s.titleGenerator.Generate(ctx, ConversationTitleInput{
 		UserText: userText, AssistantText: assistantText,
 	})
 	if err != nil {
 		slog.Warn("conversation title generation skipped",
 			"conversation_id", conversationID,
-			"category", titleFailureCategory(err))
+			"category", titleFailureCategory(err),
+			"elapsed_ms", time.Since(generationStarted).Milliseconds())
 		return
 	}
+	persistenceStarted := time.Now()
 	conversation, swapped, err := s.convs.UpdateTitleIfCurrent(
 		ctx, conversationID, userID, fallbackTitle, title,
 	)
 	if err != nil {
 		slog.Warn("conversation title persistence skipped",
 			"conversation_id", conversationID,
-			"category", "persistence")
+			"category", "persistence",
+			"elapsed_ms", time.Since(persistenceStarted).Milliseconds())
 		return
 	}
 	if !swapped {
 		return
 	}
+	deliveryStarted := time.Now()
 	if err := sink.Send(ChatEvent{
 		Type: EventTitle, Conversation: eventConversation(conversation),
 	}); err != nil {
 		slog.Warn("conversation title delivery skipped",
 			"conversation_id", conversationID,
-			"category", "delivery")
+			"category", "delivery",
+			"elapsed_ms", time.Since(deliveryStarted).Milliseconds())
 		return
 	}
 	if err := sink.Flush(); err != nil {
 		slog.Warn("conversation title delivery skipped",
 			"conversation_id", conversationID,
-			"category", "delivery")
+			"category", "delivery",
+			"elapsed_ms", time.Since(deliveryStarted).Milliseconds())
 	}
 }
 
 func eventConversation(c model.Conversation) *EventConversation {
-	return &EventConversation{
-		ID: c.ID, Title: c.Title, PinnedAt: c.PinnedAt,
-		LastActivityAt: c.LastActivityAt, CreatedAt: c.CreatedAt,
-	}
+	dto := conversationdto.FromModel(c)
+	return &dto
 }
 
 func titleFailureCategory(err error) string {
