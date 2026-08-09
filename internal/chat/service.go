@@ -27,6 +27,7 @@ import (
 type ConversationStore interface {
 	Create(ctx context.Context, userID int64, title string) (model.Conversation, error)
 	GetByID(ctx context.Context, id string, userID int64) (model.Conversation, error)
+	UpdateTitleIfCurrent(ctx context.Context, id string, userID int64, currentTitle string, newTitle string) (model.Conversation, bool, error)
 }
 
 // MessageStore is the message persistence the service needs.
@@ -202,25 +203,26 @@ func (r *turnRedactor) snapshot(secrets *secret.Broker, userID int64) []string {
 
 // Service orchestrates a streaming chat turn.
 type Service struct {
-	provider      provider.Provider
-	cfg           ServiceConfig
-	convs         ConversationStore
-	msgs          MessageStore
-	guardrail     *Guardrail
-	rag           *RAG
-	mcp           MCPTools
-	maxIterations int
-	maxTools      int
-	contextBudget int
-	now           func() time.Time
-	skills        *skill.Registry
-	secrets       *secret.Broker
-	fitRoutes     []FITRoute
-	toolCatalog   *UnattendedCatalog
-	audit         *mcpaudit.Recorder
-	attachments   *AttachmentProcessor
-	documents     DocumentStore
-	scheduled     ScheduledHandoff
+	provider       provider.Provider
+	cfg            ServiceConfig
+	convs          ConversationStore
+	msgs           MessageStore
+	guardrail      *Guardrail
+	rag            *RAG
+	mcp            MCPTools
+	maxIterations  int
+	maxTools       int
+	contextBudget  int
+	now            func() time.Time
+	skills         *skill.Registry
+	secrets        *secret.Broker
+	fitRoutes      []FITRoute
+	toolCatalog    *UnattendedCatalog
+	audit          *mcpaudit.Recorder
+	attachments    *AttachmentProcessor
+	documents      DocumentStore
+	scheduled      ScheduledHandoff
+	titleGenerator ConversationTitleGenerator
 }
 
 // ScheduledHandoff is the narrow draft-and-cleanup surface exposed to chat.
@@ -266,8 +268,9 @@ type Deps struct {
 	// classification, extracts document text. Nil supports text-only chat.
 	Attachments *AttachmentProcessor
 	// Documents securely resolves explicitly selected knowledge documents.
-	Documents DocumentStore
-	Scheduled ScheduledHandoff
+	Documents      DocumentStore
+	Scheduled      ScheduledHandoff
+	TitleGenerator ConversationTitleGenerator
 }
 
 // NewService constructs a chat Service. deps.Guardrail, deps.RAG, and deps.MCP
@@ -296,14 +299,15 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		provider: p, cfg: cfg, convs: deps.Convs, msgs: deps.Msgs,
 		guardrail: deps.Guardrail, rag: deps.RAG, mcp: deps.MCP,
 		maxIterations: maxIterations, maxTools: maxTools, contextBudget: contextBudget, now: now,
-		skills:      deps.Skills,
-		secrets:     deps.Secrets,
-		audit:       deps.Audit,
-		attachments: deps.Attachments,
-		documents:   deps.Documents,
-		scheduled:   deps.Scheduled,
-		fitRoutes:   append([]FITRoute(nil), deps.FITRoutes...),
-		toolCatalog: NewUnattendedCatalog(deps.MCP, deps.FITRoutes, deps.Audit, deps.IntentGuard),
+		skills:         deps.Skills,
+		secrets:        deps.Secrets,
+		audit:          deps.Audit,
+		attachments:    deps.Attachments,
+		documents:      deps.Documents,
+		scheduled:      deps.Scheduled,
+		titleGenerator: deps.TitleGenerator,
+		fitRoutes:      append([]FITRoute(nil), deps.FITRoutes...),
+		toolCatalog:    NewUnattendedCatalog(deps.MCP, deps.FITRoutes, deps.Audit, deps.IntentGuard),
 	}
 }
 
@@ -1037,15 +1041,18 @@ func (s *Service) StreamTurn(
 	persistedInput := model.ChatUserInput{
 		Content: input.Text, Attachments: toPersist, DocumentIDs: input.DocumentIDs,
 	}
+	fallbackTitle := ""
 	var userMsg model.Message
 	if newConversation {
+		fallbackTitle = turnTitle(input.Text, prepared, documents)
 		conversation, createdMessage, createErr :=
 			s.msgs.CreateConversationWithChatUserInput(
-				ctx, userID, turnTitle(input.Text, prepared, documents), persistedInput,
+				ctx, userID, fallbackTitle, persistedInput,
 			)
 		if createErr != nil {
 			return s.fail(sink, "could not save message")
 		}
+		fallbackTitle = conversation.Title
 		conversationID = conversation.ID
 		userMsg = createdMessage
 	} else {
@@ -1072,7 +1079,7 @@ func (s *Service) StreamTurn(
 	}
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, history, documents, nil, true, true, sink,
+		fallbackTitle, userMsg, history, documents, nil, true, true, sink,
 	)
 }
 
@@ -1185,7 +1192,7 @@ func (s *Service) Edit(
 	userMsg.DocumentReferences = preflight.prompt.DocumentReferences
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, preflight.history, preflight.documents,
+		"", userMsg, preflight.history, preflight.documents,
 		preflight.historicalPayloads, true, false, sink,
 	)
 }
@@ -1213,7 +1220,7 @@ func (s *Service) Regenerate(
 	userMsg.DocumentReferences = preflight.prompt.DocumentReferences
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		userMsg, preflight.history, preflight.documents,
+		"", userMsg, preflight.history, preflight.documents,
 		preflight.historicalPayloads, false, false, sink,
 	)
 }
@@ -1535,7 +1542,7 @@ func (s *Service) assembleTurnContext(
 func (s *Service) streamPersistedTurn(
 	ctx, streamCtx context.Context,
 	userID int64, uc UserContext, conversationID string,
-	userMsg model.Message, history []model.Message, documents []model.Document,
+	fallbackTitle string, userMsg model.Message, history []model.Message, documents []model.Document,
 	preloadedHistoricalPayloads *historicalPayloadCache,
 	storeUserChunk, guardrailChecked bool, sink EventSink,
 ) error {
@@ -1644,12 +1651,82 @@ func (s *Service) streamPersistedTurn(
 		}
 	}
 
+	s.generateConversationTitle(
+		ctx, userID, conversationID, fallbackTitle, userText, full, sink,
+	)
+
 	if err := sink.Send(ChatEvent{
 		Type: EventDone, AssistantMessageID: assistantMsg.ID, AssistantContent: &full,
 	}); err != nil {
 		return err
 	}
 	return sink.Flush()
+}
+
+func (s *Service) generateConversationTitle(
+	ctx context.Context,
+	userID int64,
+	conversationID string,
+	fallbackTitle string,
+	userText string,
+	assistantText string,
+	sink EventSink,
+) {
+	if s.titleGenerator == nil || fallbackTitle == "" {
+		return
+	}
+	title, err := s.titleGenerator.Generate(ctx, ConversationTitleInput{
+		UserText: userText, AssistantText: assistantText,
+	})
+	if err != nil {
+		slog.Warn("conversation title generation skipped",
+			"conversation_id", conversationID,
+			"category", titleFailureCategory(err))
+		return
+	}
+	conversation, swapped, err := s.convs.UpdateTitleIfCurrent(
+		ctx, conversationID, userID, fallbackTitle, title,
+	)
+	if err != nil {
+		slog.Warn("conversation title persistence skipped",
+			"conversation_id", conversationID,
+			"category", "persistence")
+		return
+	}
+	if !swapped {
+		return
+	}
+	if err := sink.Send(ChatEvent{
+		Type: EventTitle, Conversation: eventConversation(conversation),
+	}); err != nil {
+		slog.Warn("conversation title delivery skipped",
+			"conversation_id", conversationID,
+			"category", "delivery")
+		return
+	}
+	if err := sink.Flush(); err != nil {
+		slog.Warn("conversation title delivery skipped",
+			"conversation_id", conversationID,
+			"category", "delivery")
+	}
+}
+
+func eventConversation(c model.Conversation) *EventConversation {
+	return &EventConversation{
+		ID: c.ID, Title: c.Title, PinnedAt: c.PinnedAt,
+		LastActivityAt: c.LastActivityAt, CreatedAt: c.CreatedAt,
+	}
+}
+
+func titleFailureCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "provider"
+	}
 }
 
 // resolveMCPAndSystemPrompt resolves the caller's MCP server snapshot (once,

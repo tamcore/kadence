@@ -1,7 +1,11 @@
 // Package chat orchestrates streaming LLM conversations.
 package chat
 
-import "github.com/tamcore/kadence/internal/scheduled"
+import (
+	"time"
+
+	"github.com/tamcore/kadence/internal/scheduled"
+)
 
 // EventAttachment is safe attachment metadata for optimistic client
 // reconciliation. It never contains raw bytes or extracted document text.
@@ -31,6 +35,7 @@ type EventDocumentReference struct {
 const (
 	EventMeta              = "meta"
 	EventToken             = "token"
+	EventTitle             = "title"
 	EventDone              = "done"
 	EventError             = "error"
 	EventTool              = "tool"
@@ -38,21 +43,31 @@ const (
 	EventScheduledArtifact = "scheduled_artifact"
 )
 
+// EventConversation is the sidebar-safe conversation state in a title event.
+type EventConversation struct {
+	ID             string     `json:"id"`
+	Title          string     `json:"title"`
+	PinnedAt       *time.Time `json:"pinnedAt"`
+	LastActivityAt time.Time  `json:"lastActivityAt"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
 // ChatEvent is a single server-sent event in a chat stream.
 type ChatEvent struct {
-	Type               string            `json:"type"`
-	Delta              string            `json:"delta,omitempty"`
-	ConversationID     string            `json:"conversationId,omitempty"`
-	UserMessageID      int64             `json:"userMessageId,omitempty"`
-	AssistantMessageID int64             `json:"assistantMessageId,omitempty"`
-	AssistantContent   *string           `json:"assistantContent,omitempty"`
-	Message            string            `json:"message,omitempty"`
-	Tool               string            `json:"tool,omitempty"`
-	Status             string            `json:"status,omitempty"`
-	Arguments          string            `json:"arguments,omitempty"`
-	RequestID          string            `json:"requestId,omitempty"`
-	Reason             string            `json:"reason,omitempty"`
-	Fields             []CredentialField `json:"fields,omitempty"`
+	Type               string             `json:"type"`
+	Delta              string             `json:"delta,omitempty"`
+	ConversationID     string             `json:"conversationId,omitempty"`
+	UserMessageID      int64              `json:"userMessageId,omitempty"`
+	AssistantMessageID int64              `json:"assistantMessageId,omitempty"`
+	AssistantContent   *string            `json:"assistantContent,omitempty"`
+	Message            string             `json:"message,omitempty"`
+	Tool               string             `json:"tool,omitempty"`
+	Status             string             `json:"status,omitempty"`
+	Arguments          string             `json:"arguments,omitempty"`
+	RequestID          string             `json:"requestId,omitempty"`
+	Reason             string             `json:"reason,omitempty"`
+	Fields             []CredentialField  `json:"fields,omitempty"`
+	Conversation       *EventConversation `json:"conversation,omitempty"`
 	// Pointer-to-slice keeps these fields absent on non-meta events while meta
 	// events encode an empty collection as [] rather than null/omitted.
 	Attachments        *[]EventAttachment        `json:"attachments,omitempty"`
