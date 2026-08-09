@@ -27,9 +27,14 @@
 	}
 
 	const ownInitialFocus: Action<HTMLFormElement> = (form) => {
-		let returnFocus: HTMLElement | undefined;
+		const dialog = form.closest('[role="dialog"]');
+		let returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+		const rememberOutsideFocus = (event: FocusEvent) => {
+			if (event.target instanceof HTMLElement && !dialog?.contains(event.target)) returnFocus = event.target;
+		};
+		document.addEventListener('focusin', rememberOutsideFocus);
 		const timeout = window.setTimeout(() => {
-			const dialog = form.closest('[role="dialog"]');
+			document.removeEventListener('focusin', rememberOutsideFocus);
 			if (dialog?.contains(document.activeElement)) return;
 			if (document.activeElement instanceof HTMLElement) returnFocus = document.activeElement;
 			form.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus();
@@ -38,8 +43,9 @@
 		return {
 			destroy: () => {
 				window.clearTimeout(timeout);
-				const dialog = form.closest('[role="dialog"]');
-				if (dialog?.contains(document.activeElement) && returnFocus?.isConnected) returnFocus.focus();
+				document.removeEventListener('focusin', rememberOutsideFocus);
+				const focusFellThrough = document.activeElement === document.body;
+				if ((focusFellThrough || dialog?.contains(document.activeElement)) && returnFocus?.isConnected) returnFocus.focus();
 			}
 		};
 	};

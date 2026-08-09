@@ -429,6 +429,34 @@ test('centers sidebar dialogs in the viewport and confirms deletion with Enter',
 	}
 });
 
+test('restores the conversation action trigger when deletion is cancelled', async ({ page }, testInfo) => {
+	await installSidebarFixture(page, testInfo, {
+		conversations: [conversation('focus-target', 'Focus target', '2026-08-09T12:00:00Z')]
+	});
+	const deleteRequests: string[] = [];
+	page.on('request', (request) => {
+		if (request.method() === 'DELETE') deleteRequests.push(request.url());
+	});
+	await page.goto('/');
+
+	const row = conversationRow(page, 'Focus target');
+	await row.hover();
+	const trigger = row.getByRole('button', { name: 'Focus target actions', exact: true });
+	await trigger.click();
+	await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+	const deletion = page.getByRole('dialog', { name: 'Delete conversation', exact: true });
+	await expect(deletion.getByRole('button', { name: 'Delete', exact: true })).toBeFocused();
+	await deletion.getByRole('button', { name: 'Cancel', exact: true }).click();
+	await expect(trigger).toBeFocused();
+
+	await trigger.click();
+	await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+	await expect(deletion.getByRole('button', { name: 'Delete', exact: true })).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(trigger).toBeFocused();
+	expect(deleteRequests).toHaveLength(0);
+});
+
 test('opens the overflow menu with the keyboard and keeps future actions disabled', async ({ page }, testInfo) => {
 	await installSidebarFixture(page, testInfo);
 	await page.goto('/');
