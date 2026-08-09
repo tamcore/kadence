@@ -1,5 +1,6 @@
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { goto } from '$app/navigation';
 import { APIError } from '$lib/api/client';
 
 const streamChatMock = vi.fn();
@@ -14,6 +15,7 @@ const pinConversationMock = vi.fn();
 const beginUploadBatchMock = vi.fn();
 const setUploadFileStateMock = vi.fn();
 const failUnsettledUploadFilesMock = vi.fn();
+vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
 	editMessage: (...a: unknown[]) => editMessageMock(...a),
@@ -387,10 +389,11 @@ describe('chat store', () => {
 		expect(get(messages)).toEqual(original.slice(0, 2));
 		expect(streamChatMock).not.toHaveBeenCalled();
 		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(goto).not.toHaveBeenCalled();
 		expect(get(messageActionPending)).toBe(false);
 	});
 
-	it('starts a new chat when deleting the first message removes the conversation', async () => {
+	it('starts a new chat and routes to /chat when deleting the first message removes the conversation', async () => {
 		activeId.set('conv-1');
 		messages.set([
 			{ id: 1, role: 'user', content: 'only prompt' },
@@ -403,6 +406,8 @@ describe('chat store', () => {
 		expect(get(activeId)).toBeNull();
 		expect(get(messages)).toEqual([]);
 		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(goto).toHaveBeenCalledOnce();
+		expect(goto).toHaveBeenCalledWith('/chat');
 	});
 
 	it('preserves the transcript and reports an ordinary delete failure', async () => {
@@ -419,6 +424,7 @@ describe('chat store', () => {
 		expect(get(messages)).toEqual(original);
 		expect(get(chatError)).toBe('delete rejected');
 		expect(listConversationsMock).not.toHaveBeenCalled();
+		expect(goto).not.toHaveBeenCalled();
 	});
 
 	it('reloads the canonical transcript after a stale delete conflict', async () => {
@@ -454,6 +460,7 @@ describe('chat store', () => {
 		expect(get(activeId)).toBeNull();
 		expect(get(messages)).toEqual([]);
 		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(goto).not.toHaveBeenCalled();
 	});
 
 	it('preserves persisted attachments and references through edit and regeneration', async () => {

@@ -1,4 +1,5 @@
 import { get, writable } from 'svelte/store';
+import { goto } from '$app/navigation';
 import { APIError } from '$lib/api/client';
 import type {
 	ChatAttachment,
@@ -142,6 +143,7 @@ export async function deleteUserMessage(messageId: number): Promise<void> {
 		const result = await chatApi.deleteMessage(conversationId, messageId);
 		if (result.conversationDeleted) {
 			newChat();
+			void goto('/chat');
 		} else if (get(activeId) === conversationId) {
 			messages.set(current.slice(0, userIdx));
 		}
