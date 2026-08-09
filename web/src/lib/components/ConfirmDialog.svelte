@@ -27,14 +27,20 @@
 	}
 
 	const ownInitialFocus: Action<HTMLFormElement> = (form) => {
+		let returnFocus: HTMLElement | undefined;
 		const timeout = window.setTimeout(() => {
 			const dialog = form.closest('[role="dialog"]');
 			if (dialog?.contains(document.activeElement)) return;
+			if (document.activeElement instanceof HTMLElement) returnFocus = document.activeElement;
 			form.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus();
 		});
 
 		return {
-			destroy: () => window.clearTimeout(timeout)
+			destroy: () => {
+				window.clearTimeout(timeout);
+				const dialog = form.closest('[role="dialog"]');
+				if (dialog?.contains(document.activeElement) && returnFocus?.isConnected) returnFocus.focus();
+			}
 		};
 	};
 </script>

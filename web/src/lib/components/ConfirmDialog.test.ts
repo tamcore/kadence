@@ -3,6 +3,37 @@ import { describe, expect, it, vi } from 'vitest';
 import ActionMenu from './ActionMenu.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
 
+async function openDialogFromActionMenu(): Promise<HTMLElement> {
+	let unmountDialog = () => {};
+	render(ActionMenu, {
+		props: {
+			label: 'Thing actions',
+			items: [
+				{
+					label: 'Delete',
+					onSelect: () => {
+						const dialog = render(ConfirmDialog, {
+							open: true,
+							title: 'Delete thing',
+							message: 'Are you sure?',
+							onConfirm: vi.fn(),
+							onCancel: () => unmountDialog()
+						});
+						unmountDialog = dialog.unmount;
+					}
+				}
+			]
+		}
+	});
+
+	const trigger = screen.getByRole('button', { name: 'Thing actions' });
+	await fireEvent.click(trigger);
+	await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', hidden: true }));
+	const confirm = await screen.findByRole('button', { name: 'Delete' });
+	await waitFor(() => expect(confirm).toHaveFocus());
+	return trigger;
+}
+
 describe('ConfirmDialog', () => {
 	it('renders nothing when closed', () => {
 		render(ConfirmDialog, {
@@ -34,32 +65,26 @@ describe('ConfirmDialog', () => {
 		expect(onConfirm).toHaveBeenCalledOnce();
 	});
 
-	it('keeps confirm focused after opening from an action menu', async () => {
-		render(ActionMenu, {
-			props: {
-				label: 'Thing actions',
-				items: [
-					{
-						label: 'Delete',
-						onSelect: () => {
-							render(ConfirmDialog, {
-								open: true,
-								title: 'Delete thing',
-								message: 'Are you sure?',
-								onConfirm: vi.fn(),
-								onCancel: vi.fn()
-							});
-						}
-					}
-				]
-			}
-		});
+	it.each(['Cancel', 'Escape'])('restores the action menu trigger after closing with %s', async (closeMethod) => {
+		const trigger = await openDialogFromActionMenu();
 
-		await fireEvent.click(screen.getByRole('button', { name: 'Thing actions' }));
-		await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', hidden: true }));
-		const confirm = await screen.findByRole('button', { name: 'Delete' });
+		if (closeMethod === 'Cancel') await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+		else await fireEvent.keyDown(window, { key: 'Escape' });
 
-		await waitFor(() => expect(confirm).toHaveFocus());
+		expect(trigger.isConnected).toBe(true);
+		await waitFor(() => expect(trigger).toHaveFocus());
+	});
+
+	it('keeps focus outside the dialog when it was moved before close', async () => {
+		await openDialogFromActionMenu();
+		render(ActionMenu, { props: { label: 'Other actions', items: [{ label: 'Rename' }] } });
+
+		const outside = screen.getByRole('button', { name: 'Other actions' });
+		outside.focus();
+
+		await fireEvent.keyDown(window, { key: 'Escape' });
+
+		expect(outside).toHaveFocus();
 	});
 
 	it('calls onCancel and not onConfirm when cancel is clicked', async () => {
