@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Action } from 'svelte/action';
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
 
@@ -24,10 +25,22 @@
 		event.preventDefault();
 		onConfirm();
 	}
+
+	const ownInitialFocus: Action<HTMLFormElement> = (form) => {
+		const timeout = window.setTimeout(() => {
+			const dialog = form.closest('[role="dialog"]');
+			if (dialog?.contains(document.activeElement)) return;
+			form.querySelector<HTMLButtonElement>('button[type="submit"]')?.focus();
+		});
+
+		return {
+			destroy: () => window.clearTimeout(timeout)
+		};
+	};
 </script>
 
 <Modal {open} {title} onClose={onCancel}>
-	<form onsubmit={confirm}>
+	<form use:ownInitialFocus onsubmit={confirm}>
 		<p class="message">{message}</p>
 		<div class="actions">
 			<Button type="button" variant="ghost" onclick={onCancel}>{cancelLabel}</Button>

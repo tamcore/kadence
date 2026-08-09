@@ -61,9 +61,14 @@ describe('Modal', () => {
 	it('calls onClose when the backdrop is clicked but not when the card is clicked', async () => {
 		const onClose = vi.fn();
 		render(Modal, { open: true, title: 'Title', onClose, children: bodySnippet('x') });
-		await fireEvent.click(screen.getByRole('dialog'));
+		const dialog = screen.getByRole('dialog');
+		const backdrop = dialog.parentElement;
+
+		expect(backdrop).not.toBeNull();
+		await fireEvent.click(dialog);
 		expect(onClose).not.toHaveBeenCalled();
-		expect(screen.getByText('Title').closest('.backdrop')).not.toBeNull();
+		await fireEvent.click(backdrop!);
+		expect(onClose).toHaveBeenCalledOnce();
 	});
 
 	it('calls onClose on Escape keydown', async () => {

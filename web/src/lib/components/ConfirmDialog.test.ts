@@ -1,5 +1,6 @@
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
+import ActionMenu from './ActionMenu.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
 
 describe('ConfirmDialog', () => {
@@ -31,6 +32,34 @@ describe('ConfirmDialog', () => {
 		expect(form).not.toBeNull();
 		await fireEvent.submit(form!);
 		expect(onConfirm).toHaveBeenCalledOnce();
+	});
+
+	it('keeps confirm focused after opening from an action menu', async () => {
+		render(ActionMenu, {
+			props: {
+				label: 'Thing actions',
+				items: [
+					{
+						label: 'Delete',
+						onSelect: () => {
+							render(ConfirmDialog, {
+								open: true,
+								title: 'Delete thing',
+								message: 'Are you sure?',
+								onConfirm: vi.fn(),
+								onCancel: vi.fn()
+							});
+						}
+					}
+				]
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Thing actions' }));
+		await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', hidden: true }));
+		const confirm = await screen.findByRole('button', { name: 'Delete' });
+
+		await waitFor(() => expect(confirm).toHaveFocus());
 	});
 
 	it('calls onCancel and not onConfirm when cancel is clicked', async () => {
