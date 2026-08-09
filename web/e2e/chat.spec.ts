@@ -21,6 +21,9 @@ test('sending a chat message shows the stub assistant reply with no error', asyn
 	// e2e/stub/main.go streams the canned tokens "This is ", "a test ",
 	// "coaching reply." — match on the joined text.
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
+	await expect(
+		page.locator('.conversation-list li.active').getByRole('link', { name: 'Marathon Pacing Review', exact: true })
+	).toBeVisible();
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
@@ -40,7 +43,9 @@ test('sends and reloads an attachment-only screenshot turn', async ({ page }) =>
 	await expect(page.getByText(/test coaching reply/i)).toBeVisible();
 	await expect(page).toHaveURL(/\/chat\/[^/]+$/);
 	await page.reload();
-	await expect(page.getByRole('link', { name: 'Open chat-screenshot.png' })).toBeVisible();
+	await expect(
+		page.locator('.conversation-list li.active').getByRole('link', { name: 'Marathon Pacing Review', exact: true })
+	).toBeVisible();
 });
 
 test('explicitly references private and public documents and preserves them on reload', async ({

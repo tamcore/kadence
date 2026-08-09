@@ -111,6 +111,29 @@ func TestChatCompletionsAcceptsMultimodalUserContent(t *testing.T) {
 	}
 }
 
+func TestTitleRequestStreamsDeterministicReply(t *testing.T) {
+	frames := chatStubFrames(t, stubChatRequest([]map[string]any{
+		{
+			stubMessageRoleKey:    messageRoleSystem,
+			stubMessageContentKey: "You create concise conversation titles. Return only the title.",
+		},
+		{
+			stubMessageRoleKey:    messageRoleUser,
+			stubMessageContentKey: `{"messages":[{"role":"user","content":"Help me pace my marathon"}]}`,
+		},
+	}, false))
+
+	if got := joinedStubContent(frames); got != "Marathon Pacing Review" {
+		t.Fatalf("title reply = %q, want %q", got, "Marathon Pacing Review")
+	}
+	if got := stubToolCalls(frames); len(got) != 0 {
+		t.Fatalf("title request emitted tool calls = %+v", got)
+	}
+	if len(frames) == 0 || frames[len(frames)-1] != stubDoneFrame {
+		t.Fatalf("title frames = %v, want terminal %q frame", frames, stubDoneFrame)
+	}
+}
+
 func TestChatCompletionsRefinesScheduledTasks(t *testing.T) {
 	question := scheduledStubReply(t, []map[string]string{
 		{stubMessageRoleKey: messageRoleSystem, stubMessageContentKey: scheduledCompilerPrompt},

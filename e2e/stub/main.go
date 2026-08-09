@@ -52,6 +52,8 @@ var chatContentTokens = []string{"This is ", "a test ", "coaching reply."}
 const (
 	messageRoleSystem       = "system"
 	messageRoleUser         = "user"
+	titlePromptPrefix       = "You create concise conversation titles."
+	titleReply              = "Marathon Pacing Review"
 	scheduledCompilerPrompt = "You refine one Scheduled task from the complete conversation."
 	scheduledQuestionReply  = `{
 		"assistantText": "Let’s tailor the check-in to your routine.",
@@ -236,7 +238,10 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tokens := chatContentTokens
-	if reply, ok := scheduledReply(req.Messages); ok {
+	titleRequest := isTitleRequest(req.Messages)
+	if titleRequest {
+		tokens = []string{titleReply}
+	} else if reply, ok := scheduledReply(req.Messages); ok {
 		tokens = []string{reply}
 	}
 
@@ -257,17 +262,17 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	if isWorkerRequest(req.Messages) {
+	if !titleRequest && isWorkerRequest(req.Messages) {
 		if hasToolResult(req.Messages) {
 			tokens = []string{workerWeatherOutcomeReply}
 		} else {
 			writeWorkerToolCalls(w, canFlush, flusher)
 			return
 		}
-	} else if isSynthesisRequest(req.Messages) {
+	} else if !titleRequest && isSynthesisRequest(req.Messages) {
 		tokens = []string{"Fresh race weather is ready: adjust pacing for conditions, " +
 			"hydrate steadily, and bring the appropriate kit."}
-	} else if !isScheduledCompiler(req.Messages) {
+	} else if !titleRequest && !isScheduledCompiler(req.Messages) {
 		switch {
 		case hasToolResult(req.Messages):
 			tokens = []string{"I prepared two weather checks for review."}
@@ -299,6 +304,12 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeDone(w, canFlush, flusher)
+}
+
+func isTitleRequest(messages []chatCompletionRequestMessage) bool {
+	return len(messages) > 0 &&
+		messages[0].Role == messageRoleSystem &&
+		strings.HasPrefix(messageText(messages[0].Content), titlePromptPrefix)
 }
 
 func isScheduledCompiler(messages []chatCompletionRequestMessage) bool {
