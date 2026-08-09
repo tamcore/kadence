@@ -14,7 +14,7 @@ describe('ConfirmDialog', () => {
 		expect(screen.queryByText('Are you sure?')).not.toBeInTheDocument();
 	});
 
-	it('calls onConfirm when the confirm button is clicked', async () => {
+	it('submits confirmation once through the dialog form', async () => {
 		const onConfirm = vi.fn();
 		render(ConfirmDialog, {
 			open: true,
@@ -23,8 +23,14 @@ describe('ConfirmDialog', () => {
 			onConfirm,
 			onCancel: vi.fn()
 		});
-		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-		expect(onConfirm).toHaveBeenCalled();
+		const confirm = screen.getByRole('button', { name: 'Delete' });
+		const form = confirm.closest('form');
+
+		expect(confirm).toHaveAttribute('type', 'submit');
+		expect(confirm).toHaveAttribute('autofocus');
+		expect(form).not.toBeNull();
+		await fireEvent.submit(form!);
+		expect(onConfirm).toHaveBeenCalledOnce();
 	});
 
 	it('calls onCancel and not onConfirm when cancel is clicked', async () => {
@@ -37,7 +43,9 @@ describe('ConfirmDialog', () => {
 			onConfirm,
 			onCancel
 		});
-		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+		const cancel = screen.getByRole('button', { name: 'Cancel' });
+		expect(cancel).toHaveAttribute('type', 'button');
+		await fireEvent.click(cancel);
 		expect(onCancel).toHaveBeenCalled();
 		expect(onConfirm).not.toHaveBeenCalled();
 	});

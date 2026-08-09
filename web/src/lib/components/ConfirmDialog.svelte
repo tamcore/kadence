@@ -19,14 +19,21 @@
 		onConfirm: () => void;
 		onCancel: () => void;
 	} = $props();
+
+	function confirm(event: SubmitEvent): void {
+		event.preventDefault();
+		onConfirm();
+	}
 </script>
 
 <Modal {open} {title} onClose={onCancel}>
-	<p class="message">{message}</p>
-	<div class="actions">
-		<Button variant="ghost" onclick={onCancel}>{cancelLabel}</Button>
-		<Button variant="danger" onclick={onConfirm}>{confirmLabel}</Button>
-	</div>
+	<form onsubmit={confirm}>
+		<p class="message">{message}</p>
+		<div class="actions">
+			<Button type="button" variant="ghost" onclick={onCancel}>{cancelLabel}</Button>
+			<Button type="submit" variant="danger" autofocus>{confirmLabel}</Button>
+		</div>
+	</form>
 </Modal>
 
 <style>
