@@ -176,6 +176,24 @@ async function openConversationActions(page: Page, title: string) {
 	return page.getByRole('menu', { name: `${title} actions`, exact: true });
 }
 
+async function expectDialogToFillAndCenterViewport(
+	page: Page,
+	dialog: Locator,
+	viewport: { width: number; height: number }
+): Promise<void> {
+	const backdrop = dialog.locator('..');
+	const [backdropBox, dialogBox] = await Promise.all([backdrop.boundingBox(), dialog.boundingBox()]);
+	expect(backdropBox).not.toBeNull();
+	expect(dialogBox).not.toBeNull();
+	expect(Math.abs(backdropBox!.x)).toBeLessThanOrEqual(1);
+	expect(Math.abs(backdropBox!.y)).toBeLessThanOrEqual(1);
+	expect(Math.abs(backdropBox!.width - viewport.width)).toBeLessThanOrEqual(1);
+	expect(Math.abs(backdropBox!.height - viewport.height)).toBeLessThanOrEqual(1);
+	expect(Math.abs(dialogBox!.x + dialogBox!.width / 2 - viewport.width / 2)).toBeLessThanOrEqual(1);
+	expect(Math.abs(dialogBox!.y + dialogBox!.height / 2 - viewport.height / 2)).toBeLessThanOrEqual(1);
+	expect(await page.locator('body > .backdrop').count()).toBe(1);
+}
+
 async function expectConversationRegionToStayWithinSidebar(sidebar: Locator): Promise<void> {
 	const sidebarBox = await sidebar.boundingBox();
 	expect(sidebarBox).not.toBeNull();
@@ -365,6 +383,47 @@ test('keeps mobile drawer chrome bounded and opens overflow actions for touch na
 		await expect(row.locator('.pin-action')).toHaveCSS('display', 'none');
 		await trigger.tap();
 		await expect(page.getByRole('menu', { name: 'Recent first actions', exact: true })).toBeVisible();
+	} finally {
+		await context.close();
+	}
+});
+
+test('centers sidebar dialogs in the viewport and confirms deletion with Enter', async ({ browser }, testInfo) => {
+	const viewport = { width: 390, height: 844 };
+	const context = await browser.newContext({ viewport, isMobile: true, hasTouch: true });
+	try {
+		const page = await context.newPage();
+		await installSidebarFixture(page, testInfo, {
+			conversations: [conversation('modal-target', 'Modal target', '2026-08-09T12:00:00Z')]
+		});
+		await page.goto('/');
+		await page.getByRole('button', { name: 'Menu', exact: true }).tap();
+
+		const row = conversationRow(page, 'Modal target');
+		await row.getByRole('button', { name: 'Modal target actions', exact: true }).tap();
+		await page.getByRole('menuitem', { name: 'Rename', exact: true }).tap();
+		const rename = page.getByRole('dialog', { name: 'Rename conversation', exact: true });
+		await expect(rename).toBeVisible();
+		await expectDialogToFillAndCenterViewport(page, rename, viewport);
+		await rename.getByRole('button', { name: 'Cancel', exact: true }).tap();
+
+		await row.getByRole('button', { name: 'Modal target actions', exact: true }).tap();
+		await page.getByRole('menuitem', { name: 'Delete', exact: true }).tap();
+		const deletion = page.getByRole('dialog', { name: 'Delete conversation', exact: true });
+		await expect(deletion).toBeVisible();
+		await expectDialogToFillAndCenterViewport(page, deletion, viewport);
+		const confirm = deletion.getByRole('button', { name: 'Delete', exact: true });
+		await expect(confirm).toBeFocused();
+
+		const deleteRequests: string[] = [];
+		page.on('request', (request) => {
+			if (request.method() === 'DELETE' && new URL(request.url()).pathname === '/api/conversations/modal-target') {
+				deleteRequests.push(request.url());
+			}
+		});
+		await page.keyboard.press('Enter');
+		await expect(page.getByRole('link', { name: 'Modal target', exact: true })).toHaveCount(0);
+		expect(deleteRequests).toHaveLength(1);
 	} finally {
 		await context.close();
 	}
