@@ -40,6 +40,8 @@ export function uploadDocument(file: File, opts: DocumentUploadOptions = {}): Pr
 		if (token) xhr.setRequestHeader('X-CSRF-Token', token);
 		xhr.upload.onload = () => opts.onUploadComplete?.();
 		xhr.onerror = () => reject(new APIError(0, 'network request failed'));
+		xhr.onabort = () => reject(new APIError(0, 'request aborted'));
+		xhr.ontimeout = () => reject(new APIError(0, 'request timed out'));
 		xhr.onload = () => {
 			const rotated = xhr.getResponseHeader('X-CSRF-Token');
 			if (rotated) setCsrfToken(rotated);
@@ -56,7 +58,11 @@ export function uploadDocument(file: File, opts: DocumentUploadOptions = {}): Pr
 				reject(new APIError(xhr.status, envelope?.error ?? `upload failed (${xhr.status})`));
 				return;
 			}
-			resolve(envelope!.data);
+			if (typeof envelope !== 'object' || envelope === null || !('data' in envelope)) {
+				reject(new APIError(xhr.status, 'upload failed (invalid response)'));
+				return;
+			}
+			resolve(envelope.data);
 		};
 		xhr.send(form);
 	});

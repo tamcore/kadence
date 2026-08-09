@@ -826,6 +826,92 @@ func TestMessageRepositoryDeleteUserAndRewindValidatesTargetAndOwner(t *testing.
 	}
 }
 
+func TestMessageRepositoryDeleteFirstUserMessageCleansDraftHandoff(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	ctx := context.Background()
+
+	owner := createScheduledUser(t, ctx, users, "first-delete-draft", "first-delete-draft@example.com")
+	conversation, err := conversations.Create(ctx, owner.ID, "Chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := messages.AddChatUser(ctx, conversation.ID, "schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+		UserID: owner.ID, SourceConversationID: conversation.ID, SourceUserMessageID: first.ID,
+		SourceContentFingerprint: handoffFingerprint(81), InvocationOrdinal: 1,
+		Title: testHandoffTitle, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deletedConversation, err := messages.DeleteUserAndRewind(ctx, conversation.ID, first.ID, owner.ID)
+	if err != nil || !deletedConversation {
+		t.Fatalf("first-message delete conversation=%v err=%v", deletedConversation, err)
+	}
+	var handoffCount, taskCount, scheduledConversationCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&handoffCount); err != nil || handoffCount != 0 {
+		t.Fatalf("draft handoff count=%d err=%v, want 0", handoffCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, draft.Task.ID).Scan(&taskCount); err != nil || taskCount != 0 {
+		t.Fatalf("draft task count=%d err=%v, want 0", taskCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, draft.Task.ConversationID).Scan(&scheduledConversationCount); err != nil || scheduledConversationCount != 0 {
+		t.Fatalf("draft scheduled conversation count=%d err=%v, want 0", scheduledConversationCount, err)
+	}
+}
+
+func TestMessageRepositoryDeleteFirstUserMessageReturnsActiveDeliverySentinel(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	ctx := context.Background()
+
+	owner := createScheduledUser(t, ctx, users, "first-delete-active", "first-delete-active@example.com")
+	conversation, err := conversations.Create(ctx, owner.ID, "Chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := messages.AddChatUser(ctx, conversation.ID, "schedule this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+		UserID: owner.ID, SourceConversationID: conversation.ID, SourceUserMessageID: first.ID,
+		SourceContentFingerprint: handoffFingerprint(82), InvocationOrdinal: 1,
+		Title: testHandoffTitle, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handoffs.MarkTaskReady(ctx, owner.ID, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scheduled_tasks SET state = 'active' WHERE id = $1::uuid`, confirmed.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deletedConversation, err := messages.DeleteUserAndRewind(ctx, conversation.ID, first.ID, owner.ID)
+	if deletedConversation || !errors.Is(err, store.ErrConversationHasActiveDelivery) {
+		t.Fatalf("first-message delete conversation=%v err=%v, want active-delivery sentinel", deletedConversation, err)
+	}
+	var sourceCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, conversation.ID).Scan(&sourceCount); err != nil || sourceCount != 1 {
+		t.Fatalf("source conversation count=%d err=%v, want 1", sourceCount, err)
+	}
+}
+
 func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

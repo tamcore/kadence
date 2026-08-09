@@ -142,8 +142,10 @@ export async function deleteUserMessage(messageId: number): Promise<void> {
 	try {
 		const result = await chatApi.deleteMessage(conversationId, messageId);
 		if (result.conversationDeleted) {
-			newChat();
-			void goto('/chat');
+			if (get(activeId) === conversationId) {
+				newChat();
+				void goto('/chat');
+			}
 		} else if (get(activeId) === conversationId) {
 			messages.set(current.slice(0, userIdx));
 		}
@@ -570,7 +572,7 @@ async function consumeStream(
 				});
 			} else if (ev.type === 'error') {
 				receivedTerminal = true;
-				if (uploadBatchID !== undefined && ev.transport) {
+				if (uploadBatchID !== undefined) {
 					failUnsettledUploadFiles(uploadBatchID, ev.message);
 				}
 				applyPersistedAssistant(ev);

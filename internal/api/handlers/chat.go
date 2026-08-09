@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
@@ -363,7 +364,8 @@ func (h *Chat) RegenerateMessage(w http.ResponseWriter, r *http.Request) {
 func (h *Chat) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	conversationID := chi.URLParam(r, "id")
 	messageID, err := strconv.ParseInt(chi.URLParam(r, "messageId"), 10, 64)
-	if conversationID == "" || err != nil || messageID <= 0 {
+	_, conversationIDErr := uuid.Parse(conversationID)
+	if conversationIDErr != nil || err != nil || messageID <= 0 {
 		RespondError(w, http.StatusBadRequest, "valid conversation and message ids are required")
 		return
 	}
@@ -379,6 +381,11 @@ func (h *Chat) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, store.ErrWrongMessageRole) {
 		RespondError(w, http.StatusConflict, "message has wrong role")
+		return
+	}
+	if errors.Is(err, store.ErrConversationHasActiveDelivery) {
+		RespondError(w, http.StatusConflict,
+			"This chat has an active scheduled task delivering into it. Pause or delete that task first.")
 		return
 	}
 	if err != nil {

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	chatTestConversationID = "chat-conv-1"
+	chatTestConversationID = "11111111-1111-1111-1111-111111111111"
 	chatTestTimezone       = "UTC"
 	messageIDParam         = "messageId"
 	editedMessageJSON      = `{"message":"edited"}`
@@ -706,18 +706,25 @@ func TestDeleteMessageReturnsWholeConversationResult(t *testing.T) {
 
 func TestDeleteMessageValidationAndErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		id         string
-		messageID  string
-		deleterErr error
-		wantStatus int
-		wantCalls  int
+		name        string
+		id          string
+		messageID   string
+		deleterErr  error
+		wantStatus  int
+		wantCalls   int
+		wantMessage string
 	}{
 		{name: "missing conversation id", messageID: "12", wantStatus: http.StatusBadRequest},
+		{name: "invalid conversation id", id: "not-a-uuid", messageID: "12", wantStatus: http.StatusBadRequest},
 		{name: "invalid message id", id: chatTestConversationID, messageID: "nope", wantStatus: http.StatusBadRequest},
 		{name: "zero message id", id: chatTestConversationID, messageID: "0", wantStatus: http.StatusBadRequest},
 		{name: "not found", id: chatTestConversationID, messageID: "12", deleterErr: store.ErrNotFound, wantStatus: http.StatusNotFound, wantCalls: 1},
 		{name: "wrong role", id: chatTestConversationID, messageID: "12", deleterErr: store.ErrWrongMessageRole, wantStatus: http.StatusConflict, wantCalls: 1},
+		{
+			name: "active delivery", id: chatTestConversationID, messageID: "12",
+			deleterErr: store.ErrConversationHasActiveDelivery, wantStatus: http.StatusConflict, wantCalls: 1,
+			wantMessage: "This chat has an active scheduled task delivering into it. Pause or delete that task first.",
+		},
 		{name: "repository error", id: chatTestConversationID, messageID: "12", deleterErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantCalls: 1},
 	}
 	for _, test := range tests {
@@ -734,6 +741,9 @@ func TestDeleteMessageValidationAndErrors(t *testing.T) {
 
 			if response.Code != test.wantStatus || deleter.calls != test.wantCalls {
 				t.Fatalf("status=%d calls=%d body=%s", response.Code, deleter.calls, response.Body.String())
+			}
+			if test.wantMessage != "" && !strings.Contains(response.Body.String(), test.wantMessage) {
+				t.Fatalf("body=%s, want message %q", response.Body.String(), test.wantMessage)
 			}
 		})
 	}

@@ -28,6 +28,8 @@ class MockXMLHttpRequest {
 	readonly upload: { onload: (() => void) | null } = { onload: null };
 	onload: (() => void) | null = null;
 	onerror: (() => void) | null = null;
+	onabort: (() => void) | null = null;
+	ontimeout: (() => void) | null = null;
 	method = '';
 	url = '';
 	withCredentials = false;
@@ -59,14 +61,26 @@ class MockXMLHttpRequest {
 	}
 
 	respond(status: number, body: unknown, headers: Record<string, string> = {}): void {
+		this.respondRaw(status, JSON.stringify(body), headers);
+	}
+
+	respondRaw(status: number, body: string, headers: Record<string, string> = {}): void {
 		this.status = status;
-		this.responseText = JSON.stringify(body);
+		this.responseText = body;
 		this.responseHeaders = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 		this.onload?.();
 	}
 
 	fail(): void {
 		this.onerror?.();
+	}
+
+	abort(): void {
+		this.onabort?.();
+	}
+
+	timeout(): void {
+		this.ontimeout?.();
 	}
 }
 
@@ -131,6 +145,30 @@ describe('documents api', () => {
 		const upload = uploadDocument(new File(['x'], 'p.pdf', { type: 'application/pdf' }));
 		MockXMLHttpRequest.instances[0].fail();
 		await expect(upload).rejects.toBeInstanceOf(APIError);
+	});
+
+	it.each([
+		['empty', ''],
+		['non-JSON', '<html>bad gateway</html>']
+	])('rejects an APIError for an %s successful response', async (_name, responseText) => {
+		const upload = uploadDocument(new File(['x'], 'p.pdf', { type: 'application/pdf' }));
+		MockXMLHttpRequest.instances[0].respondRaw(200, responseText);
+
+		await expect(upload).rejects.toMatchObject({ status: 200 });
+	});
+
+	it('rejects when the upload is aborted', async () => {
+		const upload = uploadDocument(new File(['x'], 'p.pdf', { type: 'application/pdf' }));
+		MockXMLHttpRequest.instances[0].abort();
+
+		await expect(upload).rejects.toMatchObject({ status: 0, message: 'request aborted' });
+	});
+
+	it('rejects when the upload times out', async () => {
+		const upload = uploadDocument(new File(['x'], 'p.pdf', { type: 'application/pdf' }));
+		MockXMLHttpRequest.instances[0].timeout();
+
+		await expect(upload).rejects.toMatchObject({ status: 0, message: 'request timed out' });
 	});
 
 	it('lists and deletes via the shared client (user + admin paths)', async () => {

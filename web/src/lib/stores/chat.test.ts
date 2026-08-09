@@ -129,7 +129,7 @@ describe('chat store', () => {
 			[73, 1, 'processing'],
 			[73, 1, 'done']
 		]);
-		expect(failUnsettledUploadFilesMock).not.toHaveBeenCalled();
+		expect(failUnsettledUploadFilesMock).toHaveBeenCalledWith(73, 'provider failed');
 	});
 
 	it('fails only unsettled uploaded files when the stream is lost', async () => {
@@ -145,7 +145,7 @@ describe('chat store', () => {
 		expect(failUnsettledUploadFilesMock).toHaveBeenCalledWith(73, 'The chat stream was interrupted');
 	});
 
-	it('fails only unsettled uploaded files on a terminal transport error', async () => {
+	it('fails unfinished uploads on an ordinary terminal error without reopening completed files', async () => {
 		const files = [
 			new File(['image'], 'screen.png', { type: 'image/png' }),
 			new File(['text'], 'notes.txt', { type: 'text/plain' })
@@ -153,12 +153,18 @@ describe('chat store', () => {
 		streamChatMock.mockReturnValueOnce(events([
 			{ type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'done' },
 			{ type: 'upload', fileOrdinal: 1, filename: 'notes.txt', status: 'processing' },
-			{ type: 'error', message: 'connection lost', transport: true }
+			{ type: 'error', message: 'attachment extraction failed' }
 		]));
 
 		await sendMessage('review these', files);
 
-		expect(failUnsettledUploadFilesMock).toHaveBeenCalledWith(73, 'connection lost');
+		expect(setUploadFileStateMock.mock.calls).toEqual([
+			[73, 0, 'uploading'],
+			[73, 1, 'uploading'],
+			[73, 0, 'done'],
+			[73, 1, 'processing']
+		]);
+		expect(failUnsettledUploadFilesMock).toHaveBeenCalledWith(73, 'attachment extraction failed');
 	});
 
 	it('sendMessage appends user msg, streams tokens, and captures the new conversation id', async () => {
@@ -408,6 +414,42 @@ describe('chat store', () => {
 		expect(listConversationsMock).toHaveBeenCalledOnce();
 		expect(goto).toHaveBeenCalledOnce();
 		expect(goto).toHaveBeenCalledWith('/chat');
+	});
+
+	it('only refreshes the list when a whole-conversation delete completes after navigation', async () => {
+		activeId.set('conv-1');
+		messages.set([
+			{ id: 1, role: 'user', content: 'delete this conversation' },
+			{ id: 2, role: 'assistant', content: 'old answer' }
+		]);
+		let resolveDelete!: (result: { conversationDeleted: boolean }) => void;
+		deleteMessageMock.mockReturnValueOnce(new Promise((resolve) => (resolveDelete = resolve)));
+		getMessagesMock.mockResolvedValueOnce(navigatedConversation());
+
+		const deleting = deleteUserMessage(1);
+		await loadConversation('conv-2');
+		resolveDelete({ conversationDeleted: true });
+		await deleting;
+
+		expect(get(activeId)).toBe('conv-2');
+		expect(get(messages)).toEqual([
+			{ id: 11, role: 'user', content: 'conversation B first prompt' },
+			{
+				id: 12,
+				role: 'assistant',
+				content: 'conversation B first answer',
+				parts: [{ kind: 'text', content: 'conversation B first answer' }]
+			},
+			{ id: 13, role: 'user', content: 'conversation B current prompt' },
+			{
+				id: 14,
+				role: 'assistant',
+				content: 'conversation B current answer',
+				parts: [{ kind: 'text', content: 'conversation B current answer' }]
+			}
+		]);
+		expect(listConversationsMock).toHaveBeenCalledOnce();
+		expect(goto).not.toHaveBeenCalled();
 	});
 
 	it('preserves the transcript and reports an ordinary delete failure', async () => {

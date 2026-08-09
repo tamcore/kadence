@@ -803,10 +803,16 @@ func (r *MessageRepository) DeleteUserAndRewind(
 		return false, fmt.Errorf("check earlier chat messages: %w", err)
 	}
 	if !hasEarlierMessage {
+		if err := cleanupDraftHandoffsForConversation(ctx, tx, userID, conversationID); err != nil {
+			return false, err
+		}
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`,
 			conversationID, userID,
 		); err != nil {
+			if isDeliveryConversationForeignKeyViolation(err) {
+				return false, ErrConversationHasActiveDelivery
+			}
 			return false, fmt.Errorf("delete first-message conversation: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
