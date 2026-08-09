@@ -45,7 +45,7 @@
 	}
 
 	function closeSidebarOnEscape(e: KeyboardEvent): void {
-		if (e.key === 'Escape' && $sidebarOpen) closeSidebar();
+		if (e.key === 'Escape' && !$uploadBatch && $sidebarOpen) closeSidebar();
 	}
 
 	function stopReindexPoll(): void {
