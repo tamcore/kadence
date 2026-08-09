@@ -86,12 +86,14 @@ Each turn runs:
    current-title compare-and-set preserves a manual or concurrent rename. On a
    successful swap, a canonical, sidebar-safe `title` SSE event arrives before
    `done`. The frontend immediately upserts it into its sorted conversation
-   store, then reconciles again at the terminal event. Generation, persistence,
-   and compare-and-set misses fail open and retain the deterministic fallback
-   title. A title-event send or flush failure happens after the generated title
-   persists; the chat still succeeds and terminal reconciliation can recover that
-   canonical title. Scheduled handoffs, existing chats, edits, regenerations,
-   guardrail refusals, and failed assistant responses skip title generation.
+   store, then reconciles again at the terminal event. A generation failure
+   retains the deterministic fallback title. A persistence error leaves the
+   current canonical title unchanged. A compare-and-set miss preserves the
+   current canonical title, including a manual or concurrent rename. A title-event
+   send or flush failure happens after the generated title persists; the chat
+   still succeeds and terminal reconciliation can recover that canonical title.
+   Scheduled handoffs, existing chats, edits, regenerations, guardrail refusals,
+   and failed assistant responses skip title generation.
 
 Text-only turns retain the JSON request contract. Rich turns use bounded multipart
 requests and are fully parsed before SSE begins, so a rejected upload cannot create a
