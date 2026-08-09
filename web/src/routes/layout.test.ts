@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beginUploadBatch, dismissUploadBatch, uploadBatch } from '$lib/stores/upload-progress';
+import { get } from 'svelte/store';
 
 type TestPage = { url: URL; params: Record<string, string> };
 
@@ -57,6 +59,8 @@ vi.mock('$lib/api/mcp', () => ({ listMcp: vi.fn().mockResolvedValue({ servers: [
 import Layout from './+layout.svelte';
 
 afterEach(() => {
+	const batch = get(uploadBatch);
+	if (batch) dismissUploadBatch(batch.id);
 	vi.clearAllMocks();
 	Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
 	pageStore.set({ url: new URL('https://kadence.example/login'), params: {} });
@@ -99,5 +103,19 @@ describe('root layout PWA state', () => {
 		const brand = container.querySelector('.mobilebar .brand-sm');
 		expect(brand?.tagName).toBe('A');
 		expect(brand).toHaveAttribute('href', '/');
+	});
+
+	it('makes the app viewport inert while a global upload batch is active', async () => {
+		pageStore.set({ url: new URL('https://kadence.example/documents'), params: {} });
+		getCurrentUserMock.mockResolvedValueOnce({ id: 1, username: 'coach', scheduledEnabled: false });
+		const children = createRawSnippet(() => ({ render: () => '<p>Documents</p>' }));
+		const { container } = render(Layout, { children });
+
+		await waitFor(() => expect(container.querySelector('.app-viewport')).not.toBeNull());
+		const id = beginUploadBatch([new File(['content'], 'plan.pdf')]);
+
+		await waitFor(() => expect((container.querySelector('.app-viewport') as HTMLElement).inert).toBe(true));
+		dismissUploadBatch(id);
+		await waitFor(() => expect((container.querySelector('.app-viewport') as HTMLElement).inert).not.toBe(true));
 	});
 });

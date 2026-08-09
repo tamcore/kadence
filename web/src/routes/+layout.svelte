@@ -12,11 +12,13 @@
 	import { online, serverReachable, setOnline } from '$lib/stores/connection';
 	import { reachabilityMonitor } from '$lib/pwa/reachability-monitor';
 	import { closeSidebar, sidebarOpen, toggleSidebar } from '$lib/stores/ui';
+	import { uploadBatch } from '$lib/stores/upload-progress';
 	import { initTheme } from '$lib/theme/store';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import ReindexStrip from '$lib/components/ReindexStrip.svelte';
 	import McpHealthStrip from '$lib/components/McpHealthStrip.svelte';
 	import PwaStatusStrip from '$lib/components/PwaStatusStrip.svelte';
+	import UploadProgressOverlay from '$lib/components/UploadProgressOverlay.svelte';
 
 	const MOBILE_BREAKPOINT_PX = 900;
 	const REINDEX_POLL_INTERVAL_MS = 10000;
@@ -142,10 +144,12 @@
 
 <svelte:window onkeydown={closeSidebarOnEscape} />
 
+<UploadProgressOverlay />
+
 {#if checking}
 	<div class="loading">Loading…</div>
 {:else}
-	<div class="app-viewport">
+	<div class="app-viewport" inert={$uploadBatch !== null ? true : undefined}>
 		<PwaStatusStrip
 			online={$online}
 			serverReachable={$serverReachable}
