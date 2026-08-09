@@ -79,6 +79,23 @@ describe('upload progress store', () => {
 			{ ordinal: 0, filename: 'complete.pdf', state: 'done' },
 			{ ordinal: 1, filename: 'waiting.png', state: 'error', error: 'Connection lost' },
 			{ ordinal: 2, filename: 'active.txt', state: 'error', error: 'Connection lost' }
+	]);
+	});
+
+	it('does not mutate settled rows after late lifecycle events', () => {
+		const id = beginUploadBatch(files('failed.pdf', 'complete.png'));
+		setUploadFileState(id, 0, 'error', 'Connection lost');
+		setUploadFileState(id, 1, 'done');
+		const settled = get(uploadBatch);
+
+		setUploadFileState(id, 0, 'done');
+		setUploadFileState(id, 1, 'error', 'Late failure');
+		setUploadFileState(id, 1, 'processing');
+
+		expect(get(uploadBatch)).toBe(settled);
+		expect(get(uploadBatch)?.files).toEqual([
+			{ ordinal: 0, filename: 'failed.pdf', state: 'error', error: 'Connection lost' },
+			{ ordinal: 1, filename: 'complete.png', state: 'done' }
 		]);
 	});
 

@@ -64,6 +64,7 @@ export function setUploadFileState(
 	const previous = activeBatch;
 	const index = previous.files.findIndex((file) => file.ordinal === ordinal);
 	if (index === -1) return;
+	if (previous.files[index].state === 'done' || previous.files[index].state === 'error') return;
 
 	const files = previous.files.map((file) => {
 		if (file.ordinal !== ordinal) return file;
