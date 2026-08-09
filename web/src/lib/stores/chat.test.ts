@@ -482,10 +482,16 @@ describe('chat store', () => {
 		resolveDelete({ conversationDeleted: true });
 		await deleting;
 
-		expect(get(activeId)).toBe('conv-1');
-		expect(get(messages)).toEqual(original);
+		expect(get(activeId)).toBeNull();
+		expect(get(messages)).toEqual([]);
 		expect(listConversationsMock).toHaveBeenCalledOnce();
 		expect(goto).not.toHaveBeenCalled();
+
+		pageState.routeId = '/chat/[id]';
+		pageState.conversationId = 'conv-1';
+		await loadConversation('conv-1');
+
+		expect(getMessagesMock).toHaveBeenCalledWith('conv-1');
 	});
 
 	it('preserves the transcript and reports an ordinary delete failure', async () => {
@@ -558,8 +564,8 @@ describe('chat store', () => {
 		rejectReload(new APIError(404, 'conversation missing'));
 		await deleting;
 
-		expect(get(activeId)).toBe('conv-1');
-		expect(get(messages)).toEqual(original);
+		expect(get(activeId)).toBeNull();
+		expect(get(messages)).toEqual([]);
 		expect(listConversationsMock).toHaveBeenCalledOnce();
 		expect(goto).not.toHaveBeenCalled();
 	});
