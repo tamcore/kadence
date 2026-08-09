@@ -771,6 +771,70 @@ func (r *MessageRepository) RegenerateAndRewind(
 	return prompt, nil
 }
 
+// DeleteUserAndRewind removes one owned ordinary-chat user message and its
+// suffix. Deleting the first chat message deletes the whole conversation.
+func (r *MessageRepository) DeleteUserAndRewind(
+	ctx context.Context, conversationID string, messageID, userID int64,
+) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin delete user rewind: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+		return false, err
+	}
+	target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
+	if err != nil {
+		return false, err
+	}
+	if target.Role != model.MsgRoleUser {
+		return false, ErrWrongMessageRole
+	}
+	var hasEarlierMessage bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		     SELECT 1 FROM messages
+		      WHERE conversation_id = $1::uuid AND purpose = $2 AND id < $3
+		 )`,
+		conversationID, messagePurposeChat, messageID,
+	).Scan(&hasEarlierMessage); err != nil {
+		return false, fmt.Errorf("check earlier chat messages: %w", err)
+	}
+	if !hasEarlierMessage {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`,
+			conversationID, userID,
+		); err != nil {
+			return false, fmt.Errorf("delete first-message conversation: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, fmt.Errorf("commit delete first-message conversation: %w", err)
+		}
+		return true, nil
+	}
+	if err := cleanupDraftHandoffsForSourceMessages(ctx, tx, userID, conversationID, messageID); err != nil {
+		return false, err
+	}
+	if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM messages WHERE conversation_id = $1::uuid AND id >= $2`,
+		conversationID, messageID,
+	); err != nil {
+		return false, fmt.Errorf("delete user message suffix: %w", err)
+	}
+	if err := touchChatConversation(ctx, tx, conversationID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit delete user rewind: %w", err)
+	}
+	return false, nil
+}
+
 func lockOwnedChat(ctx context.Context, tx pgx.Tx, conversationID string, userID int64) error {
 	var id string
 	err := tx.QueryRow(ctx,

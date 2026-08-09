@@ -182,6 +182,24 @@ func (f fakeMsgLister) GetByID(context.Context, string, int64) (model.Message, e
 	return f.byID, nil
 }
 
+type fakeMessageDeleter struct {
+	fakeMsgLister
+	conversationDeleted bool
+	err                 error
+	calls               int
+	conversationID      string
+	messageID           int64
+	userID              int64
+}
+
+func (f *fakeMessageDeleter) DeleteUserAndRewind(
+	_ context.Context, conversationID string, messageID, userID int64,
+) (bool, error) {
+	f.calls++
+	f.conversationID, f.messageID, f.userID = conversationID, messageID, userID
+	return f.conversationDeleted, f.err
+}
+
 type fakeScheduledConversationPauser struct {
 	calls  int
 	linked bool
@@ -648,6 +666,74 @@ func TestMessageRewriteValidation(t *testing.T) {
 			}
 			if response.Code != test.wantStatus {
 				t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDeleteMessageReturnsConversationDeleted(t *testing.T) {
+	deleter := &fakeMessageDeleter{}
+	handler := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, deleter, nil, nil)
+	request := withChiParams(
+		withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/chat-conv-1/messages/12", nil), 7),
+		map[string]string{"id": chatTestConversationID, messageIDParam: "12"},
+	)
+	response := httptest.NewRecorder()
+
+	handler.DeleteMessage(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "{\"data\":{\"conversationDeleted\":false}}\n" ||
+		deleter.calls != 1 || deleter.conversationID != chatTestConversationID || deleter.messageID != 12 || deleter.userID != 7 {
+		t.Fatalf("status=%d body=%s deleter=%+v", response.Code, response.Body.String(), deleter)
+	}
+}
+
+func TestDeleteMessageReturnsWholeConversationResult(t *testing.T) {
+	deleter := &fakeMessageDeleter{conversationDeleted: true}
+	handler := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, deleter, nil, nil)
+	request := withChiParams(
+		withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/chat-conv-1/messages/12", nil), 7),
+		map[string]string{"id": chatTestConversationID, messageIDParam: "12"},
+	)
+	response := httptest.NewRecorder()
+
+	handler.DeleteMessage(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "{\"data\":{\"conversationDeleted\":true}}\n" || deleter.calls != 1 {
+		t.Fatalf("status=%d body=%s deleter=%+v", response.Code, response.Body.String(), deleter)
+	}
+}
+
+func TestDeleteMessageValidationAndErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		messageID  string
+		deleterErr error
+		wantStatus int
+		wantCalls  int
+	}{
+		{name: "missing conversation id", messageID: "12", wantStatus: http.StatusBadRequest},
+		{name: "invalid message id", id: chatTestConversationID, messageID: "nope", wantStatus: http.StatusBadRequest},
+		{name: "zero message id", id: chatTestConversationID, messageID: "0", wantStatus: http.StatusBadRequest},
+		{name: "not found", id: chatTestConversationID, messageID: "12", deleterErr: store.ErrNotFound, wantStatus: http.StatusNotFound, wantCalls: 1},
+		{name: "wrong role", id: chatTestConversationID, messageID: "12", deleterErr: store.ErrWrongMessageRole, wantStatus: http.StatusConflict, wantCalls: 1},
+		{name: "repository error", id: chatTestConversationID, messageID: "12", deleterErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deleter := &fakeMessageDeleter{err: test.deleterErr}
+			handler := handlers.NewChat(&fakeStreamer{}, &fakeConvLister{}, deleter, nil, nil)
+			request := withChiParams(
+				withUser(httptest.NewRequest(http.MethodDelete, "/api/conversations/messages", nil), 7),
+				map[string]string{"id": test.id, messageIDParam: test.messageID},
+			)
+			response := httptest.NewRecorder()
+
+			handler.DeleteMessage(response, request)
+
+			if response.Code != test.wantStatus || deleter.calls != test.wantCalls {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, deleter.calls, response.Body.String())
 			}
 		})
 	}

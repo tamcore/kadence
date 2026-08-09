@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/tamcore/kadence/internal/api/handlers"
 	"github.com/tamcore/kadence/internal/config"
 	"github.com/tamcore/kadence/internal/store"
 )
@@ -83,5 +86,38 @@ func TestNewRouterSucceedsOnProdWithCSRFSecret(t *testing.T) {
 	}
 	if _, err := NewRouter(deps); err != nil {
 		t.Fatalf("NewRouter should succeed with a CSRF secret set: %v", err)
+	}
+}
+
+func TestMessageDeleteRouteIsAuthenticated(t *testing.T) {
+	deps := Deps{
+		Users:    store.NewUserRepository(nil),
+		Sessions: store.NewSessionRepository(nil),
+		Config:   config.Config{},
+		Chat:     handlers.NewChat(nil, nil, nil, nil, nil),
+	}
+	router := mustNewRouter(t, deps)
+	chiRouter, ok := router.(chi.Router)
+	if !ok {
+		t.Fatalf("NewRouter() = %T, want chi.Router", router)
+	}
+	registered := false
+	if err := chi.Walk(chiRouter, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method == http.MethodDelete && route == "/api/conversations/{id}/messages/{messageId}" {
+			registered = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	if !registered {
+		t.Fatal("message delete route is not registered")
+	}
+
+	request := httptest.NewRequest(http.MethodDelete, "/api/conversations/one/messages/1", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous status=%d body=%s", response.Code, response.Body.String())
 	}
 }

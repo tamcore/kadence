@@ -177,6 +177,7 @@ func mountAuth(r chi.Router, deps Deps) error {
 			)
 			r.Post("/api/conversations/{id}/messages/{messageId}/edit", deps.Chat.EditMessage)
 			r.Post("/api/conversations/{id}/messages/{messageId}/regenerate", deps.Chat.RegenerateMessage)
+			r.Delete("/api/conversations/{id}/messages/{messageId}", deps.Chat.DeleteMessage)
 			r.Patch("/api/conversations/{id}", deps.Chat.PatchConversation)
 			r.Delete("/api/conversations/{id}", deps.Chat.DeleteConversation)
 		}

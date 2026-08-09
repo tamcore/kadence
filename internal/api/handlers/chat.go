@@ -67,6 +67,10 @@ type MsgLister interface {
 	GetByID(ctx context.Context, conversationID string, messageID int64) (model.Message, error)
 }
 
+type MessageDeleter interface {
+	DeleteUserAndRewind(context.Context, string, int64, int64) (bool, error)
+}
+
 // ScheduledConversationPauser preserves the definition/audit relationship
 // when a linked Scheduled conversation is removed from the ordinary chat UI.
 type ScheduledConversationPauser interface {
@@ -85,6 +89,7 @@ type Chat struct {
 	rewriter       ChatRewriter
 	convs          ConvLister
 	msgs           MsgLister
+	deleter        MessageDeleter
 	scheduled      ScheduledConversationPauser
 	hydrator       ChatArtifactHydrator
 	uploadMaxBytes int64
@@ -118,6 +123,7 @@ func NewChatWithUploadLimit(
 		uploadMaxBytes: int64(uploadMaxBytes),
 	}
 	h.rewriter, _ = svc.(ChatRewriter)
+	h.deleter, _ = msgs.(MessageDeleter)
 	return h
 }
 
@@ -352,6 +358,34 @@ func (h *Chat) RegenerateMessage(w http.ResponseWriter, r *http.Request) {
 	h.streamSSE(w, func(sink chat.EventSink) {
 		_ = h.rewriter.Regenerate(r.Context(), u.ID, uc, conversationID, messageID, sink)
 	})
+}
+
+func (h *Chat) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	conversationID := chi.URLParam(r, "id")
+	messageID, err := strconv.ParseInt(chi.URLParam(r, "messageId"), 10, 64)
+	if conversationID == "" || err != nil || messageID <= 0 {
+		RespondError(w, http.StatusBadRequest, "valid conversation and message ids are required")
+		return
+	}
+	if h.deleter == nil {
+		RespondError(w, http.StatusInternalServerError, "message deletion is unavailable")
+		return
+	}
+	u := auth.UserFromContext(r.Context())
+	deleted, err := h.deleter.DeleteUserAndRewind(r.Context(), conversationID, messageID, u.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		RespondError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	if errors.Is(err, store.ErrWrongMessageRole) {
+		RespondError(w, http.StatusConflict, "message has wrong role")
+		return
+	}
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "could not delete message")
+		return
+	}
+	RespondJSON(w, http.StatusOK, map[string]bool{"conversationDeleted": deleted})
 }
 
 func (h *Chat) validateMessageAction(

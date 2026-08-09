@@ -539,6 +539,122 @@ func TestMessageRepositoryRegenerateReusesPrecedingUserInput(t *testing.T) {
 	assertMessageRelationCounts(t, pool, conversation.ID, 1, 1, 1)
 }
 
+func TestMessageRepositoryDeleteUserAndRewindDeletesSuffixRelations(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	documents := store.NewDocumentRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	chunks := store.NewChunkRepository(pool, "test-model")
+	audits := store.NewMCPAuditRepository(pool)
+	handoffs := store.NewScheduledHandoffRepository(pool)
+	ctx := context.Background()
+
+	owner, err := users.Create(ctx, model.User{
+		Username: "delete-rewind-relations", Email: "delete-rewind-relations@example.com",
+		PasswordHash: "h", Role: model.RoleUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := conversations.Create(ctx, owner.ID, "Delete suffix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := documents.Create(ctx, model.Document{
+		OwnerUserID: &owner.ID, Scope: model.ScopePrivate, Filename: "delete.md",
+		Mime: testMimeMarkdown, SourceType: model.DocSourceText, ExtractedMarkdown: "delete",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
+		Content: "first", Attachments: []model.MessageAttachment{{
+			Filename: "first.md", MIME: testMimeMarkdown, Kind: model.AttachmentKindDocument,
+			RawBytes: []byte("first"), ExtractedMarkdown: "# First",
+		}}, DocumentIDs: []int64{document.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAssistant, err := messages.Add(ctx, conversation.ID, model.MsgRoleAssistant, "first answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
+		Content: "target", Attachments: []model.MessageAttachment{{
+			Filename: "target.png", MIME: testMimePNG, Kind: model.AttachmentKindImage, RawBytes: []byte{1},
+		}}, DocumentIDs: []int64{document.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAssistant, err := messages.Add(ctx, conversation.ID, model.MsgRoleAssistant, "target answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := messages.AddChatUserInput(ctx, conversation.ID, owner.ID, store.ChatUserInput{
+		Content: "later", Attachments: []model.MessageAttachment{{
+			Filename: "later.png", MIME: testMimePNG, Kind: model.AttachmentKindImage, RawBytes: []byte{2},
+		}}, DocumentIDs: []int64{document.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []model.Message{first, firstAssistant, target, targetAssistant, later} {
+		sourceID := message.ID
+		if err := chunks.Insert(ctx, model.Chunk{
+			UserID: &owner.ID, ConversationID: &conversation.ID, Scope: model.ScopePrivate,
+			SourceKind: model.ChunkSourceMessage, SourceID: &sourceID, Content: message.Content,
+		}, make([]float32, 1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, toolCallID := range []string{"prefix-audit", "target-audit"} {
+		if _, err := audits.Start(ctx, model.MCPAuditCall{
+			ActorUserID: owner.ID, ActorUsername: owner.Username, ConversationID: conversation.ID,
+			Source: model.MCPAuditSourceChat, Model: "test-model", ToolCallID: toolCallID,
+			ToolName: "test__tool", Arguments: `{}`, StartedAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	draft, _, err := handoffs.CreateOrGetDraft(ctx, store.CreateChatHandoffInput{
+		UserID: owner.ID, SourceConversationID: conversation.ID, SourceUserMessageID: target.ID,
+		SourceContentFingerprint: handoffFingerprint(80), InvocationOrdinal: 1, Title: testHandoffTitle, Timezone: scheduledTimezoneUTC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deletedConversation, err := messages.DeleteUserAndRewind(ctx, conversation.ID, target.ID, owner.ID)
+	if err != nil || deletedConversation {
+		t.Fatalf("deletedConversation=%v err=%v", deletedConversation, err)
+	}
+	remaining, err := messages.ListByConversation(ctx, conversation.ID)
+	if err != nil || len(remaining) != 2 || remaining[0].ID != first.ID || remaining[1].ID != firstAssistant.ID {
+		t.Fatalf("remaining messages=%+v err=%v", remaining, err)
+	}
+	assertMessageRelationCounts(t, pool, conversation.ID, 1, 1, 1)
+	var chunkCount, auditCount, handoffCount, taskCount, scheduledConversationCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chunks WHERE conversation_id = $1::uuid`, conversation.ID).Scan(&chunkCount); err != nil || chunkCount != 2 {
+		t.Fatalf("chunks=%d err=%v", chunkCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM mcp_call_audit WHERE conversation_id = $1::uuid`, conversation.ID).Scan(&auditCount); err != nil || auditCount != 2 {
+		t.Fatalf("audits=%d err=%v", auditCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chat_scheduled_handoffs WHERE id = $1::uuid`, draft.Handoff.ID).Scan(&handoffCount); err != nil || handoffCount != 0 {
+		t.Fatalf("handoffs=%d err=%v", handoffCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE id = $1::uuid`, draft.Task.ID).Scan(&taskCount); err != nil || taskCount != 0 {
+		t.Fatalf("tasks=%d err=%v", taskCount, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversations WHERE id = $1::uuid`, draft.Task.ConversationID).Scan(&scheduledConversationCount); err != nil || scheduledConversationCount != 0 {
+		t.Fatalf("scheduled conversations=%d err=%v", scheduledConversationCount, err)
+	}
+}
+
 func TestMessageRepositoryChatUserInputEnforcesConversationOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)

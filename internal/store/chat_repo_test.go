@@ -776,6 +776,56 @@ func TestMessageRepositoryRewindValidatesOwnerKindAndRole(t *testing.T) {
 	}
 }
 
+func TestMessageRepositoryDeleteUserAndRewindValidatesTargetAndOwner(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	testutil.CleanTables(t, pool)
+	users := store.NewUserRepository(pool)
+	conversations := store.NewConversationRepository(pool)
+	messages := store.NewMessageRepository(pool)
+	ctx := context.Background()
+
+	owner := createScheduledUser(t, ctx, users, "delete-rewind-owner", "delete-rewind-owner@example.com")
+	other := createScheduledUser(t, ctx, users, "delete-rewind-other", "delete-rewind-other@example.com")
+	conversation, err := conversations.Create(ctx, owner.ID, "Chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := messages.AddChatUser(ctx, conversation.ID, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := messages.Add(ctx, conversation.ID, model.MsgRoleAssistant, "answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled, err := conversations.CreateWithKind(ctx, owner.ID, "Scheduled", model.ConversationKindScheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduledUser, err := messages.AddDefinition(ctx, scheduled.ID, model.MsgRoleUser, "definition")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := messages.DeleteUserAndRewind(ctx, conversation.ID, first.ID, other.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-owner delete err=%v, want ErrNotFound", err)
+	}
+	if _, err := messages.DeleteUserAndRewind(ctx, scheduled.ID, scheduledUser.ID, owner.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("scheduled delete err=%v, want ErrNotFound", err)
+	}
+	if _, err := messages.DeleteUserAndRewind(ctx, conversation.ID, assistant.ID, owner.ID); !errors.Is(err, store.ErrWrongMessageRole) {
+		t.Fatalf("assistant delete err=%v, want ErrWrongMessageRole", err)
+	}
+
+	deletedConversation, err := messages.DeleteUserAndRewind(ctx, conversation.ID, first.ID, owner.ID)
+	if err != nil || !deletedConversation {
+		t.Fatalf("first-message delete conversation=%v err=%v", deletedConversation, err)
+	}
+	if _, err := messages.DeleteUserAndRewind(ctx, conversation.ID, first.ID, owner.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("repeated delete err=%v, want ErrNotFound", err)
+	}
+}
+
 func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	testutil.CleanTables(t, pool)
