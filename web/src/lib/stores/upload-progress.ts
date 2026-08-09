@@ -81,6 +81,7 @@ export function setUploadFileState(
 export function failUnsettledUploadFiles(batchID: number, message: string): void {
 	if (activeBatch?.id !== batchID) return;
 	const previous = activeBatch;
+	if (!previous.files.some((file) => file.state !== 'done' && file.state !== 'error')) return;
 	const files = previous.files.map((file) =>
 		file.state === 'done' || file.state === 'error'
 			? file

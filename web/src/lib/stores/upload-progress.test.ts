@@ -113,6 +113,22 @@ describe('upload progress store', () => {
 		expect(get(uploadBatch)).toBeNull();
 	});
 
+	it('keeps the successful close timer after a late bulk failure', () => {
+		vi.useFakeTimers();
+		const id = beginUploadBatch(files('first.pdf', 'second.pdf'));
+		setUploadFileState(id, 0, 'done');
+		setUploadFileState(id, 1, 'done');
+		const completed = get(uploadBatch);
+
+		failUnsettledUploadFiles(id, 'Late failure');
+
+		expect(get(uploadBatch)).toBe(completed);
+		vi.advanceTimersByTime(499);
+		expect(get(uploadBatch)).not.toBeNull();
+		vi.advanceTimersByTime(1);
+		expect(get(uploadBatch)).toBeNull();
+	});
+
 	it('keeps an errored batch open until it is dismissed', () => {
 		vi.useFakeTimers();
 		const id = beginUploadBatch(files('plan.pdf'));
