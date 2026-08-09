@@ -2,6 +2,7 @@
 	import { uploadDocument, type DocumentUploadCapabilities } from '$lib/api/documents';
 	import { APIError } from '$lib/api/client';
 	import Button from '$lib/components/Button.svelte';
+	import { beginUploadBatch, setUploadFileState } from '$lib/stores/upload-progress';
 
 	type UploadStatus = 'queued' | 'uploading' | 'success' | 'failure';
 	type UploadItem = {
@@ -106,20 +107,35 @@
 
 	async function handleUpload(): Promise<void> {
 		if (uploading || queuedCount === 0) return;
+		const pending = queue.filter((item) => item.status === 'queued');
+		const batchId = beginUploadBatch(pending.map((item) => item.file));
 		uploading = true;
 		let uploaded = 0;
-		for (const item of queue) {
-			if (item.status !== 'queued') continue;
+		for (const [ordinal, item] of pending.entries()) {
 			item.status = 'uploading';
 			item.message = 'Uploading…';
+			setUploadFileState(batchId, ordinal, 'uploading');
 			try {
-				await uploadDocument(item.file, { admin });
+				await uploadDocument(item.file, {
+					admin,
+					onUploadComplete: () => {
+						item.message = 'Processing…';
+						setUploadFileState(batchId, ordinal, 'processing');
+					}
+				});
 				item.status = 'success';
 				item.message = 'Uploaded';
+				setUploadFileState(batchId, ordinal, 'done');
 				uploaded += 1;
 			} catch (err) {
 				item.status = 'failure';
 				item.message = messageFor(err);
+				setUploadFileState(
+					batchId,
+					ordinal,
+					'error',
+					err instanceof Error ? err.message : item.message
+				);
 			}
 		}
 		uploading = false;

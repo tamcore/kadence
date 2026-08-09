@@ -9,6 +9,9 @@ const listConversationsMock = vi.fn().mockResolvedValue([]);
 const renameConversationMock = vi.fn().mockResolvedValue({ id: '1', title: 'renamed' });
 
 const pinConversationMock = vi.fn();
+const beginUploadBatchMock = vi.fn();
+const setUploadFileStateMock = vi.fn();
+const failUnsettledUploadFilesMock = vi.fn();
 vi.mock('$lib/api/chat', () => ({
 	streamChat: (...a: unknown[]) => streamChatMock(...a),
 	editMessage: (...a: unknown[]) => editMessageMock(...a),
@@ -18,6 +21,11 @@ vi.mock('$lib/api/chat', () => ({
 	renameConversation: (...a: unknown[]) => renameConversationMock(...a),
 	pinConversation: (...a: unknown[]) => pinConversationMock(...a),
 	deleteConversation: vi.fn().mockResolvedValue({ ok: true })
+}));
+vi.mock('$lib/stores/upload-progress', () => ({
+	beginUploadBatch: (...args: unknown[]) => beginUploadBatchMock(...args),
+	setUploadFileState: (...args: unknown[]) => setUploadFileStateMock(...args),
+	failUnsettledUploadFiles: (...args: unknown[]) => failUnsettledUploadFilesMock(...args)
 }));
 
 import {
@@ -61,10 +69,69 @@ beforeEach(() => {
 	listConversationsMock.mockReset().mockResolvedValue([]);
 	renameConversationMock.mockReset().mockResolvedValue({ id: '1', title: 'renamed' });
 	pinConversationMock.mockReset();
+	beginUploadBatchMock.mockReset().mockReturnValue(73);
+	setUploadFileStateMock.mockReset();
+	failUnsettledUploadFilesMock.mockReset();
 });
 afterEach(() => vi.clearAllMocks());
 
 describe('chat store', () => {
+	it('tracks uploaded files before the assistant terminal error without reopening done files', async () => {
+		const files = [
+			new File(['image'], 'screen.png', { type: 'image/png' }),
+			new File(['text'], 'notes.txt', { type: 'text/plain' })
+		];
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'processing' },
+			{ type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'done' },
+			{ type: 'upload', fileOrdinal: 1, filename: 'notes.txt', status: 'processing' },
+			{ type: 'upload', fileOrdinal: 1, filename: 'notes.txt', status: 'done' },
+			{ type: 'meta', conversationId: 'conv-1', userMessageId: 1 },
+			{ type: 'error', message: 'provider failed' }
+		]));
+
+		await sendMessage('review these', files);
+
+		expect(beginUploadBatchMock).toHaveBeenCalledWith(files);
+		expect(beginUploadBatchMock.mock.invocationCallOrder[0]).toBeLessThan(streamChatMock.mock.invocationCallOrder[0]);
+		expect(setUploadFileStateMock.mock.calls).toEqual([
+			[73, 0, 'processing'],
+			[73, 0, 'done'],
+			[73, 1, 'processing'],
+			[73, 1, 'done']
+		]);
+		expect(failUnsettledUploadFilesMock).not.toHaveBeenCalled();
+	});
+
+	it('fails only unsettled uploaded files when the stream is lost', async () => {
+		const file = new File(['image'], 'screen.png', { type: 'image/png' });
+		streamChatMock.mockImplementationOnce(async function* () {
+			yield { type: 'meta', conversationId: 'conv-1', userMessageId: 1 };
+			yield { type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'processing' };
+			throw new Error('stream lost');
+		});
+
+		await sendMessage('review this', [file]);
+
+		expect(failUnsettledUploadFilesMock).toHaveBeenCalledWith(73, 'The chat stream was interrupted');
+	});
+
+	it('fails only unsettled uploaded files on a terminal transport error', async () => {
+		const files = [
+			new File(['image'], 'screen.png', { type: 'image/png' }),
+			new File(['text'], 'notes.txt', { type: 'text/plain' })
+		];
+		streamChatMock.mockReturnValueOnce(events([
+			{ type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'done' },
+			{ type: 'upload', fileOrdinal: 1, filename: 'notes.txt', status: 'processing' },
+			{ type: 'error', message: 'connection lost', transport: true }
+		]));
+
+		await sendMessage('review these', files);
+
+		expect(failUnsettledUploadFilesMock).toHaveBeenCalledWith(73, 'connection lost');
+	});
+
 	it('sendMessage appends user msg, streams tokens, and captures the new conversation id', async () => {
 		streamChatMock.mockReturnValueOnce(events([
 			{ type: 'meta', conversationId: '11111111-1111-1111-1111-111111111111', userMessageId: 11 },

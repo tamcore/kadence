@@ -11,6 +11,11 @@ import type {
 	ScheduledArtifact
 } from '$lib/types';
 import * as chatApi from '$lib/api/chat';
+import {
+	beginUploadBatch,
+	failUnsettledUploadFiles,
+	setUploadFileState
+} from '$lib/stores/upload-progress';
 
 export const messages = writable<ChatMessage[]>([]);
 export const conversations = writable<Conversation[]>([]);
@@ -232,6 +237,7 @@ export async function sendMessage(
 	messages.update((m) => [...m, { role: 'assistant', content: '', parts: [] }]);
 	const assistantIdx = get(messages).length - 1;
 	const localAbort = beginStream();
+	const uploadBatchID = files.length > 0 ? beginUploadBatch(files) : undefined;
 	const body = {
 		conversationId: get(activeId) ?? undefined,
 		message: text,
@@ -246,7 +252,9 @@ export async function sendMessage(
 		assistantIdx,
 		get(activeId),
 		localAbort,
-		restoreBeforeMeta
+		restoreBeforeMeta,
+		false,
+		uploadBatchID
 	);
 	if (convId != null) void refreshConversations();
 	return convId;
@@ -339,7 +347,8 @@ async function consumeStream(
 	initialConversationId: string | null,
 	localAbort: AbortController,
 	restoreBeforeMeta?: ChatMessage[],
-	refetchAcceptedRewriteOnInterruption = false
+	refetchAcceptedRewriteOnInterruption = false,
+	uploadBatchID?: number
 ): Promise<string | null> {
 	function updateAssistantParts(update: (parts: MessagePart[]) => MessagePart[]): void {
 		messages.update((m) => {
@@ -439,7 +448,15 @@ async function consumeStream(
 	try {
 		for await (const ev of stream) {
 			if (!streamIsActive()) return null;
-			if (ev.type === 'meta') {
+			if (ev.type === 'upload') {
+				if (uploadBatchID !== undefined) {
+					if (ev.status === 'error') {
+						setUploadFileState(uploadBatchID, ev.fileOrdinal, ev.status, ev.message);
+					} else {
+						setUploadFileState(uploadBatchID, ev.fileOrdinal, ev.status);
+					}
+				}
+			} else if (ev.type === 'meta') {
 				receivedMeta = true;
 				convId = ev.conversationId;
 				if (get(activeId) === null) activeId.set(convId);
@@ -501,6 +518,9 @@ async function consumeStream(
 				});
 			} else if (ev.type === 'error') {
 				receivedTerminal = true;
+				if (uploadBatchID !== undefined && ev.transport) {
+					failUnsettledUploadFiles(uploadBatchID, ev.message);
+				}
 				applyPersistedAssistant(ev);
 				restoreRejectedRewrite();
 				await refetchAcceptedRewrite();
@@ -516,6 +536,9 @@ async function consumeStream(
 				break;
 			}
 		}
+		if (!receivedTerminal && uploadBatchID !== undefined) {
+			failUnsettledUploadFiles(uploadBatchID, 'The chat stream was interrupted');
+		}
 		if (receivedMeta && !receivedTerminal && refetchAcceptedRewriteOnInterruption) {
 			await refetchAcceptedRewrite();
 			if (streamIsActive()) {
@@ -528,6 +551,9 @@ async function consumeStream(
 		// Intentional aborts should not surface as errors to the user; mark the
 		// partial assistant reply as stopped instead so the UI can end cleanly.
 		if (!localAbort.signal.aborted) {
+			if (uploadBatchID !== undefined) {
+				failUnsettledUploadFiles(uploadBatchID, 'The chat stream was interrupted');
+			}
 			restoreRejectedRewrite();
 			await refetchAcceptedRewrite();
 			if (streamIsActive()) {

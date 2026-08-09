@@ -99,8 +99,22 @@ export type ChatEvent =
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'scheduled_artifact'; scheduledArtifact: ScheduledArtifact }
 	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }
+	| {
+			type: 'upload';
+			fileOrdinal: number;
+			filename: string;
+			status: 'processing' | 'done' | 'error';
+			message?: string;
+	  }
 	| { type: 'done'; assistantMessageId?: number; assistantContent?: string }
-	| { type: 'error'; message: string; code?: number; assistantMessageId?: number; assistantContent?: string };
+	| {
+			type: 'error';
+			message: string;
+			code?: number;
+			assistantMessageId?: number;
+			assistantContent?: string;
+			transport?: boolean;
+	  };
 
 export interface Document {
 	id: number;

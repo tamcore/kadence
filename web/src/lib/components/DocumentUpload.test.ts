@@ -5,6 +5,13 @@ import * as documentsApi from '$lib/api/documents';
 import { APIError } from '$lib/api/client';
 import type { Document } from '$lib/types';
 
+const beginUploadBatchMock = vi.fn();
+const setUploadFileStateMock = vi.fn();
+vi.mock('$lib/stores/upload-progress', () => ({
+	beginUploadBatch: (...args: unknown[]) => beginUploadBatchMock(...args),
+	setUploadFileState: (...args: unknown[]) => setUploadFileStateMock(...args)
+}));
+
 const pdfCapabilities = {
 	max_bytes: 10 * 1024 * 1024,
 	rich_extraction: false,
@@ -29,7 +36,42 @@ function uploadedDocument(file: File, id: number): Document {
 }
 
 describe('DocumentUpload', () => {
-	beforeEach(() => vi.restoreAllMocks());
+	beforeEach(() => {
+		vi.restoreAllMocks();
+		beginUploadBatchMock.mockReset().mockReturnValue(47);
+		setUploadFileStateMock.mockReset();
+	});
+
+	it('creates one full shared batch and progresses every file in order after an error', async () => {
+		const files = [
+			new File(['pdf'], 'plan.pdf', { type: 'application/pdf' }),
+			new File(['png'], 'route.png', { type: 'image/png' })
+		];
+		const upload = vi.spyOn(documentsApi, 'uploadDocument').mockImplementation(async (file, options) => {
+			options?.onUploadComplete?.();
+			if (file.name === 'plan.pdf') throw new APIError(415, 'unsupported');
+			return uploadedDocument(file, 2);
+		});
+		const onUploaded = vi.fn();
+		const { container } = render(DocumentUpload, { capabilities: richCapabilities, onUploaded });
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		Object.defineProperty(input, 'files', { configurable: true, value: files });
+		await fireEvent.change(input);
+		await fireEvent.click(screen.getByRole('button', { name: 'Upload 2 files' }));
+
+		await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+		expect(beginUploadBatchMock).toHaveBeenCalledWith(files);
+		expect(beginUploadBatchMock.mock.invocationCallOrder[0]).toBeLessThan(upload.mock.invocationCallOrder[0]);
+		expect(setUploadFileStateMock.mock.calls).toEqual([
+			[47, 0, 'uploading'],
+			[47, 0, 'processing'],
+			[47, 0, 'error', 'unsupported'],
+			[47, 1, 'uploading'],
+			[47, 1, 'processing'],
+			[47, 1, 'done']
+		]);
+		expect(onUploaded).toHaveBeenCalledTimes(1);
+	});
 
 	it('uploads multiple selected files sequentially and reports each success', async () => {
 		let active = 0;

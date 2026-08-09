@@ -1,4 +1,4 @@
-import { api, getCsrfToken, setCsrfToken, APIError } from '$lib/api/client';
+import { api, getCsrfToken, handleUnauthorized, setCsrfToken, APIError } from '$lib/api/client';
 import type { Document } from '$lib/types';
 
 interface Envelope<T> {
@@ -17,6 +17,11 @@ export interface DocumentReferenceOptions {
 	public: Document[];
 }
 
+export interface DocumentUploadOptions {
+	admin?: boolean;
+	onUploadComplete?: () => void;
+}
+
 function documentsPath(admin: boolean | undefined): string {
 	return admin ? '/admin/documents' : '/documents';
 }
@@ -24,36 +29,37 @@ function documentsPath(admin: boolean | undefined): string {
 // uploadDocument POSTs a file as multipart/form-data. It cannot use the shared
 // JSON `request` helper (which forces a JSON content-type), so it replicates the
 // CSRF + credentials handling directly (see streamChat for the same pattern).
-export async function uploadDocument(file: File, opts: { admin?: boolean } = {}): Promise<Document> {
+export function uploadDocument(file: File, opts: DocumentUploadOptions = {}): Promise<Document> {
 	const form = new FormData();
 	form.append('file', file);
-
-	const headers: Record<string, string> = {};
-	const token = getCsrfToken();
-	if (token) headers['X-CSRF-Token'] = token;
-
-	const resp = await fetch(`/api${documentsPath(opts.admin)}`, {
-		method: 'POST',
-		credentials: 'include',
-		headers, // NOTE: no Content-Type — the browser sets the multipart boundary
-		body: form
+	return new Promise<Document>((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('POST', `/api${documentsPath(opts.admin)}`);
+		xhr.withCredentials = true;
+		const token = getCsrfToken();
+		if (token) xhr.setRequestHeader('X-CSRF-Token', token);
+		xhr.upload.onload = () => opts.onUploadComplete?.();
+		xhr.onerror = () => reject(new APIError(0, 'network request failed'));
+		xhr.onload = () => {
+			const rotated = xhr.getResponseHeader('X-CSRF-Token');
+			if (rotated) setCsrfToken(rotated);
+			let envelope: Envelope<Document> | null = null;
+			if (xhr.status !== 204 && xhr.responseText) {
+				try {
+					envelope = JSON.parse(xhr.responseText) as Envelope<Document>;
+				} catch {
+					envelope = null;
+				}
+			}
+			if (xhr.status < 200 || xhr.status >= 300) {
+				if (xhr.status === 401) handleUnauthorized();
+				reject(new APIError(xhr.status, envelope?.error ?? `upload failed (${xhr.status})`));
+				return;
+			}
+			resolve(envelope!.data);
+		};
+		xhr.send(form);
 	});
-
-	const rotated = resp.headers.get('X-CSRF-Token');
-	if (rotated) setCsrfToken(rotated);
-
-	let envelope: Envelope<Document> | null = null;
-	if (resp.status !== 204) {
-		try {
-			envelope = (await resp.json()) as Envelope<Document>;
-		} catch {
-			envelope = null;
-		}
-	}
-	if (!resp.ok) {
-		throw new APIError(resp.status, envelope?.error ?? `upload failed (${resp.status})`);
-	}
-	return envelope!.data;
 }
 
 export function listDocuments(opts: { admin?: boolean } = {}): Promise<Document[]> {

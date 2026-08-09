@@ -68,6 +68,25 @@ describe('streamChat', () => {
 		expect(events.at(-1)).toEqual({ type: 'done' });
 	});
 
+	it('parses upload lifecycle frames from a rich chat stream', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse([
+			'data: {"type":"upload","fileOrdinal":0,"filename":"screen.png","status":"processing"}\n\n',
+			'data: {"type":"upload","fileOrdinal":0,"filename":"screen.png","status":"done"}\n\n',
+			'data: {"type":"done"}\n\n'
+		])));
+
+		const events = await collect(streamChat({
+			message: 'review this',
+			files: [new File(['image'], 'screen.png', { type: 'image/png' })]
+		}, new AbortController().signal));
+
+		expect(events).toEqual([
+			{ type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'processing' },
+			{ type: 'upload', fileOrdinal: 0, filename: 'screen.png', status: 'done' },
+			{ type: 'done' }
+		]);
+	});
+
 	it('streams an edited message from its dedicated endpoint', async () => {
 		const fetchMock = vi.fn().mockResolvedValue(streamResponse([
 			'data: {"type":"meta","conversationId":"conv-1","userMessageId":12}\n\n',
