@@ -460,7 +460,8 @@ describe('chat store', () => {
 		expect(get(activeId)).toBeNull();
 		expect(get(messages)).toEqual([]);
 		expect(listConversationsMock).toHaveBeenCalledOnce();
-		expect(goto).not.toHaveBeenCalled();
+		expect(goto).toHaveBeenCalledOnce();
+		expect(goto).toHaveBeenCalledWith('/chat');
 	});
 
 	it('preserves persisted attachments and references through edit and regeneration', async () => {

@@ -156,7 +156,10 @@ export async function deleteUserMessage(messageId: number): Promise<void> {
 				chatError.set(null);
 			} catch (reloadError) {
 				if (reloadError instanceof APIError && reloadError.status === 404) {
-					if (get(activeId) === conversationId) newChat();
+					if (get(activeId) === conversationId) {
+						newChat();
+						void goto('/chat');
+					}
 					await refreshConversations();
 				} else {
 					chatError.set(reloadError instanceof Error ? reloadError.message : 'Could not delete message');
