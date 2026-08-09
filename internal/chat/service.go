@@ -405,9 +405,7 @@ func currentTurnProviderMessage(
 	for _, attachment := range userMessage.Attachments {
 		switch attachment.Kind {
 		case model.AttachmentKindImage:
-			message.Images = append(message.Images, provider.ImageContent{
-				Data: attachment.RawBytes, MIMEType: attachment.MIME,
-			})
+			message.Images = append(message.Images, providerImageContent(attachment))
 		case model.AttachmentKindDocument:
 			envelope.Attachments = append(envelope.Attachments, untrustedContextItem{
 				Filename: attachment.Filename, Content: attachment.ExtractedMarkdown,
@@ -454,11 +452,40 @@ func historicalTextWithoutOmissionMarker(content string) string {
 func estimateProviderMessageTokens(message provider.Message) int {
 	tokens := estimateTokens(message.Content)
 	for _, image := range message.Images {
-		// Provider transports typically base64-encode image bytes. Three raw
-		// bytes become roughly one token after the 4/3 encoding expansion.
-		tokens += (len(image.Data) + 2) / 3
+		tokens += estimateImageTokens(image)
 	}
 	return tokens
+}
+
+const (
+	imageTilePixels = 512
+	imageBaseTokens = 256
+	imageTileTokens = 256
+)
+
+func estimateImageTokens(image provider.ImageContent) int {
+	if image.Width <= 0 || image.Height <= 0 {
+		return (len(image.Data) + 2) / 3
+	}
+	wide := (image.Width + imageTilePixels - 1) / imageTilePixels
+	high := (image.Height + imageTilePixels - 1) / imageTilePixels
+	return imageBaseTokens + wide*high*imageTileTokens
+}
+
+func providerImageContent(attachment model.MessageAttachment) provider.ImageContent {
+	return provider.ImageContent{
+		Data:     attachment.RawBytes,
+		MIMEType: attachment.MIME,
+		Width:    dereferenceInt(attachment.ImageWidth),
+		Height:   dereferenceInt(attachment.ImageHeight),
+	}
+}
+
+func dereferenceInt(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func providerMessagesContainImages(messages []provider.Message) bool {
@@ -990,9 +1017,9 @@ func (s *Service) StreamTurn(
 	if processor == nil {
 		processor = NewAttachmentProcessor(nil)
 	}
-	prepared, err := processor.Prepare(input.Files)
+	prepared, err := s.prepareTurnAttachments(processor, input.Files, sink)
 	if err != nil {
-		return s.fail(sink, "could not prepare attachment")
+		return err
 	}
 	var documents []model.Document
 	if len(input.DocumentIDs) > 0 {
@@ -1034,9 +1061,27 @@ func (s *Service) StreamTurn(
 
 	toPersist := prepared
 	if !offTopic {
-		toPersist, err = processor.ExtractDocuments(streamCtx, prepared)
-		if err != nil {
-			return s.fail(sink, "could not extract attachment")
+		toPersist = make([]model.MessageAttachment, 0, len(prepared))
+		for ordinal, attachment := range prepared {
+			extracted, extractErr := processor.ExtractDocuments(
+				streamCtx, []model.MessageAttachment{attachment},
+			)
+			if extractErr != nil {
+				_ = sendUploadStatus(
+					sink, ordinal, input.Files[ordinal].Filename, UploadStatusError,
+					"could not extract attachment",
+				)
+				return s.fail(sink, "could not extract attachment")
+			}
+			toPersist = append(toPersist, extracted[0])
+		}
+	}
+	resolved := resolvedTurnContext{}
+	if !offTopic {
+		resolved.mcpSnap, resolved.systemPrompt = s.resolveMCPAndSystemPrompt(streamCtx, uc)
+		if estimateTokens(resolved.systemPrompt)+estimateTokens(input.Text)+
+			estimateNativeImageTokens(toPersist) > s.contextBudget {
+			return s.fail(sink, "current message and attachments exceed the configured context budget")
 		}
 	}
 	persistedInput := model.ChatUserInput{
@@ -1064,6 +1109,11 @@ func (s *Service) StreamTurn(
 	if err != nil {
 		return s.fail(sink, "could not save message")
 	}
+	for ordinal, file := range input.Files {
+		if err := sendUploadStatus(sink, ordinal, file.Filename, UploadStatusDone, ""); err != nil {
+			return err
+		}
+	}
 	if confirmationCandidate {
 		if handled, confirmErr := s.tryConfirmScheduledDraft(
 			ctx, userID, uc, conversationID, userMsg, input.Text, sink,
@@ -1080,8 +1130,28 @@ func (s *Service) StreamTurn(
 	}
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
-		fallbackTitle, userMsg, history, documents, nil, true, true, sink,
+		fallbackTitle, userMsg, history, documents, &resolved, nil, true, true, sink,
 	)
+}
+
+func (s *Service) prepareTurnAttachments(
+	processor *AttachmentProcessor, files []FileInput, sink EventSink,
+) ([]model.MessageAttachment, error) {
+	for ordinal, file := range files {
+		if err := sendUploadStatus(sink, ordinal, file.Filename, UploadStatusProcessing, ""); err != nil {
+			return nil, err
+		}
+	}
+	prepared := make([]model.MessageAttachment, 0, len(files))
+	for ordinal, file := range files {
+		attachments, err := processor.Prepare([]FileInput{file})
+		if err != nil {
+			_ = sendUploadStatus(sink, ordinal, file.Filename, UploadStatusError, "could not prepare attachment")
+			return nil, s.fail(sink, "could not prepare attachment")
+		}
+		prepared = append(prepared, attachments[0])
+	}
+	return prepared, nil
 }
 
 const (
@@ -1194,7 +1264,7 @@ func (s *Service) Edit(
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
 		"", userMsg, preflight.history, preflight.documents,
-		preflight.historicalPayloads, true, false, sink,
+		nil, preflight.historicalPayloads, true, false, sink,
 	)
 }
 
@@ -1222,7 +1292,7 @@ func (s *Service) Regenerate(
 	return s.streamPersistedTurn(
 		ctx, streamCtx, userID, uc, conversationID,
 		"", userMsg, preflight.history, preflight.documents,
-		preflight.historicalPayloads, false, false, sink,
+		nil, preflight.historicalPayloads, false, false, sink,
 	)
 }
 
@@ -1401,6 +1471,18 @@ func (s *Service) sendTurnMeta(
 	return sink.Flush()
 }
 
+func sendUploadStatus(
+	sink EventSink, ordinal int, filename, status, message string,
+) error {
+	if err := sink.Send(ChatEvent{
+		Type: EventUpload, FileOrdinal: &ordinal, Filename: filename,
+		Status: status, Message: message,
+	}); err != nil {
+		return err
+	}
+	return sink.Flush()
+}
+
 // applyGuardrailAndExtract runs the egress guardrail classifier (skipped
 // when guardrailChecked is already true from an earlier pipeline stage) and,
 // if the turn is allowed through, extracts any attachment text. When the
@@ -1464,12 +1546,7 @@ func (s *Service) assembleTurnContext(
 		streamCtx, conversationID, userID, userText, documentIDs,
 	)
 
-	currentImageTokens := 0
-	for _, attachment := range userMsg.Attachments {
-		if attachment.Kind == model.AttachmentKindImage {
-			currentImageTokens += (len(attachment.RawBytes) + 2) / 3
-		}
-	}
+	currentImageTokens := estimateNativeImageTokens(userMsg.Attachments)
 	explicitBudget := s.contextBudget -
 		estimateTokens(systemPrompt) -
 		estimateTokens(userText) -
@@ -1540,11 +1617,26 @@ func (s *Service) assembleTurnContext(
 	}, retrieval, ragErr, nil
 }
 
+func estimateNativeImageTokens(attachments []model.MessageAttachment) int {
+	tokens := 0
+	for _, attachment := range attachments {
+		if attachment.Kind == model.AttachmentKindImage {
+			tokens += estimateImageTokens(providerImageContent(attachment))
+		}
+	}
+	return tokens
+}
+
+type resolvedTurnContext struct {
+	mcpSnap      MCPUserSnapshot
+	systemPrompt string
+}
+
 func (s *Service) streamPersistedTurn(
 	ctx, streamCtx context.Context,
 	userID int64, uc UserContext, conversationID string,
 	fallbackTitle string, userMsg model.Message, history []model.Message, documents []model.Document,
-	preloadedHistoricalPayloads *historicalPayloadCache,
+	resolved *resolvedTurnContext, preloadedHistoricalPayloads *historicalPayloadCache,
 	storeUserChunk, guardrailChecked bool, sink EventSink,
 ) error {
 	userText := userMsg.Content
@@ -1558,15 +1650,11 @@ func (s *Service) streamPersistedTurn(
 		Temperature: s.cfg.Temperature,
 	}
 
-	// mcpSnap is resolved once here — before the system prompt is built —
-	// and reused for the whole turn (tool listing below, plus every tool
-	// call in runToolLoop), instead of re-resolving the user's MCP servers
-	// (DB query + credential decrypt) on every tool call within that turn.
-	// It must be resolved this early so any per-server usage hints
-	// (mcpSnap.ToolHints) can be folded into the system prompt actually
-	// sent below — and therefore counted by boundHistory's token sizing,
-	// which sizes against systemPrompt.
-	mcpSnap, systemPrompt := s.resolveMCPAndSystemPrompt(streamCtx, uc)
+	if resolved == nil {
+		mcpSnap, systemPrompt := s.resolveMCPAndSystemPrompt(streamCtx, uc)
+		resolved = &resolvedTurnContext{mcpSnap: mcpSnap, systemPrompt: systemPrompt}
+	}
+	mcpSnap, systemPrompt := resolved.mcpSnap, resolved.systemPrompt
 	req.Messages = append(req.Messages, provider.Message{Role: model.MsgRoleSystem, Content: systemPrompt})
 
 	if s.secrets != nil {

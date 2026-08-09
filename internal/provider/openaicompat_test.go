@@ -150,7 +150,7 @@ func TestOpenAICompatStreamChat_UserImagesUseOrderedContentParts(t *testing.T) {
 			Role:    testRole,
 			Content: "describe these",
 			Images: []ImageContent{
-				{MIMEType: testImagePNGMime, Data: []byte{0, 1, 2}},
+				{MIMEType: testImagePNGMime, Data: []byte{0, 1, 2}, Width: 3, Height: 2},
 				{MIMEType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff}},
 			},
 		}},

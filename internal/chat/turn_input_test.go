@@ -236,7 +236,8 @@ func TestStreamTurnPersistsRawTextAndBuildsEscapedUntrustedContextWithImages(t *
 	current := lastUserProviderMessage(t, capturing.gotMessages)
 	if len(current.Images) != 1 ||
 		current.Images[0].MIMEType != testImagePNGMime ||
-		string(current.Images[0].Data) != string(imageBytes) {
+		string(current.Images[0].Data) != string(imageBytes) ||
+		current.Images[0].Width != 3 || current.Images[0].Height != 2 {
 		t.Fatalf("current images = %+v", current.Images)
 	}
 	if !strings.HasPrefix(current.Content, userText) {
@@ -464,6 +465,7 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 
 func TestStreamTurnIncludesHistoricalPayloadsWhenTheyFit(t *testing.T) {
 	documentID := int64(91)
+	imageWidth, imageHeight := 1, 1
 	convs := &fakeConvs{byID: map[string]model.Conversation{
 		testConvID: {ID: testConvID, UserID: testUserID, Title: testConvTitle},
 	}}
@@ -475,6 +477,7 @@ func TestStreamTurnIncludesHistoricalPayloadsWhenTheyFit(t *testing.T) {
 				{
 					Filename: "historical.png", MIME: testImagePNGMime,
 					Kind: model.AttachmentKindImage, RawBytes: testPNG(t, 1, 1),
+					ImageWidth: &imageWidth, ImageHeight: &imageHeight,
 				},
 				{
 					Filename: "historical.md", MIME: testMimeMarkdown,
@@ -525,7 +528,8 @@ func TestStreamTurnIncludesHistoricalPayloadsWhenTheyFit(t *testing.T) {
 	if historical.Content == "" {
 		t.Fatalf("historical user message missing: %+v", capturing.gotMessages)
 	}
-	if len(historical.Images) != 1 ||
+	if len(historical.Images) != 1 || historical.Images[0].Width != imageWidth ||
+		historical.Images[0].Height != imageHeight ||
 		!strings.Contains(historical.Content, "historical attachment evidence") ||
 		!strings.Contains(historical.Content, "historical referenced evidence") {
 		t.Fatalf("historical payload = %+v, want image, attachment, and reference", historical)
@@ -724,6 +728,142 @@ func TestStreamTurnReportsConfiguredAssistantCannotProcessHistoricalImages(t *te
 	if err == nil ||
 		!strings.Contains(err.Error(), "configured assistant cannot process attached images") {
 		t.Fatalf("Stream error = %v", err)
+	}
+}
+
+func TestStreamTurnLargeValidScreenshotFitsByDimensions(t *testing.T) {
+	image := append(testPNG(t, 1206, 2622), make([]byte, 2_775_381)...)
+	msgs := &fakeMsgs{}
+	mainProvider := &capturingProvider{reply: "ok"}
+	svc := chat.NewService(mainProvider,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			SystemPrompt: testSystemPromptCoach, ContextBudgetTokens: 6000,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:  msgs, Attachments: chat.NewAttachmentProcessor(nil),
+		},
+	)
+
+	if err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{Files: []chat.FileInput{{
+			Filename: "screenshot.png", MIME: testImagePNGMime, Data: image,
+		}}},
+		&capturingSink{},
+	); err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	if len(msgs.added) == 0 || len(mainProvider.gotMessages) == 0 {
+		t.Fatalf("screenshot was not persisted and sent to the provider")
+	}
+}
+
+func TestStreamTurnRejectsCombinedCurrentImagesBeforePersistence(t *testing.T) {
+	msgs := &fakeMsgs{}
+	mainProvider := &capturingProvider{reply: testProviderMustNotRun}
+	embedder := &fakeEmbedder{}
+	svc := chat.NewService(mainProvider,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			SystemPrompt: testSystemPromptCoach, ContextBudgetTokens: 800,
+		},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:  msgs, RAG: chat.NewRAG(embedder, &fakeChunks{}, 5),
+			Attachments: chat.NewAttachmentProcessor(nil),
+		},
+	)
+
+	err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{Files: []chat.FileInput{
+			{Filename: "first.png", MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
+			{Filename: "second.png", MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
+		}},
+		&capturingSink{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "current message and attachments exceed") {
+		t.Fatalf("StreamTurn error = %v", err)
+	}
+	if msgs.createdConversation != nil || len(msgs.added) != 0 ||
+		len(mainProvider.gotMessages) != 0 || embedder.calls != 0 {
+		t.Fatalf("admission persisted/retrieved/called provider: messages=%+v provider=%d retrieval=%d", msgs.added, len(mainProvider.gotMessages), embedder.calls)
+	}
+}
+
+func TestStreamTurnEmitsOrderedUploadLifecycleBeforeMeta(t *testing.T) {
+	sink := &capturingSink{}
+	svc := chat.NewService(fakeProvider{reply: testReply},
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:  &fakeMsgs{}, Attachments: chat.NewAttachmentProcessor(nil),
+		},
+	)
+
+	if err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{Files: []chat.FileInput{
+			{Filename: "first.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
+			{Filename: "second.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
+		}}, sink,
+	); err != nil {
+		t.Fatalf("StreamTurn: %v", err)
+	}
+	if len(sink.events) < 5 {
+		t.Fatalf("events = %+v", sink.events)
+	}
+	for i, want := range []struct {
+		status  string
+		ordinal int
+	}{
+		{status: "processing", ordinal: 0},
+		{status: "processing", ordinal: 1},
+		{status: "done", ordinal: 0},
+		{status: "done", ordinal: 1},
+	} {
+		event := sink.events[i]
+		if event.Type != "upload" || event.Status != want.status || event.FileOrdinal == nil ||
+			*event.FileOrdinal != want.ordinal {
+			t.Fatalf("event %d = %+v, want upload %s ordinal %d", i, event, want.status, want.ordinal)
+		}
+	}
+	if sink.events[4].Type != chat.EventMeta {
+		t.Fatalf("event 4 = %+v, want meta", sink.events[4])
+	}
+}
+
+func TestStreamTurnAttachmentFailureEmitsFileErrorAndNoPersistence(t *testing.T) {
+	msgs := &fakeMsgs{}
+	mainProvider := &capturingProvider{reply: testProviderMustNotRun}
+	sink := &capturingSink{}
+	svc := chat.NewService(mainProvider,
+		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
+		chat.Deps{
+			Convs: &fakeConvs{byID: map[string]model.Conversation{}},
+			Msgs:  msgs, Attachments: chat.NewAttachmentProcessor(nil),
+		},
+	)
+
+	err := svc.StreamTurn(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		chat.TurnInput{Files: []chat.FileInput{
+			{Filename: "valid.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
+			{Filename: "bad.png", MIME: testImagePNGMime},
+		}}, sink,
+	)
+	if err == nil || !strings.Contains(err.Error(), "could not prepare attachment") {
+		t.Fatalf("StreamTurn error = %v", err)
+	}
+	if len(sink.events) < 4 || sink.events[2].Type != "upload" ||
+		sink.events[2].Status != "error" || sink.events[2].FileOrdinal == nil ||
+		*sink.events[2].FileOrdinal != 1 || sink.events[3].Type != chat.EventError {
+		t.Fatalf("events = %+v", sink.events)
+	}
+	if msgs.createdConversation != nil || len(msgs.added) != 0 || len(mainProvider.gotMessages) != 0 {
+		t.Fatalf("attachment failure persisted or called provider: messages=%+v provider=%d", msgs.added, len(mainProvider.gotMessages))
 	}
 }
 
@@ -944,10 +1084,17 @@ func TestStreamTurnMetaCarriesSafePersistedPayloadMetadataAsArrays(t *testing.T)
 	); err != nil {
 		t.Fatalf("StreamTurn: %v", err)
 	}
-	if len(sink.events) == 0 || sink.events[0].Type != chat.EventMeta {
+	metaIndex := -1
+	for i, event := range sink.events {
+		if event.Type == chat.EventMeta {
+			metaIndex = i
+			break
+		}
+	}
+	if metaIndex < 0 {
 		t.Fatalf("events = %+v", sink.events)
 	}
-	meta := sink.events[0]
+	meta := sink.events[metaIndex]
 	if meta.Attachments == nil || len(*meta.Attachments) != 1 {
 		t.Fatalf("meta attachments = %+v", meta.Attachments)
 	}

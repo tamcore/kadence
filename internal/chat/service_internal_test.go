@@ -951,6 +951,23 @@ func TestEstimateProviderMessageTokensIncludesImageTransportCost(t *testing.T) {
 	}
 }
 
+func TestEstimateImageTokensUsesDimensions(t *testing.T) {
+	short := provider.ImageContent{Data: make([]byte, 10), Width: 1206, Height: 2622}
+	large := provider.ImageContent{Data: make([]byte, 2_775_381), Width: 1206, Height: 2622}
+	if got := estimateImageTokens(short); got != 4864 {
+		t.Fatalf("short cost=%d want=4864", got)
+	}
+	if got := estimateImageTokens(large); got != 4864 {
+		t.Fatalf("large cost=%d want=4864", got)
+	}
+}
+
+func TestEstimateImageTokensFallsBackToBytesWithoutDimensions(t *testing.T) {
+	if got := estimateImageTokens(provider.ImageContent{Data: make([]byte, 300)}); got != 100 {
+		t.Fatalf("cost=%d want=100", got)
+	}
+}
+
 func TestBoundHistoryReservesCurrentImageTransportCost(t *testing.T) {
 	history := []model.Message{
 		{Role: model.MsgRoleUser, Content: strings.Repeat("u", 100)},

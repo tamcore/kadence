@@ -37,9 +37,16 @@ const (
 	EventTitle             = "title"
 	EventDone              = "done"
 	EventError             = "error"
+	EventUpload            = "upload"
 	EventTool              = "tool"
 	EventCredentials       = "credentials_request"
 	EventScheduledArtifact = "scheduled_artifact"
+)
+
+const (
+	UploadStatusProcessing = "processing"
+	UploadStatusDone       = "done"
+	UploadStatusError      = "error"
 )
 
 // EventConversation is the sidebar-safe conversation state in a title event.
@@ -54,6 +61,8 @@ type ChatEvent struct {
 	AssistantMessageID int64              `json:"assistantMessageId,omitempty"`
 	AssistantContent   *string            `json:"assistantContent,omitempty"`
 	Message            string             `json:"message,omitempty"`
+	FileOrdinal        *int               `json:"fileOrdinal,omitempty"`
+	Filename           string             `json:"filename,omitempty"`
 	Tool               string             `json:"tool,omitempty"`
 	Status             string             `json:"status,omitempty"`
 	Arguments          string             `json:"arguments,omitempty"`

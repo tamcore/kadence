@@ -30,6 +30,8 @@ type ToolCall struct {
 type ImageContent struct {
 	Data     []byte
 	MIMEType string
+	Width    int
+	Height   int
 }
 
 // FinishLength is the finish_reason the provider reports when a completion was
