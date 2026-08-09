@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import type { Action } from 'svelte/action';
 
 	let {
 		open = false,
@@ -13,6 +14,13 @@
 		children: Snippet;
 	} = $props();
 
+	const portal: Action<HTMLElement> = (node) => {
+		document.body.appendChild(node);
+		return {
+			destroy: () => node.remove()
+		};
+	};
+
 	function onKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') onClose();
 	}
@@ -22,7 +30,7 @@
 
 {#if open}
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div class="backdrop" onclick={onClose}>
+	<div class="backdrop" use:portal onclick={onClose}>
 		<div class="card" role="dialog" tabindex="-1" aria-modal="true" aria-label={title} onclick={(e) => e.stopPropagation()}>
 			<div class="head">
 				<h2>{title}</h2>
@@ -39,9 +47,8 @@
 		inset: 0;
 		background: var(--overlay);
 		display: flex;
-		align-items: flex-start;
-		justify-content: center;
-		padding: 10vh 16px 16px;
+		overflow-y: auto;
+		padding: 16px;
 		z-index: 100;
 	}
 	.card {
@@ -50,6 +57,8 @@
 		border-radius: var(--radius);
 		width: 100%;
 		max-width: 420px;
+		margin: auto;
+		flex-shrink: 0;
 		box-shadow: 0 12px 32px color-mix(in srgb, var(--overlay) 45%, transparent);
 	}
 	.head {

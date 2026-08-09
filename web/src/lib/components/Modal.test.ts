@@ -33,6 +33,24 @@ describe('Modal', () => {
 		expect(screen.getByRole('dialog')).toBeInTheDocument();
 	});
 
+	it('attaches the backdrop directly to the document body', () => {
+		const { container, unmount } = render(Modal, {
+			open: true,
+			title: 'Viewport modal',
+			onClose: vi.fn(),
+			children: bodySnippet('body content')
+		});
+		const dialog = screen.getByRole('dialog', { name: 'Viewport modal' });
+		const backdrop = dialog.parentElement;
+
+		expect(backdrop).toHaveClass('backdrop');
+		expect(backdrop?.parentElement).toBe(document.body);
+		expect(container.contains(backdrop)).toBe(false);
+
+		unmount();
+		expect(document.body.contains(backdrop)).toBe(false);
+	});
+
 	it('calls onClose when the close button is clicked', async () => {
 		const onClose = vi.fn();
 		render(Modal, { open: true, title: 'Title', onClose, children: bodySnippet('x') });
