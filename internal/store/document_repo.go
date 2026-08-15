@@ -20,12 +20,18 @@ func NewDocumentRepository(pool *pgxpool.Pool) *DocumentRepository {
 
 // Create inserts a new document.
 func (r *DocumentRepository) Create(ctx context.Context, d model.Document) (model.Document, error) {
+	status := d.ExtractionStatus
+	if status == "" {
+		status = model.ExtractionStatusNotNeeded
+	}
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO documents (owner_user_id, scope, filename, mime, source_type, extracted_markdown)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, created_at`,
-		d.OwnerUserID, d.Scope, d.Filename, d.Mime, d.SourceType, d.ExtractedMarkdown).
-		Scan(&d.ID, &d.CreatedAt)
+		`INSERT INTO documents (owner_user_id, scope, filename, mime, source_type,
+		                        extracted_markdown, extraction_status, raw_bytes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 RETURNING id, created_at, extraction_status`,
+		d.OwnerUserID, d.Scope, d.Filename, d.Mime, d.SourceType, d.ExtractedMarkdown,
+		status, d.RawBytes).
+		Scan(&d.ID, &d.CreatedAt, &d.ExtractionStatus)
 	if err != nil {
 		return model.Document{}, fmt.Errorf("insert document: %w", err)
 	}
@@ -144,6 +150,64 @@ func (r *DocumentRepository) DeletePublic(ctx context.Context, id int64) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// ClaimPendingExtraction atomically moves up to limit pending documents to
+// running and returns them with their raw upload bytes. FOR UPDATE SKIP LOCKED
+// means concurrent workers never claim the same row.
+func (r *DocumentRepository) ClaimPendingExtraction(
+	ctx context.Context, limit int,
+) ([]model.Document, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx,
+		`UPDATE documents SET extraction_status = $1
+		  WHERE id IN (
+		        SELECT id FROM documents
+		         WHERE extraction_status = $2
+		         ORDER BY id
+		           FOR UPDATE SKIP LOCKED
+		         LIMIT $3
+		  )
+		 RETURNING id, owner_user_id, scope, filename, mime, source_type,
+		           extracted_markdown, extraction_status, raw_bytes, created_at`,
+		model.ExtractionStatusRunning, model.ExtractionStatusPending, limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim pending extraction: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.Document
+	for rows.Next() {
+		var d model.Document
+		if err := rows.Scan(
+			&d.ID, &d.OwnerUserID, &d.Scope, &d.Filename, &d.Mime, &d.SourceType,
+			&d.ExtractedMarkdown, &d.ExtractionStatus, &d.RawBytes, &d.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan claimed document: %w", err)
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate claimed documents: %w", err)
+	}
+	return out, nil
+}
+
+// FinishExtraction records the outcome of the page-image pass and releases the
+// stored upload bytes, so a converted PDF is not kept twice.
+func (r *DocumentRepository) FinishExtraction(
+	ctx context.Context, id int64, markdown, status string,
+) error {
+	if _, err := r.pool.Exec(ctx,
+		`UPDATE documents
+		    SET extracted_markdown = $1, extraction_status = $2, raw_bytes = NULL
+		  WHERE id = $3`,
+		markdown, status, id); err != nil {
+		return fmt.Errorf("finish extraction for document %d: %w", id, err)
 	}
 	return nil
 }

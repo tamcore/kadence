@@ -54,6 +54,15 @@ func (s *Service) Ingest(ctx context.Context, ownerUserID *int64, scope, filenam
 		return model.Document{}, fmt.Errorf("extract %s: %w", filename, err)
 	}
 
+	// A PDF may hide its tables in page rasters, so it is queued for the
+	// page-image pass and keeps its bytes until that finishes. Everything else
+	// is already fully extracted.
+	status := model.ExtractionStatusNotNeeded
+	var rawBytes []byte
+	if mime == pdfMimeType {
+		status = model.ExtractionStatusPending
+		rawBytes = data
+	}
 	doc, err := s.docs.Create(ctx, model.Document{
 		OwnerUserID:       ownerUserID,
 		Scope:             scope,
@@ -61,6 +70,8 @@ func (s *Service) Ingest(ctx context.Context, ownerUserID *int64, scope, filenam
 		Mime:              mime,
 		SourceType:        res.SourceType,
 		ExtractedMarkdown: res.Markdown,
+		ExtractionStatus:  status,
+		RawBytes:          rawBytes,
 	})
 	if err != nil {
 		return model.Document{}, fmt.Errorf("create document %s: %w", filename, err)
