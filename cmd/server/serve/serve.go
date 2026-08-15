@@ -608,6 +608,20 @@ func buildIngestExtractors(cfg config.Config) []ingest.Extractor {
 // pageImageTranscribePrompt asks for a faithful transcription. "Preserve all
 // numbers exactly" is the point of the whole feature: the incident that
 // prompted it was a training-plan distance read wrong.
+// pageImageMaxTokens bounds one page transcription. A dense training-plan grid
+// runs several thousand tokens — well past the chat completion cap — and a
+// truncated transcription silently loses the rows at the bottom of the page,
+// which is the exact failure this feature exists to remove.
+const pageImageMaxTokens = 16384
+
+// maxInt returns the larger of two ints.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 const pageImageTranscribePrompt = "Transcribe every table in this image to " +
 	"GitHub-flavored markdown. Preserve all numbers exactly. If the image has no " +
 	"table, transcribe any text you see. Output only the transcription, no commentary."
@@ -622,7 +636,7 @@ func newPageImageDescriber(p provider.Provider, cfg config.Config) pdfvision.Des
 			// Carry the configured temperature rather than leaving the zero
 			// value: some models accept only their default and reject 0.0.
 			Temperature: cfg.LLMTemperature,
-			MaxTokens:   cfg.LLMMaxTokens,
+			MaxTokens:   maxInt(cfg.LLMMaxTokens, pageImageMaxTokens),
 			Messages: []provider.Message{{
 				Role:    model.MsgRoleUser,
 				Content: pageImageTranscribePrompt,
