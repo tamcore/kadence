@@ -3,18 +3,36 @@ package ingest
 import (
 	"bytes"
 	"fmt"
+	"image/png"
 	"io"
+	"log/slog"
 	"sort"
 	"strconv"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	pdfmodel "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
+	"golang.org/x/image/tiff"
 )
 
 // minPageImageAxis is the smallest axis (in pixels) an embedded image may have
 // and still count as page content rather than an icon or a logo.
 const minPageImageAxis = 400
+
+// Upper bounds mirroring the chat attachment limits, so a selected page image
+// is always something the provider image path can carry.
+const (
+	maxPageImageAxis   = 8192
+	maxPageImagePixels = 8 << 20
+)
+
+// maxPageImageBytes bounds a single image read, so a malformed or hostile
+// stream cannot drive an unbounded allocation.
+const maxPageImageBytes = 64 << 20
+
+// defaultMaxTotalBytes bounds the combined payload of one extraction when the
+// caller supplies no budget.
+const defaultMaxTotalBytes = 24 << 20
 
 // nominalRenderDPI is the resolution a page is notionally rendered at when
 // judging how much of it an embedded image covers.
@@ -39,6 +57,9 @@ type PageImageOptions struct {
 	MinCoverage float64
 	// MaxPages caps how many images are returned, lowest page number first.
 	MaxPages int
+	// MaxTotalBytes caps the combined payload returned. Zero means
+	// defaultMaxTotalBytes.
+	MaxTotalBytes int
 }
 
 // imageStub is a candidate identified from pdfcpu's stub listing, which carries
@@ -54,7 +75,8 @@ type imagePayload struct {
 }
 
 // ExtractPageImages returns the largest qualifying embedded image for each page
-// of the PDF in data, ordered by page number and capped at opts.MaxPages.
+// of the PDF in data, ordered by page number and capped at opts.MaxPages and
+// opts.MaxTotalBytes.
 //
 // Selection keeps at most one image per page because a coverage threshold alone
 // cannot separate content tables from photographs: on the reference training
@@ -64,7 +86,9 @@ type imagePayload struct {
 // pdfcpu reports dimensions and payloads through two different calls, so this
 // runs two passes: api.Images yields stubs with dimensions but no bytes, and
 // api.ExtractImagesRaw yields bytes but leaves dimensions at zero. Results are
-// matched on the object number.
+// matched on the object number. The second pass runs one page at a time so peak
+// memory stays bounded by a single page's images rather than the whole
+// selection.
 //
 // pdfcpu can panic on malformed input, so the body is panic-guarded and the
 // panic is reported as an error, matching PDFExtractor.Extract.
@@ -77,6 +101,9 @@ func ExtractPageImages(data []byte, opts PageImageOptions) (out []PageImage, err
 
 	if opts.MaxPages <= 0 {
 		return nil, nil
+	}
+	if opts.MaxTotalBytes <= 0 {
+		opts.MaxTotalBytes = defaultMaxTotalBytes
 	}
 
 	dims, err := api.PageDims(bytes.NewReader(data), nil)
@@ -94,20 +121,37 @@ func ExtractPageImages(data []byte, opts PageImageOptions) (out []PageImage, err
 		return nil, nil
 	}
 	if len(selected) > opts.MaxPages {
+		slog.Info("pdf page-images truncated to the page cap",
+			"selected", len(selected), "cap", opts.MaxPages)
 		selected = selected[:opts.MaxPages]
 	}
 
-	payloads, err := extractPayloads(data, selected)
-	if err != nil {
-		return nil, err
-	}
+	return collectPayloads(data, selected, opts.MaxTotalBytes)
+}
 
-	out = make([]PageImage, 0, len(selected))
+// collectPayloads fetches bytes for each selected image, stopping once the
+// combined payload would exceed budget.
+func collectPayloads(data []byte, selected []imageStub, budget int) ([]PageImage, error) {
+	out := make([]PageImage, 0, len(selected))
+	total := 0
 	for _, stub := range selected {
-		payload, ok := payloads[stub.objNr]
-		if !ok {
+		payload, found, err := extractPayload(data, stub)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			// Never silent: a selected image that yields no usable payload is
+			// page content the model will not get to see.
+			slog.Warn("pdf page-image selected but not extractable",
+				"page", stub.page, "object", stub.objNr)
 			continue
 		}
+		if total+len(payload.data) > budget {
+			slog.Info("pdf page-images truncated to the byte budget",
+				"page", stub.page, "budget", budget, "kept", len(out))
+			break
+		}
+		total += len(payload.data)
 		out = append(out, PageImage{
 			Page:   stub.page,
 			Data:   payload.data,
@@ -119,47 +163,63 @@ func ExtractPageImages(data []byte, opts PageImageOptions) (out []PageImage, err
 	return out, nil
 }
 
-// extractPayloads fetches raw bytes for the selected images, keyed by object
-// number.
-func extractPayloads(data []byte, selected []imageStub) (map[int]imagePayload, error) {
-	pages := make([]string, 0, len(selected))
-	seenPage := map[int]struct{}{}
-	wanted := map[int]struct{}{}
-	for _, stub := range selected {
-		wanted[stub.objNr] = struct{}{}
-		if _, ok := seenPage[stub.page]; ok {
+// extractPayload fetches the bytes for one selected image. It extracts a single
+// page at a time so a page carrying dozens of images cannot inflate peak memory
+// beyond that one page.
+func extractPayload(data []byte, stub imageStub) (imagePayload, bool, error) {
+	rawPages, err := api.ExtractImagesRaw(
+		bytes.NewReader(data), []string{strconv.Itoa(stub.page)}, nil,
+	)
+	if err != nil {
+		return imagePayload{}, false, fmt.Errorf("extract images on page %d: %w", stub.page, err)
+	}
+	for _, page := range rawPages {
+		img, ok := page[stub.objNr]
+		if !ok || img.Reader == nil {
 			continue
 		}
-		seenPage[stub.page] = struct{}{}
-		pages = append(pages, strconv.Itoa(stub.page))
-	}
-
-	rawPages, err := api.ExtractImagesRaw(bytes.NewReader(data), pages, nil)
-	if err != nil {
-		return nil, fmt.Errorf("extract images: %w", err)
-	}
-
-	out := map[int]imagePayload{}
-	for _, page := range rawPages {
-		for objNr, img := range page {
-			if _, ok := wanted[objNr]; !ok || img.Reader == nil {
-				continue
-			}
-			mime := mimeForPDFImageType(img.FileType)
-			if mime == "" {
-				continue
-			}
-			payload, readErr := io.ReadAll(img)
-			if readErr != nil {
-				return nil, fmt.Errorf("read image object %d: %w", objNr, readErr)
-			}
-			if len(payload) == 0 {
-				continue
-			}
-			out[objNr] = imagePayload{data: payload, mime: mime}
+		payload, readErr := io.ReadAll(io.LimitReader(img, maxPageImageBytes))
+		if readErr != nil {
+			return imagePayload{}, false, fmt.Errorf(
+				"read image object %d: %w", stub.objNr, readErr)
 		}
+		if len(payload) == 0 {
+			return imagePayload{}, false, nil
+		}
+		return normalizePayload(payload, img.FileType, stub)
 	}
-	return out, nil
+	return imagePayload{}, false, nil
+}
+
+// normalizePayload maps a pdfcpu payload to something the provider image path
+// accepts, transcoding TIFF (which pdfcpu emits for CCITT-encoded scans) to PNG
+// rather than dropping it.
+func normalizePayload(
+	payload []byte, fileType string, stub imageStub,
+) (imagePayload, bool, error) {
+	switch fileType {
+	case "png":
+		return imagePayload{data: payload, mime: mimeImagePNG}, true, nil
+	case "jpg", "jpeg":
+		return imagePayload{data: payload, mime: mimeImageJPEG}, true, nil
+	case "tif", "tiff":
+		decoded, decodeErr := tiff.Decode(bytes.NewReader(payload))
+		if decodeErr != nil {
+			slog.Warn("pdf page-image tiff decode failed",
+				"page", stub.page, "object", stub.objNr, "err", decodeErr)
+			return imagePayload{}, false, nil
+		}
+		var buf bytes.Buffer
+		if encodeErr := png.Encode(&buf, decoded); encodeErr != nil {
+			return imagePayload{}, false, fmt.Errorf(
+				"re-encode tiff image object %d: %w", stub.objNr, encodeErr)
+		}
+		return imagePayload{data: buf.Bytes(), mime: mimeImagePNG}, true, nil
+	default:
+		slog.Warn("pdf page-image has an unsupported encoding",
+			"page", stub.page, "object", stub.objNr, "type", fileType)
+		return imagePayload{}, false, nil
+	}
 }
 
 // selectLargestPerPage keeps the single highest-coverage qualifying image per
@@ -190,7 +250,8 @@ func selectLargestPerPage(
 }
 
 // qualifyImage reports whether one embedded image is large enough to be page
-// content, returning its candidate record when it is.
+// content and small enough for the provider image path, returning its candidate
+// record when it is.
 func qualifyImage(
 	objNr int, img pdfmodel.Image, dims []types.Dim, opts PageImageOptions,
 ) (imageStub, bool) {
@@ -198,6 +259,12 @@ func qualifyImage(
 		return imageStub{}, false
 	}
 	if img.Width < minPageImageAxis || img.Height < minPageImageAxis {
+		return imageStub{}, false
+	}
+	if img.Width > maxPageImageAxis || img.Height > maxPageImageAxis {
+		return imageStub{}, false
+	}
+	if img.Width > maxPageImagePixels/img.Height {
 		return imageStub{}, false
 	}
 	dim := dims[img.PageNr-1]
@@ -214,17 +281,4 @@ func qualifyImage(
 		page: img.PageNr, objNr: objNr,
 		width: img.Width, height: img.Height, coverage: coverage,
 	}, true
-}
-
-// mimeForPDFImageType maps pdfcpu's FileType to a MIME type, returning "" for
-// types the chat attachment path cannot carry as a native image.
-func mimeForPDFImageType(fileType string) string {
-	switch fileType {
-	case "png":
-		return mimeImagePNG
-	case "jpg", "jpeg":
-		return mimeImageJPEG
-	default:
-		return ""
-	}
 }
