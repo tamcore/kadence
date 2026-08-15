@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
@@ -134,5 +135,25 @@ func (s *Service) forceFinalAnswer(
 			content: s.redactAssistantContent(final.Content, redactor, userID), err: streamErr,
 		}
 	}
-	return s.completeIfTruncated(streamCtx, conversationID, req, final, onToken), state, nil
+	answer := s.completeIfTruncated(streamCtx, conversationID, req, final, onToken)
+	if strings.TrimSpace(answer) == "" {
+		// A model that spent every iteration on tools often has nothing left to
+		// say once they are withdrawn. Persisting that silence leaves the user
+		// with a blank reply and no idea the run was cut short, so say it.
+		slog.Warn("forced final answer was empty; returning the tool-budget notice",
+			"conversation", conversationID, "tool_calls", len(state.Calls))
+		answer = toolBudgetExhaustedNotice
+		if err := onToken(answer); err != nil {
+			return answer, state, nil
+		}
+	}
+	return answer, state, nil
 }
+
+// toolBudgetExhaustedNotice is sent when a turn spends its whole tool budget
+// without producing an answer, so the reply explains itself instead of arriving
+// blank.
+const toolBudgetExhaustedNotice = "I used up this turn's tool-call budget while " +
+	"gathering data and ran out before I could write the answer. Please narrow the " +
+	"request — fewer items, a shorter date range, or one section at a time — and I " +
+	"will complete it."

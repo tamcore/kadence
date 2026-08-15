@@ -1184,3 +1184,32 @@ func TestValidateRejectsNegativePDFPageImageMaxPages(t *testing.T) {
 		t.Fatal("Validate() error = nil, want an error for a negative page cap")
 	}
 }
+
+// A 2048-token completion cap forces long answers through repeated
+// continuation round-trips, which read as a hung chat. Modern models handle far
+// more in one pass.
+func TestLLMMaxTokensDefaultIsRoomyEnoughForLongAnswers(t *testing.T) {
+	// Arrange
+	t.Setenv("KADENCE_LLM_MAX_TOKENS", "")
+
+	// Act
+	cfg := Load()
+
+	// Assert
+	if cfg.LLMMaxTokens != 8192 {
+		t.Errorf("LLMMaxTokens default = %d, want 8192", cfg.LLMMaxTokens)
+	}
+}
+
+func TestLLMMaxTokensRemainsOverridable(t *testing.T) {
+	// Arrange
+	t.Setenv("KADENCE_LLM_MAX_TOKENS", "1024")
+
+	// Act
+	cfg := Load()
+
+	// Assert
+	if cfg.LLMMaxTokens != 1024 {
+		t.Errorf("LLMMaxTokens = %d, want the configured 1024", cfg.LLMMaxTokens)
+	}
+}

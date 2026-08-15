@@ -191,3 +191,73 @@ func TestStreamToolLoopKeepsMaxIterationsWhenWithinBudget(t *testing.T) {
 			prov.calls, maxIter+1)
 	}
 }
+
+// silentToolProvider keeps requesting tools and then answers with nothing once
+// they are withdrawn — the behaviour observed live when a turn spent all its
+// iterations on tool calls.
+type silentToolProvider struct{ calls int }
+
+func (p *silentToolProvider) StreamChat(_ context.Context, _ provider.ChatRequest, _ provider.TokenFunc) (string, error) {
+	return "", nil
+}
+
+func (p *silentToolProvider) StreamChatWithTools(
+	_ context.Context, req provider.ChatRequest, _ provider.TokenFunc,
+) (provider.StreamResult, error) {
+	p.calls++
+	if len(req.Tools) == 0 {
+		return provider.StreamResult{}, nil
+	}
+	return provider.StreamResult{
+		ToolCalls: []provider.ToolCall{{ID: testToolCallID, Name: testToolName, Arguments: "{}"}},
+	}, nil
+}
+
+// A turn that spends its whole tool budget must still tell the user what
+// happened. Persisting an empty assistant message leaves them staring at a
+// blank reply with no way to know the run was cut short.
+func TestExhaustedToolBudgetExplainsItselfInsteadOfAnsweringBlank(t *testing.T) {
+	// Arrange
+	const maxIter = 2
+	prov := &silentToolProvider{}
+	mcp := &fakeMCPTools{
+		enabled:    true,
+		tools:      []provider.ToolDefinition{{Name: testToolName}},
+		callResult: testToolReply,
+	}
+	msgs := &fakeMsgs{}
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			MCPMaxIterations: maxIter, ContextBudgetTokens: 8000,
+		},
+		chat.Deps{Convs: &fakeConvs{byID: map[string]model.Conversation{}}, Msgs: msgs, MCP: mcp},
+	)
+	sink := &capturingSink{}
+
+	// Act
+	if err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		"audit everything", sink,
+	); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	// Assert
+	got := ""
+	found := false
+	for _, m := range msgs.added {
+		if m.Role == model.MsgRoleAssistant {
+			got, found = m.Content, true
+		}
+	}
+	if !found {
+		t.Fatal("no assistant message persisted")
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("persisted an empty assistant message; the turn must explain that its tool budget ran out")
+	}
+	if !strings.Contains(strings.ToLower(got), "tool") {
+		t.Errorf("assistant message = %q, want it to mention the tool budget", got)
+	}
+}

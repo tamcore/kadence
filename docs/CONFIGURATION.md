@@ -56,7 +56,7 @@ immediate peer is actually the proxy) is not yet implemented.
 | `KADENCE_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible provider base URL. |
 | `KADENCE_LLM_API_KEY` | — | Chat API key. Chat is disabled if unset. |
 | `KADENCE_LLM_MODEL` | `gpt-4o-mini` | Model id. |
-| `KADENCE_LLM_MAX_TOKENS` | `2048` | Max completion tokens per request. |
+| `KADENCE_LLM_MAX_TOKENS` | `8192` | Max completion tokens per request. A longer answer is truncated and reassembled through up to three continuation round-trips, which is slow and reads as a hung chat — lower this only for models or budgets that require it. |
 | `KADENCE_LLM_TEMPERATURE` | `0.3` | Sampling temperature. |
 | `KADENCE_LLM_TIMEOUT` | `300s` | Per-request timeout (Go duration). |
 | `KADENCE_SYSTEM_PROMPT` | — | Overrides the built-in chat system prompt. |

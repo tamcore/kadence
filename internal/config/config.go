@@ -244,7 +244,12 @@ func Load() Config {
 	cfg.LLMBaseURL = envOr("KADENCE_LLM_BASE_URL", "https://api.openai.com/v1")
 	cfg.LLMAPIKey = os.Getenv("KADENCE_LLM_API_KEY")
 	cfg.LLMModel = envOr("KADENCE_LLM_MODEL", "gpt-4o-mini")
-	cfg.LLMMaxTokens = envIntOr("KADENCE_LLM_MAX_TOKENS", 2048)
+	// 8192, not 2048: a long answer (a wide table, a multi-week audit) truncates
+	// at the smaller cap and is reassembled through continuation round-trips,
+	// which read as a hung chat. The tool loop's output reserve stays bounded by
+	// contextBudget/toolLoopReserveDivisor, so a roomier cap cannot shed the
+	// conversation away.
+	cfg.LLMMaxTokens = envIntOr("KADENCE_LLM_MAX_TOKENS", 8192)
 	cfg.LLMTemperature = envFloatOr("KADENCE_LLM_TEMPERATURE", 0.3)
 	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 300*time.Second)
 	cfg.TitleModel = os.Getenv("KADENCE_TITLE_MODEL")
