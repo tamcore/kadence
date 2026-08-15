@@ -16,6 +16,7 @@ import (
 
 	"github.com/tamcore/kadence/internal/chat/skill"
 	"github.com/tamcore/kadence/internal/conversationdto"
+	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/mcpintent"
 	"github.com/tamcore/kadence/internal/model"
@@ -104,6 +105,10 @@ type ServiceConfig struct {
 	// Now supplies the current time used to stamp the system prompt with
 	// today's date. Defaults to time.Now when nil (overridable in tests).
 	Now func() time.Time
+	// PageImages selects which embedded PDF images are handed to the model as
+	// native images, so tables that carry no text layer are still readable. A
+	// zero MaxPages disables the behavior.
+	PageImages ingest.PageImageOptions
 }
 
 const defaultMaxToolIterations = 16
@@ -400,7 +405,23 @@ const historicalPayloadOmittedMarker = "[historical attachment and document payl
 func currentTurnProviderMessage(
 	userMessage model.Message, documents []model.Document,
 ) (provider.Message, error) {
+	return currentTurnProviderMessageWithPageImages(userMessage, documents, nil)
+}
+
+// currentTurnProviderMessageWithPageImages builds the provider message for one
+// user turn, appending page images already derived from its PDF attachments.
+//
+// pageImages is supplied by the caller rather than derived here on purpose:
+// this function runs repeatedly inside fitCurrentTurnContext's trimming loop,
+// and PDF page-image extraction costs seconds on a large document, so deriving
+// here would multiply that cost by the number of fitting iterations. The
+// trimming loop only measures len(message.Content), so images never affect
+// fitting and passing nil there is correct.
+func currentTurnProviderMessageWithPageImages(
+	userMessage model.Message, documents []model.Document, pageImages []provider.ImageContent,
+) (provider.Message, error) {
 	message := provider.Message{Role: model.MsgRoleUser, Content: userMessage.Content}
+	message.Images = append(message.Images, pageImages...)
 	envelope := untrustedContextEnvelope{}
 	for _, attachment := range userMessage.Attachments {
 		switch attachment.Kind {
@@ -697,8 +718,13 @@ func (s *Service) loadHistoricalDocuments(
 	return documents, true
 }
 
+// buildHistoricalProviderMessages rehydrates selected historical turns. opts
+// re-derives page images for rehydrated PDF attachments, so a follow-up turn
+// can still read a table that has no text layer: the payload load above
+// restores RawBytes, and derived images are never persisted.
 func buildHistoricalProviderMessages(
 	history []model.Message, availableTokens int, cache *historicalPayloadCache,
+	opts ingest.PageImageOptions,
 ) []provider.Message {
 	out := make([]provider.Message, len(history))
 	for i, message := range history {
@@ -728,8 +754,9 @@ func buildHistoricalProviderMessages(
 			continue
 		}
 		message.Content = historicalTextWithoutOmissionMarker(message.Content)
-		full, err := currentTurnProviderMessage(
+		full, err := currentTurnProviderMessageWithPageImages(
 			message, cache.documents[message.ID],
+			derivePageImagesForAttachments(message.Attachments, opts),
 		)
 		if err != nil {
 			continue
@@ -1544,7 +1571,11 @@ func (s *Service) assembleTurnContext(
 		streamCtx, conversationID, userID, userText, documentIDs,
 	)
 
-	currentImageTokens := estimateNativeImageTokens(userMsg.Attachments)
+	// Derived exactly once per turn: extraction is expensive, and
+	// fitCurrentTurnContext below calls the message builder repeatedly.
+	pageImages := derivePageImagesForAttachments(userMsg.Attachments, s.cfg.PageImages)
+	currentImageTokens := estimateNativeImageTokens(userMsg.Attachments) +
+		estimatePageImageTokens(pageImages)
 	explicitBudget := s.contextBudget -
 		estimateTokens(systemPrompt) -
 		estimateTokens(userText) -
@@ -1552,8 +1583,8 @@ func (s *Service) assembleTurnContext(
 	fittedUser, fittedDocuments := fitCurrentTurnContext(
 		userMsg, documents, retrieval.ByDocument, explicitBudget,
 	)
-	currentMessage, msgErr := currentTurnProviderMessage(
-		fittedUser, fittedDocuments,
+	currentMessage, msgErr := currentTurnProviderMessageWithPageImages(
+		fittedUser, fittedDocuments, pageImages,
 	)
 	if msgErr != nil {
 		return turnContextAssembly{}, retrieval, ragErr, s.fail(sink, "could not assemble attachment context")
@@ -1604,7 +1635,7 @@ func (s *Service) assembleTurnContext(
 		)
 	}
 	historyMessages := buildHistoricalProviderMessages(
-		boundedHistory, historyBudget, historicalPayloads,
+		boundedHistory, historyBudget, historicalPayloads, s.cfg.PageImages,
 	)
 
 	return turnContextAssembly{

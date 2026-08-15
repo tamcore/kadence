@@ -167,6 +167,20 @@ func chatServiceConfig(cfg config.Config) chat.ServiceConfig {
 		MCPMaxTools:            cfg.MCPMaxTools,
 		ContextBudgetTokens:    cfg.LLMContextBudgetTokens,
 		GuardrailHistoryWindow: cfg.GuardrailHistoryWindow,
+		PageImages:             pageImageOptions(cfg),
+	}
+}
+
+// pageImageOptions maps the PDF page-image settings into the ingest selection
+// options. A disabled feature yields a zero MaxPages, which makes extraction a
+// no-op, so no call site needs its own branch.
+func pageImageOptions(cfg config.Config) ingest.PageImageOptions {
+	if !cfg.PDFPageImagesEnabled {
+		return ingest.PageImageOptions{}
+	}
+	return ingest.PageImageOptions{
+		MinCoverage: cfg.PDFPageImageMinCoverage,
+		MaxPages:    cfg.PDFPageImageMaxPages,
 	}
 }
 
