@@ -1637,6 +1637,7 @@ func (s *Service) assembleTurnContext(
 		len(pageImages) > 0 {
 		slog.Info("dropping derived pdf page images to fit the context budget",
 			"conversation", conversationID, "images", len(pageImages))
+		dropped := len(pageImages)
 		pageImages = nil
 		currentMessage, msgErr = currentTurnProviderMessageWithPageImages(
 			fittedUser, fittedDocuments, nil,
@@ -1644,6 +1645,10 @@ func (s *Service) assembleTurnContext(
 		if msgErr != nil {
 			return turnContextAssembly{}, retrieval, ragErr, s.fail(sink, "could not assemble attachment context")
 		}
+		// Say so explicitly. Dropping the images silently would leave the model
+		// answering from prose as though the document were complete, which is
+		// the confidently-wrong behavior this whole feature exists to prevent.
+		currentMessage.Content += fmt.Sprintf("\n\n%s", droppedPageImagesNotice(dropped))
 		currentMessageTokens = estimateProviderMessageTokens(currentMessage)
 	}
 	if estimateTokens(systemPrompt)+currentMessageTokens > s.contextBudget {

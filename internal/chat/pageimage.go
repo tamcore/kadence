@@ -2,6 +2,7 @@ package chat
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/tamcore/kadence/internal/ingest"
@@ -151,4 +152,17 @@ func estimatePageImageTokens(images []provider.ImageContent) int {
 		tokens += estimateImageTokens(image)
 	}
 	return tokens
+}
+
+// droppedPageImagesNotice tells the model that page images were left out, so it
+// reports the gap instead of answering from the text layer as though the
+// document were complete.
+func droppedPageImagesNotice(count int) string {
+	return fmt.Sprintf(
+		"[%d page image(s) from the attached PDF(s) were omitted to fit the "+
+			"context budget. Any table rendered as an image is therefore NOT "+
+			"visible to you. Do not infer or guess their contents: say which "+
+			"information you cannot see and ask for a smaller selection.]",
+		count,
+	)
 }

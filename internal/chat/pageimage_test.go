@@ -262,3 +262,18 @@ func TestVisionUnsupportedOnlyMatchesEmptyContentRefusals(t *testing.T) {
 		t.Error("visionUnsupported() = true for an unrelated error, want false")
 	}
 }
+
+func TestDroppedPageImagesNoticeWarnsAgainstGuessing(t *testing.T) {
+	// Arrange / Act
+	got := droppedPageImagesNotice(18)
+
+	// Assert: the model must know what it cannot see, and not infer it.
+	if !strings.Contains(got, "18") {
+		t.Errorf("notice = %q, want it to state how many images were omitted", got)
+	}
+	for _, want := range []string{"NOT", "Do not infer"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("notice = %q, want it to contain %q", got, want)
+		}
+	}
+}
