@@ -15,6 +15,12 @@ import (
 	"golang.org/x/image/tiff"
 )
 
+// pdfcpu ensures a config directory under $HOME on first use, which fails on a
+// read-only container filesystem ("mkdir /home/nonroot/.config: read-only file
+// system") and takes every extraction down with it. Nothing here needs that
+// config, and DisableConfigDir is pdfcpu's documented thread-safe opt-out.
+func init() { api.DisableConfigDir() }
+
 // minPageImageAxis is the smallest axis (in pixels) an embedded image may have
 // and still count as page content rather than an icon or a logo.
 const minPageImageAxis = 400

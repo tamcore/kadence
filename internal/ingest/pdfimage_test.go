@@ -140,3 +140,34 @@ func TestQualifyImageRejectsImageMasks(t *testing.T) {
 		t.Fatal("qualifyImage() accepted an image mask, want rejection")
 	}
 }
+
+// Extraction must not depend on a writable HOME: the production container runs
+// read-only as nonroot, where pdfcpu's config-dir creation fails and takes
+// every extraction with it.
+func TestPageImageExtractionDoesNotUseAConfigDir(t *testing.T) {
+	// Arrange / Act: package init disables it.
+	got := pdfmodel.ConfigPath
+
+	// Assert
+	if got != "disable" {
+		t.Fatalf("pdfcpu ConfigPath = %q, want %q", got, "disable")
+	}
+}
+
+func TestExtractPageImagesWorksWithoutWritableHome(t *testing.T) {
+	// Arrange: point HOME at a path that cannot be created.
+	t.Setenv("HOME", "/nonexistent/read-only")
+	t.Setenv("XDG_CONFIG_HOME", "/nonexistent/read-only")
+	data := loadPageImageFixture(t)
+
+	// Act
+	images, err := ExtractPageImages(data, PageImageOptions{MinCoverage: 0.12, MaxPages: 20})
+
+	// Assert
+	if err != nil {
+		t.Fatalf("ExtractPageImages() error = %v, want nil with an unwritable HOME", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("got %d images, want 1", len(images))
+	}
+}
