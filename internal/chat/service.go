@@ -757,22 +757,36 @@ func buildHistoricalProviderMessages(
 			continue
 		}
 		message.Content = historicalTextWithoutOmissionMarker(message.Content)
-		pageImages := derivePageImagesForAttachments(message.Attachments, opts)
-		full, err := currentTurnProviderMessageWithPageImages(
-			message, cache.documents[message.ID], pageImages,
-		)
+		// Rehydrate the text first and only extract page images once the text
+		// alone is known to fit. Extraction costs seconds on a large PDF, and
+		// doing it before this check would burn that on messages that can
+		// never be admitted.
+		textOnly, err := currentTurnProviderMessage(message, cache.documents[message.ID])
 		if err != nil {
 			continue
 		}
-		extra := estimateProviderMessageTokens(full) -
-			estimateProviderMessageTokens(out[i])
-		if extra > availableTokens {
+		baseline := estimateProviderMessageTokens(out[i])
+		textExtra := estimateProviderMessageTokens(textOnly) - baseline
+		if textExtra > availableTokens {
 			continue
 		}
-		out[i] = full
-		if len(pageImages) > 0 {
-			derived[i] = len(pageImages)
+
+		full, extra := textOnly, textExtra
+		if pageImages := derivePageImagesForAttachments(message.Attachments, opts); len(pageImages) > 0 {
+			withImages, imgErr := currentTurnProviderMessageWithPageImages(
+				message, cache.documents[message.ID], pageImages,
+			)
+			// Images are a bonus: when they do not fit, keep the text-only
+			// rehydration rather than dropping the turn entirely.
+			if imgErr == nil {
+				imageExtra := estimateProviderMessageTokens(withImages) - baseline
+				if imageExtra <= availableTokens {
+					full, extra = withImages, imageExtra
+					derived[i] = len(pageImages)
+				}
+			}
 		}
+		out[i] = full
 		availableTokens -= max(0, extra)
 	}
 	return out, derived
