@@ -2242,7 +2242,10 @@ func (s *Service) runToolLoop(
 			"conversation", conversationID, "iteration", i+1,
 			"estimated_tokens", used, "estimated_tokens_after", remaining,
 			"dropped_messages", dropped, "budget_tokens", s.contextBudget)
-		return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state, keepFrom)
+		return s.forceFinalAnswer(
+			streamCtx, conversationID, userID, req, redactor, onToken, state, keepFrom,
+			forcedByContextBudget,
+		)
 	}
 
 	// Iteration budget exhausted with tools still pending. Make one final
@@ -2250,7 +2253,10 @@ func (s *Service) runToolLoop(
 	// an empty response.
 	slog.Warn("tool loop hit iteration cap; forcing a final answer",
 		"conversation", conversationID, "maxIter", maxIter)
-	return s.forceFinalAnswer(streamCtx, conversationID, userID, req, redactor, onToken, state, keepFrom)
+	return s.forceFinalAnswer(
+		streamCtx, conversationID, userID, req, redactor, onToken, state, keepFrom,
+		forcedByIterationCap,
+	)
 }
 
 func (s *Service) redactAssistantContent(content string, redactor *turnRedactor, userID int64) string {

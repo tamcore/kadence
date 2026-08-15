@@ -113,7 +113,7 @@ func shedOldestToolRounds(messages []provider.Message, keepFrom, target int) ([]
 func (s *Service) forceFinalAnswer(
 	streamCtx context.Context, conversationID string, userID int64,
 	req provider.ChatRequest, redactor *turnRedactor, onToken provider.TokenFunc,
-	state toolTurnState, keepFrom int,
+	state toolTurnState, keepFrom int, reason forcedAnswerReason,
 ) (string, toolTurnState, error) {
 	req.Tools = nil
 	if before := requestTokenEstimate(req.Messages); before > s.shedTarget() {
@@ -137,23 +137,49 @@ func (s *Service) forceFinalAnswer(
 	}
 	answer := s.completeIfTruncated(streamCtx, conversationID, req, final, onToken)
 	if strings.TrimSpace(answer) == "" {
-		// A model that spent every iteration on tools often has nothing left to
-		// say once they are withdrawn. Persisting that silence leaves the user
-		// with a blank reply and no idea the run was cut short, so say it.
-		slog.Warn("forced final answer was empty; returning the tool-budget notice",
-			"conversation", conversationID, "tool_calls", len(state.Calls))
-		answer = toolBudgetExhaustedNotice
+		// A model that spent the turn on tools often has nothing left to say
+		// once they are withdrawn. Persisting that silence leaves the user with
+		// a blank reply and no idea the run was cut short, so say it.
+		slog.Warn("forced final answer was empty; returning the limit notice",
+			"conversation", conversationID, "reason", reason, "tool_calls", len(state.Calls))
+		answer = reason.notice()
 		if err := onToken(answer); err != nil {
-			return answer, state, nil
+			return answer, state, err
 		}
 	}
 	return answer, state, nil
 }
 
-// toolBudgetExhaustedNotice is sent when a turn spends its whole tool budget
-// without producing an answer, so the reply explains itself instead of arriving
-// blank.
-const toolBudgetExhaustedNotice = "I used up this turn's tool-call budget while " +
-	"gathering data and ran out before I could write the answer. Please narrow the " +
-	"request — fewer items, a shorter date range, or one section at a time — and I " +
-	"will complete it."
+// forcedAnswerReason records why the tool loop stopped early, so the notice the
+// user sees names the limit that was actually hit.
+type forcedAnswerReason int
+
+const (
+	// forcedByIterationCap: the loop spent every allowed tool round.
+	forcedByIterationCap forcedAnswerReason = iota
+	// forcedByContextBudget: appended tool results no longer fit the context.
+	forcedByContextBudget
+)
+
+func (r forcedAnswerReason) String() string {
+	if r == forcedByContextBudget {
+		return "context_budget"
+	}
+	return "iteration_cap"
+}
+
+// notice returns the explanation shown when the forced final answer comes back
+// empty. The two limits need different advice: one is about how many lookups a
+// turn may make, the other about how much material it can hold at once.
+func (r forcedAnswerReason) notice() string {
+	if r == forcedByContextBudget {
+		return "I gathered more data than fits in this turn's context, and ran out " +
+			"of room before I could write the answer. Please narrow the request — " +
+			"fewer items, a shorter date range, or one section at a time — and I " +
+			"will complete it."
+	}
+	return "I used up this turn's tool-call budget while gathering data and ran " +
+		"out before I could write the answer. Please narrow the request — fewer " +
+		"items, a shorter date range, or one section at a time — and I will " +
+		"complete it."
+}

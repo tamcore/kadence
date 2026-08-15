@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -259,5 +260,59 @@ func TestExhaustedToolBudgetExplainsItselfInsteadOfAnsweringBlank(t *testing.T) 
 	}
 	if !strings.Contains(strings.ToLower(got), "tool") {
 		t.Errorf("assistant message = %q, want it to mention the tool budget", got)
+	}
+}
+
+// failingSink rejects the notice write, standing in for a client that
+// disconnected mid-turn.
+type failingSink struct{ capturingSink }
+
+func (s *failingSink) Send(chat.ChatEvent) error { return errors.New("client gone") }
+
+// A dropped connection must not be reported as a successful turn.
+func TestExhaustedToolBudgetPropagatesASendFailure(t *testing.T) {
+	// Arrange
+	prov := &silentToolProvider{}
+	mcp := &fakeMCPTools{
+		enabled:    true,
+		tools:      []provider.ToolDefinition{{Name: testToolName}},
+		callResult: testToolReply,
+	}
+	svc := chat.NewService(prov,
+		chat.ServiceConfig{
+			Model: testModel, MaxTokens: testMaxTokens,
+			MCPMaxIterations: 2, ContextBudgetTokens: 8000,
+		},
+		chat.Deps{Convs: &fakeConvs{byID: map[string]model.Conversation{}}, Msgs: &fakeMsgs{}, MCP: mcp},
+	)
+
+	// Act
+	err := svc.Stream(
+		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		"audit everything", &failingSink{},
+	)
+
+	// Assert
+	if err == nil {
+		t.Fatal("Stream() error = nil, want the send failure surfaced rather than a silent success")
+	}
+}
+
+// The two limits produce different notices: telling a user to make fewer tool
+// calls when they actually overflowed the context is misleading advice.
+func TestForcedAnswerNoticesNameTheLimitThatWasHit(t *testing.T) {
+	// Arrange / Act
+	iteration := chat.ForcedByIterationCapNotice()
+	context := chat.ForcedByContextBudgetNotice()
+
+	// Assert
+	if iteration == context {
+		t.Fatal("both limits produce the same notice; each must name what was actually hit")
+	}
+	if !strings.Contains(iteration, "tool-call budget") {
+		t.Errorf("iteration notice = %q, want it to name the tool-call budget", iteration)
+	}
+	if !strings.Contains(context, "context") {
+		t.Errorf("context notice = %q, want it to name the context limit", context)
 	}
 }
