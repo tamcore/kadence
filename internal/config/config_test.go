@@ -1112,3 +1112,75 @@ func TestSlogLevelMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestPDFPageImageDefaults(t *testing.T) {
+	// Arrange
+	t.Setenv("KADENCE_PDF_PAGE_IMAGES_ENABLED", "")
+	t.Setenv("KADENCE_PDF_PAGE_IMAGE_MIN_COVERAGE", "")
+	t.Setenv("KADENCE_PDF_PAGE_IMAGE_MAX_PAGES", "")
+
+	// Act
+	cfg := Load()
+
+	// Assert
+	if !cfg.PDFPageImagesEnabled {
+		t.Error("PDFPageImagesEnabled = false, want true by default")
+	}
+	if cfg.PDFPageImageMinCoverage != 0.12 {
+		t.Errorf("PDFPageImageMinCoverage = %v, want 0.12", cfg.PDFPageImageMinCoverage)
+	}
+	if cfg.PDFPageImageMaxPages != 20 {
+		t.Errorf("PDFPageImageMaxPages = %d, want 20", cfg.PDFPageImageMaxPages)
+	}
+}
+
+func TestPDFPageImageOverrides(t *testing.T) {
+	// Arrange
+	t.Setenv("KADENCE_PDF_PAGE_IMAGES_ENABLED", "false")
+	t.Setenv("KADENCE_PDF_PAGE_IMAGE_MIN_COVERAGE", "0.5")
+	t.Setenv("KADENCE_PDF_PAGE_IMAGE_MAX_PAGES", "3")
+
+	// Act
+	cfg := Load()
+
+	// Assert
+	if cfg.PDFPageImagesEnabled {
+		t.Error("PDFPageImagesEnabled = true, want false when disabled explicitly")
+	}
+	if cfg.PDFPageImageMinCoverage != 0.5 {
+		t.Errorf("PDFPageImageMinCoverage = %v, want 0.5", cfg.PDFPageImageMinCoverage)
+	}
+	if cfg.PDFPageImageMaxPages != 3 {
+		t.Errorf("PDFPageImageMaxPages = %d, want 3", cfg.PDFPageImageMaxPages)
+	}
+}
+
+func TestValidateRejectsOutOfRangePDFPageImageCoverage(t *testing.T) {
+	// Arrange
+	t.Setenv("KADENCE_DATABASE_URL", "postgres://localhost/kadence")
+	t.Setenv("KADENCE_PDF_PAGE_IMAGE_MIN_COVERAGE", "1.5")
+	cfg := Load()
+
+	// Act
+	err := cfg.Validate()
+
+	// Assert
+	if err == nil {
+		t.Fatal("Validate() error = nil, want an error for coverage above 1")
+	}
+}
+
+func TestValidateRejectsNegativePDFPageImageMaxPages(t *testing.T) {
+	// Arrange
+	t.Setenv("KADENCE_DATABASE_URL", "postgres://localhost/kadence")
+	t.Setenv("KADENCE_PDF_PAGE_IMAGE_MAX_PAGES", "-1")
+	cfg := Load()
+
+	// Act
+	err := cfg.Validate()
+
+	// Assert
+	if err == nil {
+		t.Fatal("Validate() error = nil, want an error for a negative page cap")
+	}
+}

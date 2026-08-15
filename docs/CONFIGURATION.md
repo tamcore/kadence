@@ -201,6 +201,9 @@ linked conversation and immutable run audit records.
 | `KADENCE_MARKITDOWN_AUTH_USER` | — | markitdown basic-auth username. |
 | `KADENCE_MARKITDOWN_AUTH_PASS` | — | markitdown basic-auth password. |
 | `KADENCE_MARKITDOWN_TRANSPORT` | `streamable-http` | markitdown MCP transport. |
+| `KADENCE_PDF_PAGE_IMAGES_ENABLED` | `true` | Extract page-content images from PDFs so a vision-capable model can read tables that carry no text layer. Needs a vision-capable model; without one the turn degrades to text only. |
+| `KADENCE_PDF_PAGE_IMAGE_MIN_COVERAGE` | `0.12` | Minimum share of a nominal 150dpi page render an embedded image must cover to count as page content. At most one image per page is kept: the largest that qualifies. |
+| `KADENCE_PDF_PAGE_IMAGE_MAX_PAGES` | `20` | Max page images per chat turn and per ingested document. |
 
 ## MCP
 

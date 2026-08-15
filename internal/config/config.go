@@ -132,6 +132,15 @@ type Config struct {
 	MarkitdownAuthPass  string
 	MarkitdownTransport string
 
+	// PDF page images. Tables rendered as rasters carry no text layer, so a
+	// vision-capable model reads them from the page image instead.
+	PDFPageImagesEnabled bool
+	// PDFPageImageMinCoverage is the minimum share of a nominal 150dpi page
+	// render an embedded image must cover to count as page content.
+	PDFPageImageMinCoverage float64
+	// PDFPageImageMaxPages caps page images per chat turn and per document.
+	PDFPageImageMaxPages int
+
 	// MCP orchestration.
 	MCPMaxIterations int
 	// MCPIntentGuardEnabled requires and classifies intent for every
@@ -283,6 +292,10 @@ func Load() Config {
 	cfg.MarkitdownAuthUser = os.Getenv("KADENCE_MARKITDOWN_AUTH_USER")
 	cfg.MarkitdownAuthPass = os.Getenv("KADENCE_MARKITDOWN_AUTH_PASS")
 	cfg.MarkitdownTransport = envOr("KADENCE_MARKITDOWN_TRANSPORT", "streamable-http")
+
+	cfg.PDFPageImagesEnabled = envBoolOr("KADENCE_PDF_PAGE_IMAGES_ENABLED", true)
+	cfg.PDFPageImageMinCoverage = envFloatOr("KADENCE_PDF_PAGE_IMAGE_MIN_COVERAGE", 0.12)
+	cfg.PDFPageImageMaxPages = envIntOr("KADENCE_PDF_PAGE_IMAGE_MAX_PAGES", 20)
 
 	cfg.MCPMaxIterations = envIntOr("KADENCE_MCP_MAX_ITERATIONS", 16)
 	cfg.MCPMaxTools = envIntOr("KADENCE_MCP_MAX_TOOLS", 100)
@@ -439,6 +452,9 @@ func (c Config) Validate() error {
 	// rather than silently disabling passkeys/user-MCP.
 	if c.encryptionKeyErr != nil {
 		return fmt.Errorf("KADENCE_ENCRYPTION_KEY is invalid: %w", c.encryptionKeyErr)
+	}
+	if err := c.validatePDFPageImages(); err != nil {
+		return err
 	}
 	if c.IsProd() && len(c.UserMCPAllowedHosts) > 0 && len(c.EncryptionKey) != encryptionKeyLen {
 		return errors.New("KADENCE_ENCRYPTION_KEY must be a base64-encoded 32-byte key when KADENCE_USER_MCP_ALLOWED_HOSTS is set")
@@ -768,4 +784,22 @@ func loadTrustedOrigins(raw string) []string {
 		return nil
 	}
 	return origins
+}
+
+// validatePDFPageImages checks the PDF page-image selection bounds. Split out
+// of Validate to keep that function under the cyclomatic-complexity limit.
+func (c Config) validatePDFPageImages() error {
+	if c.PDFPageImageMinCoverage < 0 || c.PDFPageImageMinCoverage > 1 {
+		return fmt.Errorf(
+			"KADENCE_PDF_PAGE_IMAGE_MIN_COVERAGE must be between 0 and 1, got %v",
+			c.PDFPageImageMinCoverage,
+		)
+	}
+	if c.PDFPageImageMaxPages < 0 {
+		return fmt.Errorf(
+			"KADENCE_PDF_PAGE_IMAGE_MAX_PAGES must not be negative, got %d",
+			c.PDFPageImageMaxPages,
+		)
+	}
+	return nil
 }
