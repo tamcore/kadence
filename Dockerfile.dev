@@ -10,7 +10,10 @@ RUN npm ci --silent
 COPY web ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS backend
+# Pinned to the patch release, not the floating 1.26 tag: the toolchain here is
+# GOTOOLCHAIN=local, so a base older than go.mod's directive fails the build
+# instead of fetching a newer toolchain.
+FROM golang:1.26.6-alpine AS backend
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
