@@ -1,12 +1,14 @@
 package chat
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/provider"
 )
 
 func pdfPageImageFixture(t *testing.T) []byte {
@@ -177,5 +179,86 @@ func TestCurrentTurnProviderMessageWithoutPageImagesIsUnchanged(t *testing.T) {
 	}
 	if len(got.Images) != 0 {
 		t.Fatalf("got %d images, want 0 when no page images are supplied", len(got.Images))
+	}
+}
+
+func TestDerivePageImagesForAttachmentsCapsPerMessageNotPerAttachment(t *testing.T) {
+	// Arrange: two PDFs that would each yield an image, but a cap of one.
+	attachments := []model.MessageAttachment{pdfAttachment(t), pdfAttachment(t)}
+	opts := ingest.PageImageOptions{MinCoverage: 0.12, MaxPages: 1}
+
+	// Act
+	images := derivePageImagesForAttachments(attachments, opts)
+
+	// Assert
+	if len(images) != 1 {
+		t.Fatalf("got %d derived images, want 1 (the cap is per message, not per attachment)", len(images))
+	}
+}
+
+func TestStripDerivedImagesKeepsUserAttachedImages(t *testing.T) {
+	// Arrange: one user image followed by two derived ones.
+	userImage := provider.ImageContent{MIMEType: mimeImagePNG, Data: []byte("user")}
+	derivedA := provider.ImageContent{MIMEType: mimeImagePNG, Data: []byte("derived-a")}
+	derivedB := provider.ImageContent{MIMEType: mimeImagePNG, Data: []byte("derived-b")}
+	messages := []provider.Message{
+		{Role: model.MsgRoleSystem, Content: "system"},
+		{Role: model.MsgRoleUser, Content: "current",
+			Images: []provider.ImageContent{userImage, derivedA, derivedB}},
+	}
+	assembly := turnContextAssembly{currentDerivedImages: 2}
+
+	// Act
+	got := stripDerivedImages(messages, assembly)
+
+	// Assert
+	if len(got[1].Images) != 1 {
+		t.Fatalf("got %d images after stripping, want 1", len(got[1].Images))
+	}
+	if string(got[1].Images[0].Data) != "user" {
+		t.Errorf("kept image = %q, want the user-attached one", got[1].Images[0].Data)
+	}
+	if len(messages[1].Images) != 3 {
+		t.Error("stripDerivedImages mutated its input")
+	}
+}
+
+func TestStripDerivedImagesClearsRehydratedHistory(t *testing.T) {
+	// Arrange
+	derived := provider.ImageContent{MIMEType: mimeImagePNG, Data: []byte("derived")}
+	messages := []provider.Message{
+		{Role: model.MsgRoleSystem, Content: "system"},
+		{Role: model.MsgRoleUser, Content: "older", Images: []provider.ImageContent{derived}},
+		{Role: model.MsgRoleAssistant, Content: "reply"},
+		{Role: model.MsgRoleUser, Content: "current"},
+	}
+	assembly := turnContextAssembly{
+		historyMessages: make([]provider.Message, 2),
+		derivedImages:   map[int]int{0: 1},
+	}
+
+	// Act
+	got := stripDerivedImages(messages, assembly)
+
+	// Assert
+	if len(got[1].Images) != 0 {
+		t.Fatalf("got %d images on the rehydrated history message, want 0", len(got[1].Images))
+	}
+}
+
+func TestVisionUnsupportedOnlyMatchesEmptyContentRefusals(t *testing.T) {
+	// Arrange
+	refusal := &providerStreamFailure{err: provider.ErrVisionUnsupported}
+	partial := &providerStreamFailure{err: provider.ErrVisionUnsupported, content: "partial"}
+
+	// Act / Assert
+	if !visionUnsupported(refusal, toolTurnState{}) {
+		t.Error("visionUnsupported() = false for an empty-content vision refusal, want true")
+	}
+	if visionUnsupported(partial, toolTurnState{}) {
+		t.Error("visionUnsupported() = true when content already streamed, want false")
+	}
+	if visionUnsupported(errors.New("other"), toolTurnState{}) {
+		t.Error("visionUnsupported() = true for an unrelated error, want false")
 	}
 }

@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/tamcore/kadence/internal/ingest"
@@ -57,6 +58,9 @@ func derivePageImages(
 // times inside the context-fitting loop, and PDF extraction is expensive enough
 // (seconds on a large document) that repeating it there would dominate turn
 // latency.
+// MaxPages is a per-message allowance, not a per-attachment one: the remaining
+// allowance shrinks as each attachment contributes, so two PDFs in one turn
+// cannot together exceed the configured cap.
 func derivePageImagesForAttachments(
 	attachments []model.MessageAttachment, opts ingest.PageImageOptions,
 ) []provider.ImageContent {
@@ -64,10 +68,65 @@ func derivePageImagesForAttachments(
 		return nil
 	}
 	var out []provider.ImageContent
+	remaining := opts.MaxPages
 	for _, attachment := range attachments {
-		out = append(out, derivePageImages(attachment, opts)...)
+		if remaining <= 0 {
+			break
+		}
+		scoped := opts
+		scoped.MaxPages = remaining
+		images := derivePageImages(attachment, scoped)
+		out = append(out, images...)
+		remaining -= len(images)
 	}
 	return out
+}
+
+// stripDerivedImages returns messages with the derived page images removed and
+// every user-attached image kept. Derived images are always appended last, so
+// dropping them is a suffix truncation. The input slice is not mutated.
+func stripDerivedImages(
+	messages []provider.Message, assembly turnContextAssembly,
+) []provider.Message {
+	out := append([]provider.Message(nil), messages...)
+	// The request is [system..., history..., current], so locate the current
+	// turn and the history block by walking back from the end.
+	current := len(out) - 1
+	if current >= 0 && assembly.currentDerivedImages > 0 {
+		out[current] = withoutTrailingImages(out[current], assembly.currentDerivedImages)
+	}
+	historyStart := current - len(assembly.historyMessages)
+	for index, count := range assembly.derivedImages {
+		position := historyStart + index
+		if position < 0 || position >= current {
+			continue
+		}
+		out[position] = withoutTrailingImages(out[position], count)
+	}
+	return out
+}
+
+// withoutTrailingImages drops the last count images from a message.
+func withoutTrailingImages(message provider.Message, count int) provider.Message {
+	if count <= 0 || len(message.Images) == 0 {
+		return message
+	}
+	keep := max(len(message.Images)-count, 0)
+	message.Images = append([]provider.ImageContent(nil), message.Images[:keep]...)
+	return message
+}
+
+// visionUnsupported reports whether err is a provider refusal to accept image
+// input for a turn that produced no content and no scheduling handoff, the only
+// case where retrying without derived images is safe.
+func visionUnsupported(err error, turnState toolTurnState) bool {
+	var failure *providerStreamFailure
+	if !errors.As(err, &failure) {
+		return false
+	}
+	return failure.content == "" &&
+		errors.Is(failure.err, provider.ErrVisionUnsupported) &&
+		len(turnState.Handoffs) == 0
 }
 
 // estimatePageImageTokens estimates the context cost of derived page images, so

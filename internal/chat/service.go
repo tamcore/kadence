@@ -421,7 +421,6 @@ func currentTurnProviderMessageWithPageImages(
 	userMessage model.Message, documents []model.Document, pageImages []provider.ImageContent,
 ) (provider.Message, error) {
 	message := provider.Message{Role: model.MsgRoleUser, Content: userMessage.Content}
-	message.Images = append(message.Images, pageImages...)
 	envelope := untrustedContextEnvelope{}
 	for _, attachment := range userMessage.Attachments {
 		switch attachment.Kind {
@@ -433,6 +432,9 @@ func currentTurnProviderMessageWithPageImages(
 			})
 		}
 	}
+	// Derived page images go last so a vision-unsupported retry can drop them
+	// as a suffix while keeping the images the user actually attached.
+	message.Images = append(message.Images, pageImages...)
 	for _, document := range documents {
 		envelope.Documents = append(envelope.Documents, untrustedContextItem{
 			ID: document.ID, Filename: document.Filename, Content: document.ExtractedMarkdown,
@@ -725,7 +727,8 @@ func (s *Service) loadHistoricalDocuments(
 func buildHistoricalProviderMessages(
 	history []model.Message, availableTokens int, cache *historicalPayloadCache,
 	opts ingest.PageImageOptions,
-) []provider.Message {
+) ([]provider.Message, map[int]int) {
+	derived := map[int]int{}
 	out := make([]provider.Message, len(history))
 	for i, message := range history {
 		out[i] = provider.Message{Role: message.Role, Content: message.Content}
@@ -754,9 +757,9 @@ func buildHistoricalProviderMessages(
 			continue
 		}
 		message.Content = historicalTextWithoutOmissionMarker(message.Content)
+		pageImages := derivePageImagesForAttachments(message.Attachments, opts)
 		full, err := currentTurnProviderMessageWithPageImages(
-			message, cache.documents[message.ID],
-			derivePageImagesForAttachments(message.Attachments, opts),
+			message, cache.documents[message.ID], pageImages,
 		)
 		if err != nil {
 			continue
@@ -767,9 +770,12 @@ func buildHistoricalProviderMessages(
 			continue
 		}
 		out[i] = full
+		if len(pageImages) > 0 {
+			derived[i] = len(pageImages)
+		}
 		availableTokens -= max(0, extra)
 	}
-	return out
+	return out, derived
 }
 
 const contextTruncatedMarker = "[truncated to fit context budget]"
@@ -1544,6 +1550,26 @@ type turnContextAssembly struct {
 	currentMessage  provider.Message
 	ragInserts      []provider.Message
 	ragTurnStorable bool
+	// derivedImages counts the page images appended to each message, so a
+	// vision-unsupported retry can drop exactly those and keep the images the
+	// user actually attached. Keyed by index into historyMessages; the current
+	// turn's count is currentDerivedImages.
+	derivedImages        map[int]int
+	currentDerivedImages int
+}
+
+// hasDerivedImages reports whether this turn sent any page images the user did
+// not attach themselves.
+func (a turnContextAssembly) hasDerivedImages() bool {
+	if a.currentDerivedImages > 0 {
+		return true
+	}
+	for _, count := range a.derivedImages {
+		if count > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // assembleTurnContext retrieves RAG context (broad memory, selected-document
@@ -1634,15 +1660,17 @@ func (s *Service) assembleTurnContext(
 			boundedHistory, historyBudget, preloadedHistoricalPayloads,
 		)
 	}
-	historyMessages := buildHistoricalProviderMessages(
+	historyMessages, historyDerived := buildHistoricalProviderMessages(
 		boundedHistory, historyBudget, historicalPayloads, s.cfg.PageImages,
 	)
 
 	return turnContextAssembly{
-		historyMessages: historyMessages,
-		currentMessage:  currentMessage,
-		ragInserts:      ragInserts,
-		ragTurnStorable: ragTurnStorable,
+		historyMessages:      historyMessages,
+		currentMessage:       currentMessage,
+		ragInserts:           ragInserts,
+		ragTurnStorable:      ragTurnStorable,
+		derivedImages:        historyDerived,
+		currentDerivedImages: len(pageImages),
 	}, retrieval, ragErr, nil
 }
 
@@ -1736,6 +1764,18 @@ func (s *Service) streamPersistedTurn(
 	full, turnState, err := s.runToolLoop(
 		ctx, streamCtx, conversationID, userID, uc, userMsg, history, mcpSnap, req, redactor, sink,
 	)
+	// Page images are our addition, not the user's. On a text-only model,
+	// retry without them so a PDF still reaches the model through its text
+	// layer instead of failing the turn outright.
+	if err != nil && assembly.hasDerivedImages() && visionUnsupported(err, turnState) {
+		slog.Info("retrying turn without derived pdf page images",
+			"conversation", conversationID)
+		req.Messages = stripDerivedImages(req.Messages, assembly)
+		full, turnState, err = s.runToolLoop(
+			ctx, streamCtx, conversationID, userID, uc,
+			userMsg, history, mcpSnap, req, redactor, sink,
+		)
+	}
 	if err != nil {
 		var providerFailure *providerStreamFailure
 		if errors.As(err, &providerFailure) {
