@@ -19,6 +19,7 @@ internal/config/       env-based config (KADENCE_* prefix)
 internal/{chat,mcp,ingest,provider,embed}/       chat pipeline + integrations
 internal/{auth,crypto,secret,webauthn}/          auth + secrets + passkeys
 internal/{bg,push}/    background-goroutine panic containment + web push
+internal/pdfvision/    background worker: PDF page images -> markdown (vision model)
 internal/store/        pgx + goose migrations + repositories (RAG retrieval lives here + internal/chat)
 web/                   SvelteKit SPA, embedded via //go:embed (-tags prodfrontend)
 charts/kadence/        Helm chart

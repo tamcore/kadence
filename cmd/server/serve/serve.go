@@ -28,6 +28,8 @@ import (
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/mcpaudit"
 	"github.com/tamcore/kadence/internal/mcpintent"
+	"github.com/tamcore/kadence/internal/model"
+	"github.com/tamcore/kadence/internal/pdfvision"
 	"github.com/tamcore/kadence/internal/provider"
 	"github.com/tamcore/kadence/internal/reindex"
 	"github.com/tamcore/kadence/internal/scheduled"
@@ -289,6 +291,19 @@ func Run() error {
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, documentsRepo, capabilities)
 			deps.Context = handlers.NewContext(chunkRepo, documentsRepo)
+
+			// Uploaded PDFs may hide their tables in page rasters. Convert
+			// those to markdown so they are searchable, not just readable via
+			// an explicit document reference.
+			if pageOpts := pageImageOptions(cfg); pageOpts.MaxPages > 0 {
+				describe := newPageImageDescriber(prov, cfg)
+				reindexDoc := newDocumentReindexer(embedder, chunkRepo, cfg.IngestChunkChars)
+				bgWG.Go(func() {
+					bg.RunForever(rootCtx, slog.Default(), "pdfvision", func(ctx context.Context) {
+						pdfvision.Run(ctx, documentsRepo, describe, reindexDoc, pageOpts, slog.Default())
+					})
+				})
+			}
 		}
 		mcpHTTPClient, err := mcp.HTTPClientWithCA(cfg.MCPCAFile)
 		if err != nil {
@@ -587,4 +602,72 @@ func buildIngestExtractors(cfg config.Config) []ingest.Extractor {
 
 	slog.Info("markitdown extractor enabled", "url", cfg.MarkitdownURL)
 	return []ingest.Extractor{md, pdf}
+}
+
+// pageImageTranscribePrompt asks for a faithful transcription. "Preserve all
+// numbers exactly" is the point of the whole feature: the incident that
+// prompted it was a training-plan distance read wrong.
+const pageImageTranscribePrompt = "Transcribe every table in this image to " +
+	"GitHub-flavored markdown. Preserve all numbers exactly. If the image has no " +
+	"table, transcribe any text you see. Output only the transcription, no commentary."
+
+// newPageImageDescriber returns a DescribeFunc backed by the configured chat
+// provider. A provider without vision support surfaces as an error per page,
+// which marks the document failed and leaves its text layer intact.
+func newPageImageDescriber(p provider.Provider, cfg config.Config) pdfvision.DescribeFunc {
+	return func(ctx context.Context, image []byte, mime string) (string, error) {
+		req := provider.ChatRequest{
+			Model:     cfg.LLMModel,
+			MaxTokens: cfg.LLMMaxTokens,
+			Messages: []provider.Message{{
+				Role:    model.MsgRoleUser,
+				Content: pageImageTranscribePrompt,
+				Images:  []provider.ImageContent{{Data: image, MIMEType: mime}},
+			}},
+		}
+		out, err := p.StreamChat(ctx, req, func(string) error { return nil })
+		if err != nil {
+			return "", fmt.Errorf("transcribe page image: %w", err)
+		}
+		return out, nil
+	}
+}
+
+// newDocumentReindexer returns a ReindexFunc that replaces a document's chunks
+// with ones built from its updated markdown, so the converted tables become
+// searchable rather than only readable through an explicit reference.
+func newDocumentReindexer(
+	embedder *embed.OpenAICompat, chunks *store.ChunkRepository, chunkChars int,
+) pdfvision.ReindexFunc {
+	return func(ctx context.Context, doc model.Document, markdown string) error {
+		if err := chunks.DeleteByDocument(ctx, doc.ID); err != nil {
+			return err
+		}
+		pieces := ingest.ChunkText(markdown, chunkChars)
+		if len(pieces) == 0 {
+			return nil
+		}
+		vectors, err := embedder.Embed(ctx, pieces)
+		if err != nil {
+			return fmt.Errorf("embed document %d: %w", doc.ID, err)
+		}
+		if len(vectors) != len(pieces) {
+			return fmt.Errorf(
+				"embed document %d: got %d vectors for %d chunks",
+				doc.ID, len(vectors), len(pieces),
+			)
+		}
+		rows := make([]model.Chunk, len(pieces))
+		for i, piece := range pieces {
+			rows[i] = model.Chunk{
+				UserID:     doc.OwnerUserID,
+				DocumentID: &doc.ID,
+				Scope:      doc.Scope,
+				SourceKind: model.ChunkSourceDocument,
+				SourceID:   &doc.ID,
+				Content:    piece,
+			}
+		}
+		return chunks.InsertBatch(ctx, rows, vectors)
+	}
 }

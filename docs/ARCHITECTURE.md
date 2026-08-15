@@ -28,6 +28,7 @@ internal/
   push/              web push dispatch (VAPID) with per-send timeout and failure pruning
   ingest/            document extraction pipeline (PDF fallback + markitdown-mcp)
   reindex/           background re-embed worker when the embedding model changes
+  pdfvision/         background worker: PDF page images -> markdown via a vision model
   knowledge/         dependency-free text analytics (keywords/entities for the context view)
   webauthn/          passkey ceremonies (registration/assertion) + encrypted ceremony cookie
   model/             domain types
@@ -346,6 +347,17 @@ from `chat/service.go`'s per-turn orchestration.
 - **Ingestion** normalizes each input to markdown, then chunks → embeds → stores.
   Text-layer PDFs use a pure-Go fast path; richer extraction (scanned PDFs, images,
   screenshots) goes through a `markitdown-mcp` service when configured.
+- **Page images** cover what no text extractor can reach: a PDF whose tables are
+  rendered as rasters has no text layer for them at all, so both the pure-Go path
+  and markitdown return prose and silently drop every table.
+  `ingest.ExtractPageImages` pulls the embedded image XObjects (pdfcpu, pure Go),
+  keeping at most the largest qualifying image per page — a coverage threshold
+  alone cannot separate a content table from a photograph. In chat those images are
+  handed to the model for that request only and never persisted; on a text-only
+  model the turn retries without them. For uploads, the `pdfvision` worker
+  transcribes them to markdown, re-chunks, and re-embeds, tracked by
+  `documents.extraction_status` (`not_needed | pending | running | complete |
+  failed`). `documents.raw_bytes` holds the upload only until that finishes.
 - **Explicit chat references** bypass broad-retrieval uncertainty: a referenced
   document is included whole when it fits, otherwise its ranked sections are
   included with a truncation marker. Visibility is checked again for every turn,

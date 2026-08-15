@@ -306,3 +306,13 @@ func scanChunkRefRows(rows pgx.Rows) ([]ChunkRef, error) {
 	}
 	return out, rows.Err()
 }
+
+// DeleteByDocument removes every chunk belonging to one document, so the
+// document can be re-chunked after its extracted text changes.
+func (r *ChunkRepository) DeleteByDocument(ctx context.Context, documentID int64) error {
+	if _, err := r.pool.Exec(ctx,
+		`DELETE FROM chunks WHERE document_id = $1`, documentID); err != nil {
+		return fmt.Errorf("delete chunks for document %d: %w", documentID, err)
+	}
+	return nil
+}

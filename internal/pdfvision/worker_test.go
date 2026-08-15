@@ -75,7 +75,7 @@ func TestRunAppendsDescribedTablesAndMarksComplete(t *testing.T) {
 	})
 
 	// Act
-	Run(context.Background(), store, describeConstant("| WEEK 5 | 16k easy |"), testOptions(), slog.Default())
+	Run(context.Background(), store, describeConstant("| WEEK 5 | 16k easy |"), nil, testOptions(), slog.Default())
 
 	// Assert
 	if store.statuses[7] != model.ExtractionStatusComplete {
@@ -99,7 +99,7 @@ func TestRunMarksFailedAndPreservesTextWhenDescribeFails(t *testing.T) {
 	}
 
 	// Act
-	Run(context.Background(), store, describe, testOptions(), slog.Default())
+	Run(context.Background(), store, describe, nil, testOptions(), slog.Default())
 
 	// Assert
 	if store.statuses[8] != model.ExtractionStatusFailed {
@@ -121,7 +121,7 @@ func TestRunMarksNotNeededWhenNoPageImagesQualify(t *testing.T) {
 	}
 
 	// Act: a zero MaxPages makes extraction a no-op.
-	Run(context.Background(), store, describe, ingest.PageImageOptions{}, slog.Default())
+	Run(context.Background(), store, describe, nil, ingest.PageImageOptions{}, slog.Default())
 
 	// Assert
 	if store.statuses[9] != model.ExtractionStatusNotNeeded {
@@ -136,7 +136,7 @@ func TestRunMarksFailedOnMalformedPDF(t *testing.T) {
 	})
 
 	// Act
-	Run(context.Background(), store, describeConstant("table"), testOptions(), slog.Default())
+	Run(context.Background(), store, describeConstant("table"), nil, testOptions(), slog.Default())
 
 	// Assert
 	if store.statuses[10] != model.ExtractionStatusFailed {
@@ -152,7 +152,7 @@ func TestRunDrainsUntilNoDocumentsRemain(t *testing.T) {
 	)
 
 	// Act
-	Run(context.Background(), store, describeConstant("table"), testOptions(), slog.Default())
+	Run(context.Background(), store, describeConstant("table"), nil, testOptions(), slog.Default())
 
 	// Assert
 	if len(store.statuses) != 2 {
@@ -170,10 +170,51 @@ func TestRunStopsOnCancelledContext(t *testing.T) {
 	store := newFakeStore([]model.Document{{ID: 11, RawBytes: fixtureBytes(t)}})
 
 	// Act
-	Run(ctx, store, describeConstant("table"), testOptions(), slog.Default())
+	Run(ctx, store, describeConstant("table"), nil, testOptions(), slog.Default())
 
 	// Assert
 	if len(store.statuses) != 0 {
 		t.Fatalf("finished %d documents on a cancelled context, want 0", len(store.statuses))
+	}
+}
+
+func TestRunReindexesBeforeReportingComplete(t *testing.T) {
+	// Arrange
+	store := newFakeStore([]model.Document{
+		{ID: 12, ExtractedMarkdown: textLayer, RawBytes: fixtureBytes(t)},
+	})
+	var gotMarkdown string
+	reindex := func(_ context.Context, _ model.Document, markdown string) error {
+		gotMarkdown = markdown
+		return nil
+	}
+
+	// Act
+	Run(context.Background(), store, describeConstant("| WEEK 5 |"), reindex, testOptions(), slog.Default())
+
+	// Assert
+	if store.statuses[12] != model.ExtractionStatusComplete {
+		t.Errorf("status = %q, want %q", store.statuses[12], model.ExtractionStatusComplete)
+	}
+	if !strings.Contains(gotMarkdown, "WEEK 5") {
+		t.Errorf("reindex received %q, want the converted markdown", gotMarkdown)
+	}
+}
+
+func TestRunMarksFailedWhenReindexFails(t *testing.T) {
+	// Arrange: chunks would be stale, so completion must not be reported.
+	store := newFakeStore([]model.Document{
+		{ID: 13, ExtractedMarkdown: textLayer, RawBytes: fixtureBytes(t)},
+	})
+	reindex := func(context.Context, model.Document, string) error {
+		return errors.New("embed unavailable")
+	}
+
+	// Act
+	Run(context.Background(), store, describeConstant("| WEEK 5 |"), reindex, testOptions(), slog.Default())
+
+	// Assert
+	if store.statuses[13] != model.ExtractionStatusFailed {
+		t.Errorf("status = %q, want %q", store.statuses[13], model.ExtractionStatusFailed)
 	}
 }

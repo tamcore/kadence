@@ -26,6 +26,11 @@ type Store interface {
 // DescribeFunc converts one page image to markdown via a vision-capable model.
 type DescribeFunc func(ctx context.Context, image []byte, mime string) (string, error)
 
+// ReindexFunc re-chunks and re-embeds a document after its extracted text
+// changed. Without it the new table content would be readable only through an
+// explicit document reference, and invisible to RAG search.
+type ReindexFunc func(ctx context.Context, doc model.Document, markdown string) error
+
 // Run claims pending documents and converts their page images to markdown
 // until none remain or ctx is cancelled.
 //
@@ -36,7 +41,7 @@ type DescribeFunc func(ctx context.Context, image []byte, mime string) (string, 
 // Panic containment is the caller's responsibility: bg wraps this at the call
 // site, matching the reindex worker.
 func Run(
-	ctx context.Context, s Store, describe DescribeFunc,
+	ctx context.Context, s Store, describe DescribeFunc, reindex ReindexFunc,
 	opts ingest.PageImageOptions, log *slog.Logger,
 ) {
 	for {
@@ -56,6 +61,16 @@ func Run(
 				return
 			}
 			markdown, status := describeDocument(ctx, doc, describe, opts, log)
+			// Re-chunk before recording success: a document reported complete
+			// while its chunks still hold the old text would be silently
+			// missing from RAG search, which is the failure this whole feature
+			// exists to remove.
+			if status == model.ExtractionStatusComplete && reindex != nil {
+				if err := reindex(ctx, doc, markdown); err != nil {
+					log.Error("pdfvision: reindex failed", "document", doc.ID, "err", err)
+					status = model.ExtractionStatusFailed
+				}
+			}
 			if err := s.FinishExtraction(ctx, doc.ID, markdown, status); err != nil {
 				log.Error("pdfvision: finish failed", "document", doc.ID, "err", err)
 			}
