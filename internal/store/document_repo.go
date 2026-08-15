@@ -211,3 +211,30 @@ func (r *DocumentRepository) FinishExtraction(
 	}
 	return nil
 }
+
+// RequeueRunningExtractions returns documents stranded in running (a crash or
+// shutdown between claim and finish) to pending, so the worker retries them
+// instead of leaving them stuck out of the queue forever.
+func (r *DocumentRepository) RequeueRunningExtractions(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE documents SET extraction_status = $1 WHERE extraction_status = $2`,
+		model.ExtractionStatusPending, model.ExtractionStatusRunning)
+	if err != nil {
+		return 0, fmt.Errorf("requeue running extractions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// MarkExtractionPending queues a document for the page-image pass and stores
+// the bytes that pass needs. Called only after the document's initial chunks
+// exist, so the worker cannot race that first indexing.
+func (r *DocumentRepository) MarkExtractionPending(
+	ctx context.Context, id int64, rawBytes []byte,
+) error {
+	if _, err := r.pool.Exec(ctx,
+		`UPDATE documents SET extraction_status = $1, raw_bytes = $2 WHERE id = $3`,
+		model.ExtractionStatusPending, rawBytes, id); err != nil {
+		return fmt.Errorf("queue extraction for document %d: %w", id, err)
+	}
+	return nil
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
@@ -17,10 +18,17 @@ import (
 // each document costs several vision calls.
 const claimBatch = 5
 
+// pollInterval is how long the worker sleeps after draining the queue before
+// looking again. Uploads arrive at human pace, so this need not be tight.
+var pollInterval = 30 * time.Second
+
 // Store is the document persistence the worker needs.
 type Store interface {
 	ClaimPendingExtraction(ctx context.Context, limit int) ([]model.Document, error)
 	FinishExtraction(ctx context.Context, id int64, markdown, status string) error
+	// RequeueRunningExtractions returns rows stranded in running by a crash or
+	// shutdown back to pending, so they are retried instead of stuck forever.
+	RequeueRunningExtractions(ctx context.Context) (int64, error)
 }
 
 // DescribeFunc converts one page image to markdown via a vision-capable model.
@@ -44,6 +52,14 @@ func Run(
 	ctx context.Context, s Store, describe DescribeFunc, reindex ReindexFunc,
 	opts ingest.PageImageOptions, log *slog.Logger,
 ) {
+	// A crash or shutdown can leave rows in running, which the claim query
+	// never selects. Recover them once at start so they are not stuck forever.
+	if requeued, err := s.RequeueRunningExtractions(ctx); err != nil {
+		log.Error("pdfvision: requeue running failed", "err", err)
+	} else if requeued > 0 {
+		log.Info("pdfvision: requeued interrupted documents", "count", requeued)
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -54,7 +70,15 @@ func Run(
 			return
 		}
 		if len(docs) == 0 {
-			return
+			// Idle, not finished: RunForever treats a normal return as done
+			// and never restarts, so exiting here would ignore every later
+			// upload for the life of the process.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+			continue
 		}
 		for _, doc := range docs {
 			if ctx.Err() != nil {

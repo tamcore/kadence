@@ -34,6 +34,8 @@ type fakeStore struct {
 	markdown map[int64]string
 	statuses map[int64]string
 	claims   int
+	requeues int
+	drained  context.CancelFunc
 }
 
 func newFakeStore(batches ...[]model.Document) *fakeStore {
@@ -49,11 +51,22 @@ func (f *fakeStore) ClaimPendingExtraction(_ context.Context, _ int) ([]model.Do
 	defer f.mu.Unlock()
 	f.claims++
 	if len(f.batches) == 0 {
+		// Run polls forever by design; end the loop once the queue drains.
+		if f.drained != nil {
+			f.drained()
+		}
 		return nil, nil
 	}
 	batch := f.batches[0]
 	f.batches = f.batches[1:]
 	return batch, nil
+}
+
+func (f *fakeStore) RequeueRunningExtractions(context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requeues++
+	return 0, nil
 }
 
 func (f *fakeStore) FinishExtraction(_ context.Context, id int64, markdown, status string) error {
@@ -62,6 +75,16 @@ func (f *fakeStore) FinishExtraction(_ context.Context, id int64, markdown, stat
 	f.markdown[id] = markdown
 	f.statuses[id] = status
 	return nil
+}
+
+// runDrained runs the worker until its queue empties, then lets the poll loop
+// exit via context cancellation.
+func runDrained(t *testing.T, store *fakeStore, describe DescribeFunc, reindex ReindexFunc, opts ingest.PageImageOptions) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.drained = cancel
+	Run(ctx, store, describe, reindex, opts, slog.Default())
 }
 
 func describeConstant(text string) DescribeFunc {
@@ -75,7 +98,7 @@ func TestRunAppendsDescribedTablesAndMarksComplete(t *testing.T) {
 	})
 
 	// Act
-	Run(context.Background(), store, describeConstant("| WEEK 5 | 16k easy |"), nil, testOptions(), slog.Default())
+	runDrained(t, store, describeConstant("| WEEK 5 | 16k easy |"), nil, testOptions())
 
 	// Assert
 	if store.statuses[7] != model.ExtractionStatusComplete {
@@ -99,7 +122,7 @@ func TestRunMarksFailedAndPreservesTextWhenDescribeFails(t *testing.T) {
 	}
 
 	// Act
-	Run(context.Background(), store, describe, nil, testOptions(), slog.Default())
+	runDrained(t, store, describe, nil, testOptions())
 
 	// Assert
 	if store.statuses[8] != model.ExtractionStatusFailed {
@@ -121,7 +144,7 @@ func TestRunMarksNotNeededWhenNoPageImagesQualify(t *testing.T) {
 	}
 
 	// Act: a zero MaxPages makes extraction a no-op.
-	Run(context.Background(), store, describe, nil, ingest.PageImageOptions{}, slog.Default())
+	runDrained(t, store, describe, nil, ingest.PageImageOptions{})
 
 	// Assert
 	if store.statuses[9] != model.ExtractionStatusNotNeeded {
@@ -136,7 +159,7 @@ func TestRunMarksFailedOnMalformedPDF(t *testing.T) {
 	})
 
 	// Act
-	Run(context.Background(), store, describeConstant("table"), nil, testOptions(), slog.Default())
+	runDrained(t, store, describeConstant("table"), nil, testOptions())
 
 	// Assert
 	if store.statuses[10] != model.ExtractionStatusFailed {
@@ -152,7 +175,7 @@ func TestRunDrainsUntilNoDocumentsRemain(t *testing.T) {
 	)
 
 	// Act
-	Run(context.Background(), store, describeConstant("table"), nil, testOptions(), slog.Default())
+	runDrained(t, store, describeConstant("table"), nil, testOptions())
 
 	// Assert
 	if len(store.statuses) != 2 {
@@ -190,7 +213,7 @@ func TestRunReindexesBeforeReportingComplete(t *testing.T) {
 	}
 
 	// Act
-	Run(context.Background(), store, describeConstant("| WEEK 5 |"), reindex, testOptions(), slog.Default())
+	runDrained(t, store, describeConstant("| WEEK 5 |"), reindex, testOptions())
 
 	// Assert
 	if store.statuses[12] != model.ExtractionStatusComplete {
@@ -211,7 +234,7 @@ func TestRunMarksFailedWhenReindexFails(t *testing.T) {
 	}
 
 	// Act
-	Run(context.Background(), store, describeConstant("| WEEK 5 |"), reindex, testOptions(), slog.Default())
+	runDrained(t, store, describeConstant("| WEEK 5 |"), reindex, testOptions())
 
 	// Assert
 	if store.statuses[13] != model.ExtractionStatusFailed {

@@ -288,6 +288,7 @@ func Run() error {
 			ingestSvc := ingest.NewService(
 				chatContent.extractors,
 				embedder, documentsRepo, chunkRepo, cfg.IngestChunkChars,
+				pageImageOptions(cfg).MaxPages > 0,
 			)
 			deps.Documents = handlers.NewDocuments(ingestSvc, documentsRepo, capabilities)
 			deps.Context = handlers.NewContext(chunkRepo, documentsRepo)
@@ -640,13 +641,13 @@ func newDocumentReindexer(
 	embedder *embed.OpenAICompat, chunks *store.ChunkRepository, chunkChars int,
 ) pdfvision.ReindexFunc {
 	return func(ctx context.Context, doc model.Document, markdown string) error {
-		if err := chunks.DeleteByDocument(ctx, doc.ID); err != nil {
-			return err
-		}
 		pieces := ingest.ChunkText(markdown, chunkChars)
 		if len(pieces) == 0 {
 			return nil
 		}
+		// Embed before touching the stored chunks: ReplaceDocumentChunks needs
+		// finished vectors so a provider outage cannot leave the document with
+		// no chunks at all.
 		vectors, err := embedder.Embed(ctx, pieces)
 		if err != nil {
 			return fmt.Errorf("embed document %d: %w", doc.ID, err)
@@ -668,6 +669,6 @@ func newDocumentReindexer(
 				Content:    piece,
 			}
 		}
-		return chunks.InsertBatch(ctx, rows, vectors)
+		return chunks.ReplaceDocumentChunks(ctx, doc.ID, rows, vectors)
 	}
 }

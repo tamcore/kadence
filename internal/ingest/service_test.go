@@ -27,7 +27,19 @@ func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 	return out, nil
 }
 
-type fakeDocs struct{ created model.Document }
+type fakeDocs struct {
+	created      model.Document
+	queuedID     int64
+	queuedBytes  []byte
+	queuedCalled bool
+}
+
+func (f *fakeDocs) MarkExtractionPending(_ context.Context, id int64, rawBytes []byte) error {
+	f.queuedCalled = true
+	f.queuedID = id
+	f.queuedBytes = rawBytes
+	return nil
+}
 
 func (f *fakeDocs) Create(_ context.Context, d model.Document) (model.Document, error) {
 	d.ID = 42
@@ -49,7 +61,7 @@ func TestIngestPrivatePDF(t *testing.T) {
 	emb := &fakeEmbedder{}
 	fc := &fakeChunks{}
 	uid := int64(7)
-	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, emb, &fakeDocs{}, fc, 20)
+	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, emb, &fakeDocs{}, fc, 20, false)
 
 	doc, err := svc.Ingest(context.Background(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."))
 	if err != nil {
@@ -73,7 +85,7 @@ func TestIngestPrivatePDF(t *testing.T) {
 
 func TestIngestPublicPDFOwnerless(t *testing.T) {
 	fc := &fakeChunks{}
-	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, &fakeDocs{}, fc, 20)
+	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, &fakeDocs{}, fc, 20, false)
 	doc, err := svc.Ingest(context.Background(), nil, model.ScopePublic, "pub.pdf", "application/pdf", []byte("%PDF..."))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
@@ -89,8 +101,83 @@ func TestIngestPublicPDFOwnerless(t *testing.T) {
 }
 
 func TestIngestUnsupportedType(t *testing.T) {
-	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, &fakeDocs{}, &fakeChunks{}, 20)
+	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, &fakeDocs{}, &fakeChunks{}, 20, false)
 	if _, err := svc.Ingest(context.Background(), nil, model.ScopePublic, "x.png", "image/png", []byte("x")); err == nil {
 		t.Fatalf("expected unsupported-type error")
+	}
+}
+
+func TestIngestQueuesPDFOnlyAfterChunksLand(t *testing.T) {
+	// Arrange
+	docs := &fakeDocs{}
+	chunks := &fakeChunks{}
+	uid := int64(7)
+	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, docs, chunks, 20, true)
+
+	// Act
+	doc, err := svc.Ingest(
+		context.Background(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."),
+	)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if !docs.queuedCalled {
+		t.Fatal("PDF was not queued for the page-image pass")
+	}
+	if docs.queuedID != doc.ID {
+		t.Errorf("queued document %d, want %d", docs.queuedID, doc.ID)
+	}
+	if len(chunks.inserted) == 0 {
+		t.Error("chunks must be inserted before the document is queued")
+	}
+	if doc.ExtractionStatus != model.ExtractionStatusPending {
+		t.Errorf("ExtractionStatus = %q, want %q", doc.ExtractionStatus, model.ExtractionStatusPending)
+	}
+}
+
+func TestIngestDoesNotQueueWhenPageImagesDisabled(t *testing.T) {
+	// Arrange: with no worker running, queuing would retain bytes forever.
+	docs := &fakeDocs{}
+	uid := int64(7)
+	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, docs, &fakeChunks{}, 20, false)
+
+	// Act
+	if _, err := svc.Ingest(
+		context.Background(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."),
+	); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// Assert
+	if docs.queuedCalled {
+		t.Fatal("PDF was queued even though page images are disabled")
+	}
+}
+
+type textExtractor struct{}
+
+func (textExtractor) CanHandle(mime string) bool { return mime == "text/plain" }
+func (textExtractor) Extract(_ context.Context, _ []byte, _ string) (ingest.Result, error) {
+	return ingest.Result{Markdown: "plain text here.", SourceType: model.DocSourceText}, nil
+}
+
+func TestIngestDoesNotQueueNonPDF(t *testing.T) {
+	// Arrange
+	docs := &fakeDocs{}
+	uid := int64(7)
+	svc := ingest.NewService([]ingest.Extractor{textExtractor{}}, &fakeEmbedder{}, docs, &fakeChunks{}, 20, true)
+
+	// Act
+	if _, err := svc.Ingest(
+		context.Background(), &uid, model.ScopePrivate, "n.txt", "text/plain", []byte("hello"),
+	); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// Assert
+	if docs.queuedCalled {
+		t.Fatal("non-PDF was queued for the page-image pass")
 	}
 }

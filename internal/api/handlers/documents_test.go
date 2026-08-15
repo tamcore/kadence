@@ -54,6 +54,14 @@ func (f *fakeDocStore) Create(_ context.Context, d model.Document) (model.Docume
 	return d, nil
 }
 
+func (f *fakeDocStore) MarkExtractionPending(_ context.Context, id int64, rawBytes []byte) error {
+	d := f.docs[id]
+	d.ExtractionStatus = model.ExtractionStatusPending
+	d.RawBytes = rawBytes
+	f.docs[id] = d
+	return nil
+}
+
 func (f *fakeDocStore) ListByOwner(_ context.Context, ownerUserID int64) ([]model.Document, error) {
 	var out []model.Document
 	for _, d := range f.docs {
@@ -116,7 +124,7 @@ func newDocumentsHandler(t *testing.T, maxBytes int) (*handlers.Documents, *fake
 	t.Helper()
 	docs := newFakeDocStore()
 	extractors := []ingest.Extractor{fakeDocExtractor{}}
-	svc := ingest.NewService(extractors, fakeDocEmbedder{}, docs, fakeChunkStore{}, 20)
+	svc := ingest.NewService(extractors, fakeDocEmbedder{}, docs, fakeChunkStore{}, 20, false)
 	capabilities := ingest.BuildUploadCapabilities(extractors, maxBytes)
 	return handlers.NewDocuments(svc, docs, capabilities), docs
 }

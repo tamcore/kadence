@@ -307,12 +307,41 @@ func scanChunkRefRows(rows pgx.Rows) ([]ChunkRef, error) {
 	return out, rows.Err()
 }
 
-// DeleteByDocument removes every chunk belonging to one document, so the
-// document can be re-chunked after its extracted text changes.
-func (r *ChunkRepository) DeleteByDocument(ctx context.Context, documentID int64) error {
-	if _, err := r.pool.Exec(ctx,
+// ReplaceDocumentChunks swaps a document's chunks for new ones in a single
+// transaction, so a failure part-way leaves the existing chunks intact.
+// Callers must embed first and pass the finished vectors: deleting before the
+// replacements exist would destroy working RAG content whenever the embedding
+// provider is unavailable.
+func (r *ChunkRepository) ReplaceDocumentChunks(
+	ctx context.Context, documentID int64, chunks []model.Chunk, embeddings [][]float32,
+) error {
+	if len(chunks) != len(embeddings) {
+		return fmt.Errorf(
+			"replace document %d chunks: got %d chunks for %d embeddings",
+			documentID, len(chunks), len(embeddings),
+		)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin replace document %d chunks: %w", documentID, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM chunks WHERE document_id = $1`, documentID); err != nil {
 		return fmt.Errorf("delete chunks for document %d: %w", documentID, err)
+	}
+	for i, c := range chunks {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO chunks (user_id, conversation_id, document_id, scope, source_kind, source_id, content, embedding, embedding_model)
+			 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)`,
+			c.UserID, c.ConversationID, c.DocumentID, c.Scope, c.SourceKind, c.SourceID,
+			c.Content, pgvector.NewVector(embeddings[i]), r.embeddingModel); err != nil {
+			return fmt.Errorf("insert replacement chunk for document %d: %w", documentID, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit replace document %d chunks: %w", documentID, err)
 	}
 	return nil
 }
