@@ -242,3 +242,57 @@ func TestReplaceDocumentChunksRejectsMismatchedEmbeddings(t *testing.T) {
 		t.Fatal("ReplaceDocumentChunks() error = nil, want an error for mismatched lengths")
 	}
 }
+
+func TestFinishExtractionRetainsBytesOnFailureForRetry(t *testing.T) {
+	// Arrange
+	ctx, docs, ownerID := newExtractionFixture(t)
+	doc := newPendingDocument(t, ctx, docs, ownerID)
+	if _, err := docs.ClaimPendingExtraction(ctx, 10); err != nil {
+		t.Fatalf("ClaimPendingExtraction: %v", err)
+	}
+
+	// Act: a transient provider failure.
+	if err := docs.FinishExtraction(
+		ctx, doc.ID, testTextLayer, model.ExtractionStatusFailed,
+	); err != nil {
+		t.Fatalf("FinishExtraction: %v", err)
+	}
+
+	// Assert: the upload survives, so the work can be retried.
+	retried, err := docs.RetryFailedExtractions(ctx)
+	if err != nil {
+		t.Fatalf("RetryFailedExtractions: %v", err)
+	}
+	if retried != 1 {
+		t.Fatalf("retried = %d, want 1", retried)
+	}
+	claimed, err := docs.ClaimPendingExtraction(ctx, 10)
+	if err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	if len(claimed) != 1 || string(claimed[0].RawBytes) != testSyntheticPDF {
+		t.Fatalf("re-claimed = %+v, want the document with its bytes intact", claimed)
+	}
+}
+
+func TestFinishExtractionReleasesBytesOnSuccess(t *testing.T) {
+	// Arrange
+	ctx, docs, ownerID := newExtractionFixture(t)
+	doc := newPendingDocument(t, ctx, docs, ownerID)
+
+	// Act
+	if err := docs.FinishExtraction(
+		ctx, doc.ID, "converted", model.ExtractionStatusComplete,
+	); err != nil {
+		t.Fatalf("FinishExtraction: %v", err)
+	}
+
+	// Assert: nothing to retry, and the bytes are gone.
+	retried, err := docs.RetryFailedExtractions(ctx)
+	if err != nil {
+		t.Fatalf("RetryFailedExtractions: %v", err)
+	}
+	if retried != 0 {
+		t.Fatalf("retried = %d, want 0 after a successful conversion", retried)
+	}
+}

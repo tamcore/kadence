@@ -618,8 +618,11 @@ const pageImageTranscribePrompt = "Transcribe every table in this image to " +
 func newPageImageDescriber(p provider.Provider, cfg config.Config) pdfvision.DescribeFunc {
 	return func(ctx context.Context, image []byte, mime string) (string, error) {
 		req := provider.ChatRequest{
-			Model:     cfg.LLMModel,
-			MaxTokens: cfg.LLMMaxTokens,
+			Model: cfg.LLMModel,
+			// Carry the configured temperature rather than leaving the zero
+			// value: some models accept only their default and reject 0.0.
+			Temperature: cfg.LLMTemperature,
+			MaxTokens:   cfg.LLMMaxTokens,
 			Messages: []provider.Message{{
 				Role:    model.MsgRoleUser,
 				Content: pageImageTranscribePrompt,

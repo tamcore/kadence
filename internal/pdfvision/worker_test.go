@@ -35,6 +35,7 @@ type fakeStore struct {
 	statuses map[int64]string
 	claims   int
 	requeues int
+	retries  int
 	drained  context.CancelFunc
 }
 
@@ -66,6 +67,13 @@ func (f *fakeStore) RequeueRunningExtractions(context.Context) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requeues++
+	return 0, nil
+}
+
+func (f *fakeStore) RetryFailedExtractions(context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retries++
 	return 0, nil
 }
 

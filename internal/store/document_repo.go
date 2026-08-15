@@ -197,19 +197,41 @@ func (r *DocumentRepository) ClaimPendingExtraction(
 	return out, nil
 }
 
-// FinishExtraction records the outcome of the page-image pass and releases the
-// stored upload bytes, so a converted PDF is not kept twice.
+// FinishExtraction records the outcome of the page-image pass.
+//
+// On success the stored upload bytes are released, so a converted PDF is not
+// kept twice. On failure they are retained: failures are often transient (a
+// provider outage, a rejected request), and discarding the bytes would make the
+// document impossible to retry without a re-upload.
 func (r *DocumentRepository) FinishExtraction(
 	ctx context.Context, id int64, markdown, status string,
 ) error {
-	if _, err := r.pool.Exec(ctx,
-		`UPDATE documents
-		    SET extracted_markdown = $1, extraction_status = $2, raw_bytes = NULL
-		  WHERE id = $3`,
-		markdown, status, id); err != nil {
+	const query = `
+UPDATE documents
+   SET extracted_markdown = $1,
+       extraction_status = $2,
+       raw_bytes = CASE WHEN $2 = $4 THEN raw_bytes ELSE NULL END
+ WHERE id = $3`
+	if _, err := r.pool.Exec(
+		ctx, query, markdown, status, id, model.ExtractionStatusFailed,
+	); err != nil {
 		return fmt.Errorf("finish extraction for document %d: %w", id, err)
 	}
 	return nil
+}
+
+// RetryFailedExtractions moves failed documents that still hold their upload
+// bytes back to pending, so a transient provider failure can be retried without
+// a re-upload.
+func (r *DocumentRepository) RetryFailedExtractions(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE documents SET extraction_status = $1
+		  WHERE extraction_status = $2 AND raw_bytes IS NOT NULL`,
+		model.ExtractionStatusPending, model.ExtractionStatusFailed)
+	if err != nil {
+		return 0, fmt.Errorf("retry failed extractions: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // RequeueRunningExtractions returns documents stranded in running (a crash or

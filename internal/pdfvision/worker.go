@@ -29,6 +29,9 @@ type Store interface {
 	// RequeueRunningExtractions returns rows stranded in running by a crash or
 	// shutdown back to pending, so they are retried instead of stuck forever.
 	RequeueRunningExtractions(ctx context.Context) (int64, error)
+	// RetryFailedExtractions returns failed rows that still hold their upload
+	// bytes to pending, so a transient provider failure recovers on restart.
+	RetryFailedExtractions(ctx context.Context) (int64, error)
 }
 
 // DescribeFunc converts one page image to markdown via a vision-capable model.
@@ -58,6 +61,13 @@ func Run(
 		log.Error("pdfvision: requeue running failed", "err", err)
 	} else if requeued > 0 {
 		log.Info("pdfvision: requeued interrupted documents", "count", requeued)
+	}
+	// Earlier failures are usually transient (a provider outage or a rejected
+	// request). Retry the ones that still hold their bytes.
+	if retried, err := s.RetryFailedExtractions(ctx); err != nil {
+		log.Error("pdfvision: retry failed extractions failed", "err", err)
+	} else if retried > 0 {
+		log.Info("pdfvision: retrying previously failed documents", "count", retried)
 	}
 
 	for {
