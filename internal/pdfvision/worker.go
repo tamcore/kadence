@@ -22,16 +22,31 @@ const claimBatch = 5
 // looking again. Uploads arrive at human pace, so this need not be tight.
 var pollInterval = 30 * time.Second
 
+// staleClaimAfter is how long a claim may sit in running before another replica
+// may take it back. Comfortably longer than a slow document so a healthy worker
+// is never preempted mid-conversion.
+const staleClaimAfter = 30 * time.Minute
+
+// maxAttempts bounds retries of a failing document.
+const maxAttempts = 3
+
+// documentTimeout bounds one document's conversion. Without it a stalled
+// provider would hold the single worker, and every queued document behind it,
+// for the life of the process.
+const documentTimeout = 15 * time.Minute
+
 // Store is the document persistence the worker needs.
 type Store interface {
 	ClaimPendingExtraction(ctx context.Context, limit int) ([]model.Document, error)
 	FinishExtraction(ctx context.Context, id int64, markdown, status string) error
-	// RequeueRunningExtractions returns rows stranded in running by a crash or
-	// shutdown back to pending, so they are retried instead of stuck forever.
-	RequeueRunningExtractions(ctx context.Context) (int64, error)
+	// RequeueStaleExtractions returns rows whose claim lease expired back to
+	// pending, so work stranded by a crash is retried without stealing a
+	// peer replica's in-flight claim.
+	RequeueStaleExtractions(ctx context.Context, olderThan time.Duration) (int64, error)
 	// RetryFailedExtractions returns failed rows that still hold their upload
-	// bytes to pending, so a transient provider failure recovers on restart.
-	RetryFailedExtractions(ctx context.Context) (int64, error)
+	// bytes to pending, bounded by maxAttempts so a permanently unconvertible
+	// document stops costing vision calls on every restart.
+	RetryFailedExtractions(ctx context.Context, maxAttempts int) (int64, error)
 }
 
 // DescribeFunc converts one page image to markdown via a vision-capable model.
@@ -57,14 +72,14 @@ func Run(
 ) {
 	// A crash or shutdown can leave rows in running, which the claim query
 	// never selects. Recover them once at start so they are not stuck forever.
-	if requeued, err := s.RequeueRunningExtractions(ctx); err != nil {
+	if requeued, err := s.RequeueStaleExtractions(ctx, staleClaimAfter); err != nil {
 		log.Error("pdfvision: requeue running failed", "err", err)
 	} else if requeued > 0 {
 		log.Info("pdfvision: requeued interrupted documents", "count", requeued)
 	}
 	// Earlier failures are usually transient (a provider outage or a rejected
 	// request). Retry the ones that still hold their bytes.
-	if retried, err := s.RetryFailedExtractions(ctx); err != nil {
+	if retried, err := s.RetryFailedExtractions(ctx, maxAttempts); err != nil {
 		log.Error("pdfvision: retry failed extractions failed", "err", err)
 	} else if retried > 0 {
 		log.Info("pdfvision: retrying previously failed documents", "count", retried)
@@ -76,17 +91,21 @@ func Run(
 		}
 		docs, err := s.ClaimPendingExtraction(ctx, claimBatch)
 		if err != nil {
-			log.Error("pdfvision: claim failed", "err", err)
-			return
+			// Returning here would end the worker for the life of the
+			// process: RunForever only restarts panics. A database blip must
+			// not permanently disable conversion.
+			log.Error("pdfvision: claim failed, retrying", "err", err)
+			if !sleepCtx(ctx, pollInterval) {
+				return
+			}
+			continue
 		}
 		if len(docs) == 0 {
 			// Idle, not finished: RunForever treats a normal return as done
 			// and never restarts, so exiting here would ignore every later
 			// upload for the life of the process.
-			select {
-			case <-ctx.Done():
+			if !sleepCtx(ctx, pollInterval) {
 				return
-			case <-time.After(pollInterval):
 			}
 			continue
 		}
@@ -94,7 +113,8 @@ func Run(
 			if ctx.Err() != nil {
 				return
 			}
-			markdown, status := describeDocument(ctx, doc, describe, opts, log)
+			docCtx, cancel := context.WithTimeout(ctx, documentTimeout)
+			markdown, status := describeDocument(docCtx, doc, describe, opts, log)
 			// Re-chunk before recording success: a document reported complete
 			// while its chunks still hold the old text would be silently
 			// missing from RAG search, which is the failure this whole feature
@@ -108,6 +128,7 @@ func Run(
 			if err := s.FinishExtraction(ctx, doc.ID, markdown, status); err != nil {
 				log.Error("pdfvision: finish failed", "document", doc.ID, "err", err)
 			}
+			cancel()
 		}
 	}
 }
@@ -145,4 +166,15 @@ func describeDocument(
 			fmt.Sprintf("## Page %d (extracted from image)\n\n%s", image.Page, markdown))
 	}
 	return strings.Join(sections, "\n\n"), model.ExtractionStatusComplete
+}
+
+// sleepCtx waits d or until ctx is done, reporting whether the full wait
+// elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }

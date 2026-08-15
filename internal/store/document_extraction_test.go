@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"
@@ -116,16 +117,16 @@ func TestMarkExtractionPendingThenClaimAndFinish(t *testing.T) {
 	if visible[0].ExtractedMarkdown == testTextLayer {
 		t.Error("FinishExtraction did not store the converted markdown")
 	}
-	stranded, err := docs.RequeueRunningExtractions(ctx)
+	stranded, err := docs.RequeueStaleExtractions(ctx, 0)
 	if err != nil {
-		t.Fatalf("RequeueRunningExtractions: %v", err)
+		t.Fatalf("RequeueStaleExtractions: %v", err)
 	}
 	if stranded != 0 {
 		t.Errorf("requeued %d rows, want 0 once the document finished", stranded)
 	}
 }
 
-func TestRequeueRunningExtractionsRecoversStrandedRows(t *testing.T) {
+func TestRequeueStaleExtractionsRecoversStrandedRows(t *testing.T) {
 	// Arrange: claiming leaves the row running, as a crash before finish would.
 	ctx, docs, ownerID := newExtractionFixture(t)
 	doc := newPendingDocument(t, ctx, docs, ownerID)
@@ -134,11 +135,11 @@ func TestRequeueRunningExtractionsRecoversStrandedRows(t *testing.T) {
 	}
 
 	// Act
-	requeued, err := docs.RequeueRunningExtractions(ctx)
+	requeued, err := docs.RequeueStaleExtractions(ctx, 0)
 
 	// Assert
 	if err != nil {
-		t.Fatalf("RequeueRunningExtractions: %v", err)
+		t.Fatalf("RequeueStaleExtractions: %v", err)
 	}
 	if requeued != 1 {
 		t.Fatalf("requeued = %d, want 1", requeued)
@@ -259,7 +260,7 @@ func TestFinishExtractionRetainsBytesOnFailureForRetry(t *testing.T) {
 	}
 
 	// Assert: the upload survives, so the work can be retried.
-	retried, err := docs.RetryFailedExtractions(ctx)
+	retried, err := docs.RetryFailedExtractions(ctx, 3)
 	if err != nil {
 		t.Fatalf("RetryFailedExtractions: %v", err)
 	}
@@ -288,11 +289,68 @@ func TestFinishExtractionReleasesBytesOnSuccess(t *testing.T) {
 	}
 
 	// Assert: nothing to retry, and the bytes are gone.
-	retried, err := docs.RetryFailedExtractions(ctx)
+	retried, err := docs.RetryFailedExtractions(ctx, 3)
 	if err != nil {
 		t.Fatalf("RetryFailedExtractions: %v", err)
 	}
 	if retried != 0 {
 		t.Fatalf("retried = %d, want 0 after a successful conversion", retried)
+	}
+}
+
+func TestRequeueStaleExtractionsLeavesFreshClaimsAlone(t *testing.T) {
+	// Arrange: a peer replica's claim, taken moments ago.
+	ctx, docs, ownerID := newExtractionFixture(t)
+	newPendingDocument(t, ctx, docs, ownerID)
+	if _, err := docs.ClaimPendingExtraction(ctx, 10); err != nil {
+		t.Fatalf("ClaimPendingExtraction: %v", err)
+	}
+
+	// Act: a restarting replica looks for stale leases.
+	requeued, err := docs.RequeueStaleExtractions(ctx, time.Hour)
+
+	// Assert: it must not steal work another replica is still doing.
+	if err != nil {
+		t.Fatalf("RequeueStaleExtractions: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued = %d, want 0 for a fresh claim", requeued)
+	}
+}
+
+func TestRetryFailedExtractionsStopsAfterMaxAttempts(t *testing.T) {
+	// Arrange: fail the document repeatedly.
+	ctx, docs, ownerID := newExtractionFixture(t)
+	doc := newPendingDocument(t, ctx, docs, ownerID)
+	for range 3 {
+		if _, err := docs.ClaimPendingExtraction(ctx, 10); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if err := docs.FinishExtraction(
+			ctx, doc.ID, testTextLayer, model.ExtractionStatusFailed,
+		); err != nil {
+			t.Fatalf("FinishExtraction: %v", err)
+		}
+		if _, err := docs.RetryFailedExtractions(ctx, 3); err != nil {
+			t.Fatalf("RetryFailedExtractions: %v", err)
+		}
+	}
+
+	// Act
+	retried, err := docs.RetryFailedExtractions(ctx, 3)
+
+	// Assert: exhausted, and its bytes released rather than retained forever.
+	if err != nil {
+		t.Fatalf("RetryFailedExtractions: %v", err)
+	}
+	if retried != 0 {
+		t.Fatalf("retried = %d, want 0 once attempts are exhausted", retried)
+	}
+	claimed, err := docs.ClaimPendingExtraction(ctx, 10)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed %d documents, want 0", len(claimed))
 	}
 }

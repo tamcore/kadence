@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -164,7 +165,10 @@ func (r *DocumentRepository) ClaimPendingExtraction(
 		return nil, nil
 	}
 	rows, err := r.pool.Query(ctx,
-		`UPDATE documents SET extraction_status = $1
+		`UPDATE documents
+		    SET extraction_status = $1,
+		        extraction_claimed_at = NOW(),
+		        extraction_attempts = extraction_attempts + 1
 		  WHERE id IN (
 		        SELECT id FROM documents
 		         WHERE extraction_status = $2
@@ -223,26 +227,51 @@ UPDATE documents
 // RetryFailedExtractions moves failed documents that still hold their upload
 // bytes back to pending, so a transient provider failure can be retried without
 // a re-upload.
-func (r *DocumentRepository) RetryFailedExtractions(ctx context.Context) (int64, error) {
+//
+// maxAttempts bounds this: a permanently unconvertible PDF would otherwise
+// re-run its vision calls on every restart forever. Once exhausted, the row
+// keeps its failed status and its bytes are released.
+func (r *DocumentRepository) RetryFailedExtractions(
+	ctx context.Context, maxAttempts int,
+) (int64, error) {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE documents SET extraction_status = $1
-		  WHERE extraction_status = $2 AND raw_bytes IS NOT NULL`,
-		model.ExtractionStatusPending, model.ExtractionStatusFailed)
+		  WHERE extraction_status = $2
+		    AND raw_bytes IS NOT NULL
+		    AND extraction_attempts < $3`,
+		model.ExtractionStatusPending, model.ExtractionStatusFailed, maxAttempts)
 	if err != nil {
 		return 0, fmt.Errorf("retry failed extractions: %w", err)
+	}
+	if _, err := r.pool.Exec(ctx,
+		`UPDATE documents SET raw_bytes = NULL
+		  WHERE extraction_status = $1
+		    AND raw_bytes IS NOT NULL
+		    AND extraction_attempts >= $2`,
+		model.ExtractionStatusFailed, maxAttempts); err != nil {
+		return 0, fmt.Errorf("release exhausted extraction bytes: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
 
-// RequeueRunningExtractions returns documents stranded in running (a crash or
-// shutdown between claim and finish) to pending, so the worker retries them
-// instead of leaving them stuck out of the queue forever.
-func (r *DocumentRepository) RequeueRunningExtractions(ctx context.Context) (int64, error) {
+// RequeueStaleExtractions returns documents whose claim lease expired to
+// pending, so work stranded by a crash is retried.
+//
+// It requeues only leases older than olderThan, never every running row: with
+// more than one replica — and during any rolling update — a restarting pod
+// would otherwise steal a peer's in-flight claim, duplicating the transcription
+// and its cost.
+func (r *DocumentRepository) RequeueStaleExtractions(
+	ctx context.Context, olderThan time.Duration,
+) (int64, error) {
 	tag, err := r.pool.Exec(ctx,
-		`UPDATE documents SET extraction_status = $1 WHERE extraction_status = $2`,
-		model.ExtractionStatusPending, model.ExtractionStatusRunning)
+		`UPDATE documents SET extraction_status = $1
+		  WHERE extraction_status = $2
+		    AND (extraction_claimed_at IS NULL OR extraction_claimed_at < NOW() - $3::interval)`,
+		model.ExtractionStatusPending, model.ExtractionStatusRunning,
+		fmt.Sprintf("%d seconds", int(olderThan.Seconds())))
 	if err != nil {
-		return 0, fmt.Errorf("requeue running extractions: %w", err)
+		return 0, fmt.Errorf("requeue stale extractions: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

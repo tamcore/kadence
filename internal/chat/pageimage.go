@@ -12,6 +12,11 @@ import (
 // mimePDF is the only document type page images are derived from.
 const mimePDF = "application/pdf"
 
+// defaultTurnImageBytes bounds the combined derived-image payload of one turn.
+// The page cap alone does not bound bytes, and the budget must be shared across
+// attachments so several PDFs cannot each spend it in full.
+const defaultTurnImageBytes = 24 << 20
+
 // derivePageImages returns page-content images derived from one PDF document
 // attachment.
 //
@@ -69,15 +74,23 @@ func derivePageImagesForAttachments(
 	}
 	var out []provider.ImageContent
 	remaining := opts.MaxPages
+	remainingBytes := opts.MaxTotalBytes
+	if remainingBytes <= 0 {
+		remainingBytes = defaultTurnImageBytes
+	}
 	for _, attachment := range attachments {
-		if remaining <= 0 {
+		if remaining <= 0 || remainingBytes <= 0 {
 			break
 		}
 		scoped := opts
 		scoped.MaxPages = remaining
+		scoped.MaxTotalBytes = remainingBytes
 		images := derivePageImages(attachment, scoped)
 		out = append(out, images...)
 		remaining -= len(images)
+		for _, image := range images {
+			remainingBytes -= len(image.Data)
+		}
 	}
 	return out
 }

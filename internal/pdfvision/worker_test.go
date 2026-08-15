@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
@@ -63,14 +64,14 @@ func (f *fakeStore) ClaimPendingExtraction(_ context.Context, _ int) ([]model.Do
 	return batch, nil
 }
 
-func (f *fakeStore) RequeueRunningExtractions(context.Context) (int64, error) {
+func (f *fakeStore) RequeueStaleExtractions(context.Context, time.Duration) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requeues++
 	return 0, nil
 }
 
-func (f *fakeStore) RetryFailedExtractions(context.Context) (int64, error) {
+func (f *fakeStore) RetryFailedExtractions(context.Context, int) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retries++
