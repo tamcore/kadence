@@ -1630,6 +1630,22 @@ func (s *Service) assembleTurnContext(
 		return turnContextAssembly{}, retrieval, ragErr, s.fail(sink, "could not assemble attachment context")
 	}
 	currentMessageTokens := estimateProviderMessageTokens(currentMessage)
+	// Page images are a bonus on top of the text layer. When they push the turn
+	// past the budget, drop them and send the text rather than refusing the
+	// turn outright — several large PDFs at once would otherwise fail entirely.
+	if estimateTokens(systemPrompt)+currentMessageTokens > s.contextBudget &&
+		len(pageImages) > 0 {
+		slog.Info("dropping derived pdf page images to fit the context budget",
+			"conversation", conversationID, "images", len(pageImages))
+		pageImages = nil
+		currentMessage, msgErr = currentTurnProviderMessageWithPageImages(
+			fittedUser, fittedDocuments, nil,
+		)
+		if msgErr != nil {
+			return turnContextAssembly{}, retrieval, ragErr, s.fail(sink, "could not assemble attachment context")
+		}
+		currentMessageTokens = estimateProviderMessageTokens(currentMessage)
+	}
 	if estimateTokens(systemPrompt)+currentMessageTokens > s.contextBudget {
 		return turnContextAssembly{}, retrieval, ragErr, s.fail(
 			sink,
