@@ -22,6 +22,8 @@ const (
 	docMimeRTF        = "application/rtf"
 	docMimeEPUB       = "application/epub+zip"
 	mimeTextHTML      = "text/html"
+	mimeImagePNG      = "image/png"
+	mimeImageJPEG     = "image/jpeg"
 )
 
 // PDFExtractor extracts the text layer from PDF documents using a pure-Go

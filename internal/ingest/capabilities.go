@@ -21,8 +21,8 @@ type uploadFormat struct {
 
 var uploadFormats = []uploadFormat{
 	{mime: pdfMimeType, extensions: []string{".pdf"}},
-	{mime: "image/png", extensions: []string{".png"}},
-	{mime: "image/jpeg", extensions: []string{".jpg", ".jpeg"}},
+	{mime: mimeImagePNG, extensions: []string{".png"}},
+	{mime: mimeImageJPEG, extensions: []string{".jpg", ".jpeg"}},
 	{mime: "image/webp", extensions: []string{".webp"}},
 	{mime: "image/gif", extensions: []string{".gif"}},
 	{mime: "text/plain", extensions: []string{".txt"}},
