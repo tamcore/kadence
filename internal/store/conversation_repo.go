@@ -156,34 +156,28 @@ func (r *ConversationRepository) UpdatePinned(ctx context.Context, id string, us
 // an ordinary source chat is removed, any still-draft handoff task and its
 // Scheduled definition conversation are hard-cleaned; confirmed work remains.
 func (r *ConversationRepository) Delete(ctx context.Context, id string, userID int64) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin delete conversation: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var kind string
-	err = tx.QueryRow(ctx, `SELECT kind FROM conversations WHERE id = $1::uuid AND user_id = $2 FOR UPDATE`, id, userID).Scan(&kind)
-	if errors.Is(err, pgx.ErrNoRows) {
+	return inTxErr(ctx, r.pool, "delete conversation", func(tx pgx.Tx) error {
+		var kind string
+		err := tx.QueryRow(ctx, `SELECT kind FROM conversations WHERE id = $1::uuid AND user_id = $2 FOR UPDATE`, id, userID).Scan(&kind)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("lock delete conversation: %w", err)
+		}
+		if kind == model.ConversationKindChat {
+			if err := cleanupDraftHandoffsForConversation(ctx, tx, userID, id); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID); err != nil {
+			if isDeliveryConversationForeignKeyViolation(err) {
+				return ErrConversationHasActiveDelivery
+			}
+			return fmt.Errorf("delete conversation: %w", err)
+		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lock delete conversation: %w", err)
-	}
-	if kind == model.ConversationKindChat {
-		if err := cleanupDraftHandoffsForConversation(ctx, tx, userID, id); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`, id, userID); err != nil {
-		if isDeliveryConversationForeignKeyViolation(err) {
-			return ErrConversationHasActiveDelivery
-		}
-		return fmt.Errorf("delete conversation: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit delete conversation: %w", err)
-	}
-	return nil
+	})
 }
 
 // isDeliveryConversationForeignKeyViolation reports whether err is a Postgres

@@ -113,94 +113,82 @@ func (r *ScheduledTaskRepository) Create(ctx context.Context, task model.Schedul
 	if task.Version == 0 && task.State != model.ScheduledTaskStateDraft {
 		task.Version = 1
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("begin scheduled task create: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, task.UserID); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
-	}
-	if err := ensureOwnedScheduledConversation(ctx, tx, task.ConversationID, task.UserID); err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if task.State == model.ScheduledTaskStateActive && r.maxActivePerUser > 0 {
-		var active int
-		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL`, task.UserID, model.ScheduledTaskStateActive).Scan(&active); err != nil {
-			return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+	return inTx(ctx, r.pool, "scheduled task create", func(tx pgx.Tx) (model.ScheduledTask, error) {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, task.UserID); err != nil {
+			return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
 		}
-		if active >= r.maxActivePerUser {
-			return model.ScheduledTask{}, ErrActiveTaskLimit
+		if err := ensureOwnedScheduledConversation(ctx, tx, task.ConversationID, task.UserID); err != nil {
+			return model.ScheduledTask{}, err
 		}
-	}
-	created, err := scanScheduledTask(tx.QueryRow(ctx,
-		`INSERT INTO scheduled_tasks (
-			user_id, conversation_id, version, name, kind, state, compiled_prompt, one_off_at, dtstart, rrule,
-			timezone, execution_mode, authorized_tools, monitoring_state, delivery_policy, initial_run, stop_condition, static_message, consecutive_failures, next_run_at, last_run_at
-		) VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, $18, $19, $20, $21)
-		RETURNING `+scheduledTaskCols,
-		task.UserID, task.ConversationID, task.Version, task.Name, task.Kind, task.State, task.CompiledPrompt,
-		task.OneOffAt, task.DTStart, task.RRULE, task.Timezone, task.ExecutionMode, tools, monitoring,
-		task.DeliveryPolicy, task.InitialRun, task.StopCondition, task.StaticMessage, task.ConsecutiveFailures, task.NextRunAt, task.LastRunAt,
-	))
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("commit scheduled task create: %w", err)
-	}
-	return created, nil
+		if task.State == model.ScheduledTaskStateActive && r.maxActivePerUser > 0 {
+			var active int
+			if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL`, task.UserID, model.ScheduledTaskStateActive).Scan(&active); err != nil {
+				return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+			}
+			if active >= r.maxActivePerUser {
+				return model.ScheduledTask{}, ErrActiveTaskLimit
+			}
+		}
+		created, err := scanScheduledTask(tx.QueryRow(ctx,
+			`INSERT INTO scheduled_tasks (
+				user_id, conversation_id, version, name, kind, state, compiled_prompt, one_off_at, dtstart, rrule,
+				timezone, execution_mode, authorized_tools, monitoring_state, delivery_policy, initial_run, stop_condition, static_message, consecutive_failures, next_run_at, last_run_at
+			) VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, $18, $19, $20, $21)
+			RETURNING `+scheduledTaskCols,
+			task.UserID, task.ConversationID, task.Version, task.Name, task.Kind, task.State, task.CompiledPrompt,
+			task.OneOffAt, task.DTStart, task.RRULE, task.Timezone, task.ExecutionMode, tools, monitoring,
+			task.DeliveryPolicy, task.InitialRun, task.StopCondition, task.StaticMessage, task.ConsecutiveFailures, task.NextRunAt, task.LastRunAt,
+		))
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		return created, nil
+	})
 }
 
 // BeginDraftRevision atomically invalidates any confirmable proposal before
 // external compiler work starts. Active and paused definitions may be edited;
 // terminal definitions may not.
 func (r *ScheduledTaskRepository) BeginDraftRevision(ctx context.Context, id string, userID int64, expectedVersion int) (model.ScheduledTask, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("begin scheduled draft revision: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	current, err := scanScheduledTask(tx.QueryRow(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-		id, userID))
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if current.Version != expectedVersion {
-		return model.ScheduledTask{}, scheduledStaleProposalError()
-	}
-	if current.State != model.ScheduledTaskStateDraft &&
-		current.State != model.ScheduledTaskStateActive &&
-		current.State != model.ScheduledTaskStatePaused {
-		return model.ScheduledTask{}, ErrInvalidScheduledTaskState
-	}
-	if err := ensureNoScheduledRunInProgress(ctx, tx, id); err != nil {
-		return model.ScheduledTask{}, err
-	}
-	task, err := scanScheduledTask(tx.QueryRow(ctx,
-		`UPDATE scheduled_tasks SET
-		   version = version + 1, state = $1, name = '', compiled_prompt = '',
-		   one_off_at = NULL, dtstart = NULL, rrule = NULL,
-		   execution_mode = '', authorized_tools = '[]'::jsonb,
-		   delivery_policy = 'always', initial_run = 'wait',
-		   stop_condition = '', static_message = '', next_run_at = NULL,
-		   updated_at = NOW()
-		 WHERE id = $2::uuid AND user_id = $3 AND deleted_at IS NULL
-		   AND state = $4 AND version = $5
-		 RETURNING `+scheduledTaskCols,
-		model.ScheduledTaskStateDraft, id, userID, current.State, current.Version))
-	if errors.Is(err, ErrNotFound) {
-		return model.ScheduledTask{}, ErrInvalidScheduledTaskState
-	}
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("commit scheduled draft revision: %w", err)
-	}
-	return task, nil
+	return inTx(ctx, r.pool, "scheduled draft revision", func(tx pgx.Tx) (model.ScheduledTask, error) {
+		current, err := scanScheduledTask(tx.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+			id, userID))
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		if current.Version != expectedVersion {
+			return model.ScheduledTask{}, scheduledStaleProposalError()
+		}
+		if current.State != model.ScheduledTaskStateDraft &&
+			current.State != model.ScheduledTaskStateActive &&
+			current.State != model.ScheduledTaskStatePaused {
+			return model.ScheduledTask{}, ErrInvalidScheduledTaskState
+		}
+		if err := ensureNoScheduledRunInProgress(ctx, tx, id); err != nil {
+			return model.ScheduledTask{}, err
+		}
+		task, err := scanScheduledTask(tx.QueryRow(ctx,
+			`UPDATE scheduled_tasks SET
+			   version = version + 1, state = $1, name = '', compiled_prompt = '',
+			   one_off_at = NULL, dtstart = NULL, rrule = NULL,
+			   execution_mode = '', authorized_tools = '[]'::jsonb,
+			   delivery_policy = 'always', initial_run = 'wait',
+			   stop_condition = '', static_message = '', next_run_at = NULL,
+			   updated_at = NOW()
+			 WHERE id = $2::uuid AND user_id = $3 AND deleted_at IS NULL
+			   AND state = $4 AND version = $5
+			 RETURNING `+scheduledTaskCols,
+			model.ScheduledTaskStateDraft, id, userID, current.State, current.Version))
+		if errors.Is(err, ErrNotFound) {
+			return model.ScheduledTask{}, ErrInvalidScheduledTaskState
+		}
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		return task, nil
+	})
 }
 
 // SaveProposal stores compiler output only if the same owner-scoped draft
@@ -232,63 +220,57 @@ func (r *ScheduledTaskRepository) SaveProposal(ctx context.Context, task model.S
 // ConfirmProposal atomically activates exactly the expected owner-scoped draft
 // revision while enforcing the per-owner active limit under the owner lock.
 func (r *ScheduledTaskRepository) ConfirmProposal(ctx context.Context, id string, userID int64, expectedVersion int, next time.Time) (model.ScheduledTask, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("begin scheduled confirmation: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
-	}
-	current, err := scanScheduledTask(tx.QueryRow(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-		id, userID))
-	if errors.Is(err, ErrNotFound) {
-		return model.ScheduledTask{}, scheduledStaleProposalError()
-	}
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if current.State != model.ScheduledTaskStateDraft || current.Version != expectedVersion || current.CompiledPrompt == "" {
-		return model.ScheduledTask{}, scheduledStaleProposalError()
-	}
-	if r.maxActivePerUser > 0 {
-		var active int
-		if err := tx.QueryRow(ctx,
-			`SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
-			userID, model.ScheduledTaskStateActive, id).Scan(&active); err != nil {
-			return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+	return inTx(ctx, r.pool, "scheduled confirmation", func(tx pgx.Tx) (model.ScheduledTask, error) {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
+			return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
 		}
-		if active >= r.maxActivePerUser {
-			return model.ScheduledTask{}, ErrActiveTaskLimit
+		current, err := scanScheduledTask(tx.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+			id, userID))
+		if errors.Is(err, ErrNotFound) {
+			return model.ScheduledTask{}, scheduledStaleProposalError()
 		}
-	}
-	updated, err := scanScheduledTask(tx.QueryRow(ctx,
-		`UPDATE scheduled_tasks SET state = $1, next_run_at = $2,
-		   delivery_conversation_id = COALESCE(delivery_conversation_id, conversation_id),
-		   updated_at = NOW()
-		 WHERE id = $3::uuid AND user_id = $4 AND deleted_at IS NULL
-		   AND state = $5 AND version = $6 AND compiled_prompt <> ''
-		 RETURNING `+scheduledTaskCols,
-		model.ScheduledTaskStateActive, next, id, userID, model.ScheduledTaskStateDraft, expectedVersion))
-	if errors.Is(err, ErrNotFound) {
-		return model.ScheduledTask{}, scheduledStaleProposalError()
-	}
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if updated.DeliveryConversationID != nil && *updated.DeliveryConversationID == updated.ConversationID {
-		if _, err := tx.Exec(ctx,
-			`UPDATE conversations SET kind = $1 WHERE id = $2::uuid AND user_id = $3 AND kind = $4`,
-			model.ConversationKindChat, updated.ConversationID, userID, model.ConversationKindScheduled); err != nil {
-			return model.ScheduledTask{}, fmt.Errorf("promote scheduled conversation to chat: %w", err)
+		if err != nil {
+			return model.ScheduledTask{}, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("commit scheduled confirmation: %w", err)
-	}
-	return updated, nil
+		if current.State != model.ScheduledTaskStateDraft || current.Version != expectedVersion || current.CompiledPrompt == "" {
+			return model.ScheduledTask{}, scheduledStaleProposalError()
+		}
+		if r.maxActivePerUser > 0 {
+			var active int
+			if err := tx.QueryRow(ctx,
+				`SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
+				userID, model.ScheduledTaskStateActive, id).Scan(&active); err != nil {
+				return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+			}
+			if active >= r.maxActivePerUser {
+				return model.ScheduledTask{}, ErrActiveTaskLimit
+			}
+		}
+		updated, err := scanScheduledTask(tx.QueryRow(ctx,
+			`UPDATE scheduled_tasks SET state = $1, next_run_at = $2,
+			   delivery_conversation_id = COALESCE(delivery_conversation_id, conversation_id),
+			   updated_at = NOW()
+			 WHERE id = $3::uuid AND user_id = $4 AND deleted_at IS NULL
+			   AND state = $5 AND version = $6 AND compiled_prompt <> ''
+			 RETURNING `+scheduledTaskCols,
+			model.ScheduledTaskStateActive, next, id, userID, model.ScheduledTaskStateDraft, expectedVersion))
+		if errors.Is(err, ErrNotFound) {
+			return model.ScheduledTask{}, scheduledStaleProposalError()
+		}
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		if updated.DeliveryConversationID != nil && *updated.DeliveryConversationID == updated.ConversationID {
+			if _, err := tx.Exec(ctx,
+				`UPDATE conversations SET kind = $1 WHERE id = $2::uuid AND user_id = $3 AND kind = $4`,
+				model.ConversationKindChat, updated.ConversationID, userID, model.ConversationKindScheduled); err != nil {
+				return model.ScheduledTask{}, fmt.Errorf("promote scheduled conversation to chat: %w", err)
+			}
+		}
+		return updated, nil
+	})
 }
 
 // scheduledStaleProposalError is deliberately matched by the service using a
@@ -336,91 +318,79 @@ func (r *ScheduledTaskRepository) ListByUser(ctx context.Context, userID int64, 
 // Pause transitions exactly the expected active revision without writing any
 // definition or proposal field.
 func (r *ScheduledTaskRepository) Pause(ctx context.Context, id string, userID int64, expectedVersion int) (model.ScheduledTask, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("begin scheduled pause: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	current, err := scanScheduledTask(tx.QueryRow(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-		id, userID))
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if current.State != model.ScheduledTaskStateActive || current.Version != expectedVersion {
-		return model.ScheduledTask{}, ErrInvalidScheduledTaskState
-	}
-	if err := ensureNoScheduledRunInProgress(ctx, tx, id); err != nil {
-		return model.ScheduledTask{}, err
-	}
-	task, err := scanScheduledTask(tx.QueryRow(ctx,
-		`UPDATE scheduled_tasks SET state = $1, next_run_at = NULL, updated_at = NOW()
-		 WHERE id = $2::uuid AND user_id = $3 AND deleted_at IS NULL
-		   AND state = $4 AND version = $5
-		 RETURNING `+scheduledTaskCols,
-		model.ScheduledTaskStatePaused, id, userID, model.ScheduledTaskStateActive, expectedVersion))
-	if errors.Is(err, ErrNotFound) {
-		return model.ScheduledTask{}, ErrInvalidScheduledTaskState
-	}
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("commit scheduled pause: %w", err)
-	}
-	return task, nil
+	return inTx(ctx, r.pool, "scheduled pause", func(tx pgx.Tx) (model.ScheduledTask, error) {
+		current, err := scanScheduledTask(tx.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+			id, userID))
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		if current.State != model.ScheduledTaskStateActive || current.Version != expectedVersion {
+			return model.ScheduledTask{}, ErrInvalidScheduledTaskState
+		}
+		if err := ensureNoScheduledRunInProgress(ctx, tx, id); err != nil {
+			return model.ScheduledTask{}, err
+		}
+		task, err := scanScheduledTask(tx.QueryRow(ctx,
+			`UPDATE scheduled_tasks SET state = $1, next_run_at = NULL, updated_at = NOW()
+			 WHERE id = $2::uuid AND user_id = $3 AND deleted_at IS NULL
+			   AND state = $4 AND version = $5
+			 RETURNING `+scheduledTaskCols,
+			model.ScheduledTaskStatePaused, id, userID, model.ScheduledTaskStateActive, expectedVersion))
+		if errors.Is(err, ErrNotFound) {
+			return model.ScheduledTask{}, ErrInvalidScheduledTaskState
+		}
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		return task, nil
+	})
 }
 
 // Resume activates exactly the expected proposal-ready paused revision while
 // preserving all definition fields and enforcing the active-task limit.
 func (r *ScheduledTaskRepository) Resume(ctx context.Context, id string, userID int64, expectedVersion int, next time.Time) (model.ScheduledTask, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("begin scheduled resume: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
-	}
-	current, err := scanScheduledTask(tx.QueryRow(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-		id, userID))
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if current.State != model.ScheduledTaskStatePaused || current.Version != expectedVersion || current.CompiledPrompt == "" {
-		return model.ScheduledTask{}, ErrInvalidScheduledTaskState
-	}
-	if r.maxActivePerUser > 0 {
-		var active int
-		if err := tx.QueryRow(ctx,
-			`SELECT COUNT(*) FROM scheduled_tasks
-			 WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
-			userID, model.ScheduledTaskStateActive, id).Scan(&active); err != nil {
-			return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+	return inTx(ctx, r.pool, "scheduled resume", func(tx pgx.Tx) (model.ScheduledTask, error) {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
+			return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
 		}
-		if active >= r.maxActivePerUser {
-			return model.ScheduledTask{}, ErrActiveTaskLimit
+		current, err := scanScheduledTask(tx.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+			id, userID))
+		if err != nil {
+			return model.ScheduledTask{}, err
 		}
-	}
-	resumed, err := scanScheduledTask(tx.QueryRow(ctx,
-		`UPDATE scheduled_tasks SET state = $1, next_run_at = $2, updated_at = NOW()
-		 WHERE id = $3::uuid AND user_id = $4 AND deleted_at IS NULL
-		   AND state = $5 AND version = $6 AND compiled_prompt <> ''
-		 RETURNING `+scheduledTaskCols,
-		model.ScheduledTaskStateActive, next, id, userID, model.ScheduledTaskStatePaused, expectedVersion))
-	if errors.Is(err, ErrNotFound) {
-		return model.ScheduledTask{}, ErrInvalidScheduledTaskState
-	}
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("commit scheduled resume: %w", err)
-	}
-	return resumed, nil
+		if current.State != model.ScheduledTaskStatePaused || current.Version != expectedVersion || current.CompiledPrompt == "" {
+			return model.ScheduledTask{}, ErrInvalidScheduledTaskState
+		}
+		if r.maxActivePerUser > 0 {
+			var active int
+			if err := tx.QueryRow(ctx,
+				`SELECT COUNT(*) FROM scheduled_tasks
+				 WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
+				userID, model.ScheduledTaskStateActive, id).Scan(&active); err != nil {
+				return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+			}
+			if active >= r.maxActivePerUser {
+				return model.ScheduledTask{}, ErrActiveTaskLimit
+			}
+		}
+		resumed, err := scanScheduledTask(tx.QueryRow(ctx,
+			`UPDATE scheduled_tasks SET state = $1, next_run_at = $2, updated_at = NOW()
+			 WHERE id = $3::uuid AND user_id = $4 AND deleted_at IS NULL
+			   AND state = $5 AND version = $6 AND compiled_prompt <> ''
+			 RETURNING `+scheduledTaskCols,
+			model.ScheduledTaskStateActive, next, id, userID, model.ScheduledTaskStatePaused, expectedVersion))
+		if errors.Is(err, ErrNotFound) {
+			return model.ScheduledTask{}, ErrInvalidScheduledTaskState
+		}
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		return resumed, nil
+	})
 }
 
 // Update replaces a non-deleted task definition owned by userID. Activating a
@@ -431,47 +401,41 @@ func (r *ScheduledTaskRepository) Update(ctx context.Context, task model.Schedul
 	if err != nil {
 		return model.ScheduledTask{}, err
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("begin scheduled task update: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
-	}
-	if err := ensureOwnedScheduledConversation(ctx, tx, task.ConversationID, userID); err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if task.State == model.ScheduledTaskStateActive && r.maxActivePerUser > 0 {
-		var active int
-		if err := tx.QueryRow(ctx,
-			`SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
-			userID, model.ScheduledTaskStateActive, task.ID).Scan(&active); err != nil {
-			return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+	return inTx(ctx, r.pool, "scheduled task update", func(tx pgx.Tx) (model.ScheduledTask, error) {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
+			return model.ScheduledTask{}, fmt.Errorf("lock scheduled task owner: %w", err)
 		}
-		if active >= r.maxActivePerUser {
-			return model.ScheduledTask{}, ErrActiveTaskLimit
+		if err := ensureOwnedScheduledConversation(ctx, tx, task.ConversationID, userID); err != nil {
+			return model.ScheduledTask{}, err
 		}
-	}
-	updated, err := scanScheduledTask(tx.QueryRow(ctx,
-		`UPDATE scheduled_tasks SET conversation_id = $1::uuid, version = $2, name = $3, kind = $4, state = $5,
-		 compiled_prompt = $6, one_off_at = $7, dtstart = $8, rrule = NULLIF($9, ''), timezone = $10,
-			 execution_mode = $11, authorized_tools = $12::jsonb, monitoring_state = $13::jsonb,
-			 delivery_policy = $14, initial_run = $15, stop_condition = $16, static_message = $17,
-			 consecutive_failures = $18, next_run_at = $19, last_run_at = $20, updated_at = NOW()
-			 WHERE id = $21::uuid AND user_id = $22 AND deleted_at IS NULL RETURNING `+scheduledTaskCols,
-		task.ConversationID, task.Version, task.Name, task.Kind, task.State, task.CompiledPrompt, task.OneOffAt,
-		task.DTStart, task.RRULE, task.Timezone, task.ExecutionMode, tools, monitoring, task.DeliveryPolicy,
-		task.InitialRun, task.StopCondition, task.StaticMessage, task.ConsecutiveFailures, task.NextRunAt,
-		task.LastRunAt, task.ID, userID,
-	))
-	if err != nil {
-		return model.ScheduledTask{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTask{}, fmt.Errorf("commit scheduled task update: %w", err)
-	}
-	return updated, nil
+		if task.State == model.ScheduledTaskStateActive && r.maxActivePerUser > 0 {
+			var active int
+			if err := tx.QueryRow(ctx,
+				`SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
+				userID, model.ScheduledTaskStateActive, task.ID).Scan(&active); err != nil {
+				return model.ScheduledTask{}, fmt.Errorf("count active scheduled tasks: %w", err)
+			}
+			if active >= r.maxActivePerUser {
+				return model.ScheduledTask{}, ErrActiveTaskLimit
+			}
+		}
+		updated, err := scanScheduledTask(tx.QueryRow(ctx,
+			`UPDATE scheduled_tasks SET conversation_id = $1::uuid, version = $2, name = $3, kind = $4, state = $5,
+			 compiled_prompt = $6, one_off_at = $7, dtstart = $8, rrule = NULLIF($9, ''), timezone = $10,
+				 execution_mode = $11, authorized_tools = $12::jsonb, monitoring_state = $13::jsonb,
+				 delivery_policy = $14, initial_run = $15, stop_condition = $16, static_message = $17,
+				 consecutive_failures = $18, next_run_at = $19, last_run_at = $20, updated_at = NOW()
+				 WHERE id = $21::uuid AND user_id = $22 AND deleted_at IS NULL RETURNING `+scheduledTaskCols,
+			task.ConversationID, task.Version, task.Name, task.Kind, task.State, task.CompiledPrompt, task.OneOffAt,
+			task.DTStart, task.RRULE, task.Timezone, task.ExecutionMode, tools, monitoring, task.DeliveryPolicy,
+			task.InitialRun, task.StopCondition, task.StaticMessage, task.ConsecutiveFailures, task.NextRunAt,
+			task.LastRunAt, task.ID, userID,
+		))
+		if err != nil {
+			return model.ScheduledTask{}, err
+		}
+		return updated, nil
+	})
 }
 
 func ensureOwnedScheduledConversation(ctx context.Context, tx pgx.Tx, conversationID string, userID int64) error {
@@ -490,84 +454,72 @@ func ensureOwnedScheduledConversation(ctx context.Context, tx pgx.Tx, conversati
 
 // SoftDelete marks a task deleted while preserving its audit records.
 func (r *ScheduledTaskRepository) SoftDelete(ctx context.Context, id string, userID int64) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin scheduled task soft delete: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := scanScheduledTask(tx.QueryRow(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-		id, userID)); err != nil {
-		return err
-	}
-	if err := ensureNoScheduledRunInProgress(ctx, tx, id); err != nil {
-		return err
-	}
-	command, err := tx.Exec(ctx,
-		`UPDATE scheduled_tasks SET state = $1, deleted_at = NOW(), updated_at = NOW()
-		 WHERE id = $2::uuid AND user_id = $3 AND deleted_at IS NULL`, model.ScheduledTaskStateDeleted, id, userID)
-	if err != nil {
-		return fmt.Errorf("soft delete scheduled task: %w", err)
-	}
-	if command.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit scheduled task soft delete: %w", err)
-	}
-	return nil
+	return inTxErr(ctx, r.pool, "scheduled task soft delete", func(tx pgx.Tx) error {
+		if _, err := scanScheduledTask(tx.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+			id, userID)); err != nil {
+			return err
+		}
+		if err := ensureNoScheduledRunInProgress(ctx, tx, id); err != nil {
+			return err
+		}
+		command, err := tx.Exec(ctx,
+			`UPDATE scheduled_tasks SET state = $1, deleted_at = NOW(), updated_at = NOW()
+			 WHERE id = $2::uuid AND user_id = $3 AND deleted_at IS NULL`, model.ScheduledTaskStateDeleted, id, userID)
+		if err != nil {
+			return fmt.Errorf("soft delete scheduled task: %w", err)
+		}
+		if command.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // PauseByConversation pauses any live task linked to the owner's Scheduled
 // conversation. The conversation itself is intentionally retained: the task
 // FK is restrictive so its immutable run audit and definition history survive.
 func (r *ScheduledTaskRepository) PauseByConversation(ctx context.Context, conversationID string, userID int64) (bool, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("begin pause scheduled conversation task: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx,
-		`SELECT id::text FROM scheduled_tasks
-		 WHERE conversation_id = $1::uuid AND user_id = $2 AND deleted_at IS NULL
-		 ORDER BY id FOR UPDATE`,
-		conversationID, userID)
-	if err != nil {
-		return false, fmt.Errorf("find scheduled conversation task: %w", err)
-	}
-	var taskIDs []string
-	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
+	return inTx(ctx, r.pool, "pause scheduled conversation task", func(tx pgx.Tx) (bool, error) {
+		rows, err := tx.Query(ctx,
+			`SELECT id::text FROM scheduled_tasks
+			 WHERE conversation_id = $1::uuid AND user_id = $2 AND deleted_at IS NULL
+			 ORDER BY id FOR UPDATE`,
+			conversationID, userID)
+		if err != nil {
+			return false, fmt.Errorf("find scheduled conversation task: %w", err)
+		}
+		var taskIDs []string
+		for rows.Next() {
+			var taskID string
+			if err := rows.Scan(&taskID); err != nil {
+				rows.Close()
+				return false, fmt.Errorf("scan scheduled conversation task: %w", err)
+			}
+			taskIDs = append(taskIDs, taskID)
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
-			return false, fmt.Errorf("scan scheduled conversation task: %w", err)
+			return false, fmt.Errorf("find scheduled conversation tasks: %w", err)
 		}
-		taskIDs = append(taskIDs, taskID)
-	}
-	if err := rows.Err(); err != nil {
 		rows.Close()
-		return false, fmt.Errorf("find scheduled conversation tasks: %w", err)
-	}
-	rows.Close()
-	if len(taskIDs) == 0 {
-		return false, nil
-	}
-	for _, taskID := range taskIDs {
-		if err := ensureNoScheduledRunInProgress(ctx, tx, taskID); err != nil {
-			return false, err
+		if len(taskIDs) == 0 {
+			return false, nil
 		}
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE scheduled_tasks SET state = $1, updated_at = NOW()
-		 WHERE conversation_id = $2::uuid AND user_id = $3 AND state = $4 AND deleted_at IS NULL`,
-		model.ScheduledTaskStatePaused, conversationID, userID, model.ScheduledTaskStateActive); err != nil {
-		return false, fmt.Errorf("pause scheduled conversation task: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit pause scheduled conversation task: %w", err)
-	}
-	return true, nil
+		for _, taskID := range taskIDs {
+			if err := ensureNoScheduledRunInProgress(ctx, tx, taskID); err != nil {
+				return false, err
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE scheduled_tasks SET state = $1, updated_at = NOW()
+			 WHERE conversation_id = $2::uuid AND user_id = $3 AND state = $4 AND deleted_at IS NULL`,
+			model.ScheduledTaskStatePaused, conversationID, userID, model.ScheduledTaskStateActive); err != nil {
+			return false, fmt.Errorf("pause scheduled conversation task: %w", err)
+		}
+		return true, nil
+	})
 }
 
 func ensureNoScheduledRunInProgress(ctx context.Context, tx pgx.Tx, taskID string) error {
@@ -709,58 +661,52 @@ func (r *ScheduledTaskRepository) CreateRun(ctx context.Context, userID int64, r
 // RunNow atomically validates and activates an owner-scoped confirmed task,
 // creates one pending manual occurrence, and makes that exact occurrence due.
 func (r *ScheduledTaskRepository) RunNow(ctx context.Context, userID int64, taskID, occurrenceKey string, now time.Time) (model.ScheduledTaskRun, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.ScheduledTaskRun{}, fmt.Errorf("begin scheduled manual run: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
-		return model.ScheduledTaskRun{}, fmt.Errorf("lock scheduled task owner: %w", err)
-	}
-	task, err := scanScheduledTask(tx.QueryRow(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
-		taskID, userID))
-	if err != nil {
-		return model.ScheduledTaskRun{}, err
-	}
-	if (task.State != model.ScheduledTaskStateActive && task.State != model.ScheduledTaskStatePaused) || task.CompiledPrompt == "" {
-		return model.ScheduledTaskRun{}, ErrInvalidScheduledTaskState
-	}
-	if err := ensureNoScheduledRunInProgress(ctx, tx, taskID); err != nil {
-		return model.ScheduledTaskRun{}, err
-	}
-	if task.State == model.ScheduledTaskStatePaused && r.maxActivePerUser > 0 {
-		var active int
-		if err := tx.QueryRow(ctx,
-			`SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
-			userID, model.ScheduledTaskStateActive, taskID).Scan(&active); err != nil {
-			return model.ScheduledTaskRun{}, fmt.Errorf("count active scheduled tasks: %w", err)
+	return inTx(ctx, r.pool, "scheduled manual run", func(tx pgx.Tx) (model.ScheduledTaskRun, error) {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userID); err != nil {
+			return model.ScheduledTaskRun{}, fmt.Errorf("lock scheduled task owner: %w", err)
 		}
-		if active >= r.maxActivePerUser {
-			return model.ScheduledTaskRun{}, ErrActiveTaskLimit
+		task, err := scanScheduledTask(tx.QueryRow(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE id = $1::uuid AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+			taskID, userID))
+		if err != nil {
+			return model.ScheduledTaskRun{}, err
 		}
-	}
-	run, err := scanScheduledTaskRun(tx.QueryRow(ctx,
-		`INSERT INTO scheduled_task_runs (task_id, occurrence_key, scheduled_for, state)
-		 VALUES ($1::uuid, $2, $3, $4) RETURNING `+scheduledTaskRunCols,
-		taskID, occurrenceKey, now, model.ScheduledTaskRunStatePending))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return model.ScheduledTaskRun{}, ErrOccurrenceTaken
+		if (task.State != model.ScheduledTaskStateActive && task.State != model.ScheduledTaskStatePaused) || task.CompiledPrompt == "" {
+			return model.ScheduledTaskRun{}, ErrInvalidScheduledTaskState
 		}
-		return model.ScheduledTaskRun{}, err
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE scheduled_tasks SET state = $1, next_run_at = $2, updated_at = $2
-		 WHERE id = $3::uuid`,
-		model.ScheduledTaskStateActive, now, taskID); err != nil {
-		return model.ScheduledTaskRun{}, fmt.Errorf("make manual scheduled run due: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.ScheduledTaskRun{}, fmt.Errorf("commit scheduled manual run: %w", err)
-	}
-	return run, nil
+		if err := ensureNoScheduledRunInProgress(ctx, tx, taskID); err != nil {
+			return model.ScheduledTaskRun{}, err
+		}
+		if task.State == model.ScheduledTaskStatePaused && r.maxActivePerUser > 0 {
+			var active int
+			if err := tx.QueryRow(ctx,
+				`SELECT COUNT(*) FROM scheduled_tasks WHERE user_id = $1 AND state = $2 AND deleted_at IS NULL AND id <> $3::uuid`,
+				userID, model.ScheduledTaskStateActive, taskID).Scan(&active); err != nil {
+				return model.ScheduledTaskRun{}, fmt.Errorf("count active scheduled tasks: %w", err)
+			}
+			if active >= r.maxActivePerUser {
+				return model.ScheduledTaskRun{}, ErrActiveTaskLimit
+			}
+		}
+		run, err := scanScheduledTaskRun(tx.QueryRow(ctx,
+			`INSERT INTO scheduled_task_runs (task_id, occurrence_key, scheduled_for, state)
+			 VALUES ($1::uuid, $2, $3, $4) RETURNING `+scheduledTaskRunCols,
+			taskID, occurrenceKey, now, model.ScheduledTaskRunStatePending))
+		if err != nil {
+			if isUniqueViolation(err) {
+				return model.ScheduledTaskRun{}, ErrOccurrenceTaken
+			}
+			return model.ScheduledTaskRun{}, err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE scheduled_tasks SET state = $1, next_run_at = $2, updated_at = $2
+			 WHERE id = $3::uuid`,
+			model.ScheduledTaskStateActive, now, taskID); err != nil {
+			return model.ScheduledTaskRun{}, fmt.Errorf("make manual scheduled run due: %w", err)
+		}
+		return run, nil
+	})
 }
 
 // ClaimDue atomically locks due tasks, creates one running run for each, and
@@ -769,75 +715,69 @@ func (r *ScheduledTaskRepository) ClaimDue(ctx context.Context, now time.Time, l
 	if limit <= 0 {
 		return nil, nil
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin scheduled claim: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx,
-		`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
-		 WHERE state = $1 AND deleted_at IS NULL AND next_run_at <= $2
-		 ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT $3`, model.ScheduledTaskStateActive, now, limit)
-	if err != nil {
-		return nil, fmt.Errorf("select due scheduled tasks: %w", err)
-	}
-	defer rows.Close()
-	var due []model.ScheduledTask
-	for rows.Next() {
-		task, err := scanScheduledTask(rows)
+	return inTx(ctx, r.pool, "scheduled claim", func(tx pgx.Tx) ([]model.ClaimedScheduledTask, error) {
+		rows, err := tx.Query(ctx,
+			`SELECT `+scheduledTaskCols+` FROM scheduled_tasks
+			 WHERE state = $1 AND deleted_at IS NULL AND next_run_at <= $2
+			 ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT $3`, model.ScheduledTaskStateActive, now, limit)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("select due scheduled tasks: %w", err)
 		}
-		due = append(due, task)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
-
-	claimed := make([]model.ClaimedScheduledTask, 0, len(due))
-	for _, task := range due {
-		if task.NextRunAt == nil {
-			return nil, errors.New("scheduled: due task has no next run")
-		}
-		run, err := scanScheduledTaskRun(tx.QueryRow(ctx,
-			`UPDATE scheduled_task_runs SET state = $1, started_at = $2
-			 WHERE id = (
-			   SELECT id FROM scheduled_task_runs
-			   WHERE task_id = $3::uuid AND state = $4 AND occurrence_key LIKE 'manual:%'
-			   ORDER BY created_at LIMIT 1 FOR UPDATE
-			 )
-			 RETURNING `+scheduledTaskRunCols,
-			model.ScheduledTaskRunStateRunning, now, task.ID, model.ScheduledTaskRunStatePending))
-		if errors.Is(err, ErrNotFound) {
-			run, err = scanScheduledTaskRun(tx.QueryRow(ctx,
-				`INSERT INTO scheduled_task_runs (task_id, occurrence_key, scheduled_for, state, started_at)
-				 VALUES ($1::uuid, $2, $3, $4, $5) RETURNING `+scheduledTaskRunCols,
-				task.ID, task.NextRunAt.UTC().Format(time.RFC3339Nano), *task.NextRunAt, model.ScheduledTaskRunStateRunning, now))
-			if err != nil && isUniqueViolation(err) {
-				return nil, ErrOccurrenceTaken
+		defer rows.Close()
+		var due []model.ScheduledTask
+		for rows.Next() {
+			task, err := scanScheduledTask(rows)
+			if err != nil {
+				return nil, err
 			}
+			due = append(due, task)
 		}
-		if err != nil {
+		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET last_run_at = next_run_at, next_run_at = NULL, updated_at = $1 WHERE id = $2::uuid`, now, task.ID); err != nil {
-			return nil, fmt.Errorf("advance claimed scheduled task: %w", err)
+		rows.Close()
+
+		claimed := make([]model.ClaimedScheduledTask, 0, len(due))
+		for _, task := range due {
+			if task.NextRunAt == nil {
+				return nil, errors.New("scheduled: due task has no next run")
+			}
+			run, err := scanScheduledTaskRun(tx.QueryRow(ctx,
+				`UPDATE scheduled_task_runs SET state = $1, started_at = $2
+				 WHERE id = (
+				   SELECT id FROM scheduled_task_runs
+				   WHERE task_id = $3::uuid AND state = $4 AND occurrence_key LIKE 'manual:%'
+				   ORDER BY created_at LIMIT 1 FOR UPDATE
+				 )
+				 RETURNING `+scheduledTaskRunCols,
+				model.ScheduledTaskRunStateRunning, now, task.ID, model.ScheduledTaskRunStatePending))
+			if errors.Is(err, ErrNotFound) {
+				run, err = scanScheduledTaskRun(tx.QueryRow(ctx,
+					`INSERT INTO scheduled_task_runs (task_id, occurrence_key, scheduled_for, state, started_at)
+					 VALUES ($1::uuid, $2, $3, $4, $5) RETURNING `+scheduledTaskRunCols,
+					task.ID, task.NextRunAt.UTC().Format(time.RFC3339Nano), *task.NextRunAt, model.ScheduledTaskRunStateRunning, now))
+				if err != nil && isUniqueViolation(err) {
+					return nil, ErrOccurrenceTaken
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET last_run_at = next_run_at, next_run_at = NULL, updated_at = $1 WHERE id = $2::uuid`, now, task.ID); err != nil {
+				return nil, fmt.Errorf("advance claimed scheduled task: %w", err)
+			}
+			firstRun := task.LastRunAt == nil
+			var username string
+			if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, task.UserID).Scan(&username); err != nil {
+				return nil, fmt.Errorf("resolve scheduled task owner: %w", err)
+			}
+			task.LastRunAt = new(run.ScheduledFor)
+			task.NextRunAt = nil
+			task.UpdatedAt = now
+			claimed = append(claimed, model.ClaimedScheduledTask{Task: task, Run: run, FirstRun: firstRun, Username: username})
 		}
-		firstRun := task.LastRunAt == nil
-		var username string
-		if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, task.UserID).Scan(&username); err != nil {
-			return nil, fmt.Errorf("resolve scheduled task owner: %w", err)
-		}
-		task.LastRunAt = new(run.ScheduledFor)
-		task.NextRunAt = nil
-		task.UpdatedAt = now
-		claimed = append(claimed, model.ClaimedScheduledTask{Task: task, Run: run, FirstRun: firstRun, Username: username})
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit scheduled claim: %w", err)
-	}
-	return claimed, nil
+		return claimed, nil
+	})
 }
 
 // ListStaleRunning returns started occurrences older than before. It does not
@@ -921,74 +861,68 @@ func (r *ScheduledTaskRepository) FinishSuccess(ctx context.Context, success mod
 	if visible != success.Unread || visible != (success.Content != "") {
 		return errors.New("store: inconsistent scheduled delivery")
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin scheduled success: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var taskID, conversationID, currentTaskState, deliveryConversationID string
-	err = tx.QueryRow(ctx,
-		`SELECT task.id::text, task.conversation_id::text, task.state,
-		        COALESCE(task.delivery_conversation_id::text, task.conversation_id::text)
-		 FROM scheduled_task_runs AS run
-		 JOIN scheduled_tasks AS task ON task.id = run.task_id
-		 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
-		 FOR UPDATE OF run, task`,
-		success.RunID, success.UserID, model.ScheduledTaskRunStateRunning).
-		Scan(&taskID, &conversationID, &currentTaskState, &deliveryConversationID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("lock scheduled success: %w", err)
-	}
-	if success.ConversationID != conversationID {
-		return ErrNotFound
-	}
-	taskState := success.TaskState
-	nextRunAt := success.NextRunAt
-	if currentTaskState != model.ScheduledTaskStateActive {
-		taskState = currentTaskState
-		nextRunAt = nil
-	}
-	if visible {
-		var deliveryMessageID int64
-		if err := tx.QueryRow(ctx,
-			`INSERT INTO messages (conversation_id, role, content, purpose)
-			 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')
-			 RETURNING id`,
-			deliveryConversationID, model.MsgRoleAssistant, success.Content).Scan(&deliveryMessageID); err != nil {
-			return fmt.Errorf("insert scheduled delivery: %w", err)
+	return inTxErr(ctx, r.pool, "scheduled success", func(tx pgx.Tx) error {
+		var taskID, conversationID, currentTaskState, deliveryConversationID string
+		err := tx.QueryRow(ctx,
+			`SELECT task.id::text, task.conversation_id::text, task.state,
+			        COALESCE(task.delivery_conversation_id::text, task.conversation_id::text)
+			 FROM scheduled_task_runs AS run
+			 JOIN scheduled_tasks AS task ON task.id = run.task_id
+			 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
+			 FOR UPDATE OF run, task`,
+			success.RunID, success.UserID, model.ScheduledTaskRunStateRunning).
+			Scan(&taskID, &conversationID, &currentTaskState, &deliveryConversationID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock scheduled success: %w", err)
+		}
+		if success.ConversationID != conversationID {
+			return ErrNotFound
+		}
+		taskState := success.TaskState
+		nextRunAt := success.NextRunAt
+		if currentTaskState != model.ScheduledTaskStateActive {
+			taskState = currentTaskState
+			nextRunAt = nil
+		}
+		if visible {
+			var deliveryMessageID int64
+			if err := tx.QueryRow(ctx,
+				`INSERT INTO messages (conversation_id, role, content, purpose)
+				 VALUES ($1::uuid, $2, $3, 'scheduled_delivery')
+				 RETURNING id`,
+				deliveryConversationID, model.MsgRoleAssistant, success.Content).Scan(&deliveryMessageID); err != nil {
+				return fmt.Errorf("insert scheduled delivery: %w", err)
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE conversations SET last_activity_at = GREATEST(last_activity_at, NOW())
+				 WHERE id = $1::uuid AND kind = $2`,
+				deliveryConversationID, model.ConversationKindChat); err != nil {
+				return fmt.Errorf("bump delivery conversation activity: %w", err)
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE scheduled_task_runs SET delivery_message_id = $1 WHERE id = $2`,
+				deliveryMessageID, success.RunID); err != nil {
+				return fmt.Errorf("record delivery message id: %w", err)
+			}
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE conversations SET last_activity_at = GREATEST(last_activity_at, NOW())
-			 WHERE id = $1::uuid AND kind = $2`,
-			deliveryConversationID, model.ConversationKindChat); err != nil {
-			return fmt.Errorf("bump delivery conversation activity: %w", err)
+			`UPDATE scheduled_task_runs SET state = $1, result = $2, unread = $3, finished_at = NOW()
+			 WHERE id = $4 AND state = $5`,
+			success.RunState, success.Content, success.Unread, success.RunID, model.ScheduledTaskRunStateRunning); err != nil {
+			return fmt.Errorf("finish scheduled success run: %w", err)
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE scheduled_task_runs SET delivery_message_id = $1 WHERE id = $2`,
-			deliveryMessageID, success.RunID); err != nil {
-			return fmt.Errorf("record delivery message id: %w", err)
+			`UPDATE scheduled_tasks SET state = $1, monitoring_state = $2::jsonb,
+			   consecutive_failures = 0, next_run_at = $3, updated_at = NOW()
+			 WHERE id = $4::uuid`,
+			taskState, success.MonitoringState, nextRunAt, taskID); err != nil {
+			return fmt.Errorf("finish scheduled success task: %w", err)
 		}
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE scheduled_task_runs SET state = $1, result = $2, unread = $3, finished_at = NOW()
-		 WHERE id = $4 AND state = $5`,
-		success.RunState, success.Content, success.Unread, success.RunID, model.ScheduledTaskRunStateRunning); err != nil {
-		return fmt.Errorf("finish scheduled success run: %w", err)
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE scheduled_tasks SET state = $1, monitoring_state = $2::jsonb,
-		   consecutive_failures = 0, next_run_at = $3, updated_at = NOW()
-		 WHERE id = $4::uuid`,
-		taskState, success.MonitoringState, nextRunAt, taskID); err != nil {
-		return fmt.Errorf("finish scheduled success task: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit scheduled success: %w", err)
-	}
-	return nil
+		return nil
+	})
 }
 
 // FinishFailure atomically fails only a still-running owner-scoped occurrence,
@@ -999,92 +933,80 @@ func (r *ScheduledTaskRepository) FinishFailure(ctx context.Context, failure mod
 	if code == "" {
 		code = defaultScheduledFailureCode
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin scheduled execution failure: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var taskID, currentTaskState string
-	var failures int
-	err = tx.QueryRow(ctx,
-		`SELECT task.id::text, task.state, task.consecutive_failures
-		 FROM scheduled_task_runs AS run
-		 JOIN scheduled_tasks AS task ON task.id = run.task_id
-		 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
-		 FOR UPDATE OF run, task`,
-		failure.RunID, failure.UserID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &currentTaskState, &failures)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("lock scheduled execution failure: %w", err)
-	}
-	taskState := failure.TaskState
-	nextRunAt := failure.NextRunAt
-	nextFailures := failures
-	if failure.IncrementFailures {
-		nextFailures++
-	}
-	if failure.Pause || (failure.IncrementFailures && nextFailures >= 3) {
-		taskState = model.ScheduledTaskStatePaused
-		nextRunAt = nil
-	}
-	if currentTaskState != model.ScheduledTaskStateActive {
-		taskState = currentTaskState
-		nextRunAt = nil
-	}
-	if taskState != model.ScheduledTaskStateActive &&
-		taskState != model.ScheduledTaskStatePaused &&
-		taskState != model.ScheduledTaskStateCompleted &&
-		taskState != model.ScheduledTaskStateFailed &&
-		taskState != model.ScheduledTaskStateDeleted {
-		return errors.New("store: invalid scheduled failure task state")
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE scheduled_task_runs SET state = $1, error = $2, finished_at = NOW()
-		 WHERE id = $3 AND state = $4`,
-		model.ScheduledTaskRunStateFailed, code, failure.RunID, model.ScheduledTaskRunStateRunning); err != nil {
-		return fmt.Errorf("finish scheduled failed run: %w", err)
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE scheduled_tasks SET consecutive_failures = $1, state = $2, next_run_at = $3, updated_at = NOW()
-		 WHERE id = $4::uuid`,
-		nextFailures, taskState, nextRunAt, taskID); err != nil {
-		return fmt.Errorf("finish scheduled failed task: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit scheduled execution failure: %w", err)
-	}
-	return nil
+	return inTxErr(ctx, r.pool, "scheduled execution failure", func(tx pgx.Tx) error {
+		var taskID, currentTaskState string
+		var failures int
+		err := tx.QueryRow(ctx,
+			`SELECT task.id::text, task.state, task.consecutive_failures
+			 FROM scheduled_task_runs AS run
+			 JOIN scheduled_tasks AS task ON task.id = run.task_id
+			 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3
+			 FOR UPDATE OF run, task`,
+			failure.RunID, failure.UserID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &currentTaskState, &failures)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock scheduled execution failure: %w", err)
+		}
+		taskState := failure.TaskState
+		nextRunAt := failure.NextRunAt
+		nextFailures := failures
+		if failure.IncrementFailures {
+			nextFailures++
+		}
+		if failure.Pause || (failure.IncrementFailures && nextFailures >= 3) {
+			taskState = model.ScheduledTaskStatePaused
+			nextRunAt = nil
+		}
+		if currentTaskState != model.ScheduledTaskStateActive {
+			taskState = currentTaskState
+			nextRunAt = nil
+		}
+		if taskState != model.ScheduledTaskStateActive &&
+			taskState != model.ScheduledTaskStatePaused &&
+			taskState != model.ScheduledTaskStateCompleted &&
+			taskState != model.ScheduledTaskStateFailed &&
+			taskState != model.ScheduledTaskStateDeleted {
+			return errors.New("store: invalid scheduled failure task state")
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE scheduled_task_runs SET state = $1, error = $2, finished_at = NOW()
+			 WHERE id = $3 AND state = $4`,
+			model.ScheduledTaskRunStateFailed, code, failure.RunID, model.ScheduledTaskRunStateRunning); err != nil {
+			return fmt.Errorf("finish scheduled failed run: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE scheduled_tasks SET consecutive_failures = $1, state = $2, next_run_at = $3, updated_at = NOW()
+			 WHERE id = $4::uuid`,
+			nextFailures, taskState, nextRunAt, taskID); err != nil {
+			return fmt.Errorf("finish scheduled failed task: %w", err)
+		}
+		return nil
+	})
 }
 
 // MarkDelivered completes a running run with a user-visible result.
 func (r *ScheduledTaskRepository) MarkDelivered(ctx context.Context, runID, userID int64, result string) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin scheduled delivery: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var taskID string
-	err = tx.QueryRow(ctx,
-		`UPDATE scheduled_task_runs AS run SET state = $1, result = $2, unread = TRUE, finished_at = NOW()
-		 FROM scheduled_tasks AS task
-		 WHERE run.id = $3 AND run.task_id = task.id AND task.user_id = $4 AND run.state = $5
-		 RETURNING task.id::text`,
-		model.ScheduledTaskRunStateDelivered, result, runID, userID, model.ScheduledTaskRunStateRunning).Scan(&taskID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("mark scheduled delivery: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET consecutive_failures = 0, updated_at = NOW() WHERE id = $1::uuid`, taskID); err != nil {
-		return fmt.Errorf("reset scheduled task failures: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit scheduled delivery: %w", err)
-	}
-	return nil
+	return inTxErr(ctx, r.pool, "scheduled delivery", func(tx pgx.Tx) error {
+		var taskID string
+		err := tx.QueryRow(ctx,
+			`UPDATE scheduled_task_runs AS run SET state = $1, result = $2, unread = TRUE, finished_at = NOW()
+			 FROM scheduled_tasks AS task
+			 WHERE run.id = $3 AND run.task_id = task.id AND task.user_id = $4 AND run.state = $5
+			 RETURNING task.id::text`,
+			model.ScheduledTaskRunStateDelivered, result, runID, userID, model.ScheduledTaskRunStateRunning).Scan(&taskID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("mark scheduled delivery: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET consecutive_failures = 0, updated_at = NOW() WHERE id = $1::uuid`, taskID); err != nil {
+			return fmt.Errorf("reset scheduled task failures: %w", err)
+		}
+		return nil
+	})
 }
 
 // MarkRead clears unread delivery state for all of one owner's task runs.
@@ -1122,38 +1044,32 @@ func (r *ScheduledTaskRepository) RecordFailure(ctx context.Context, runID, user
 	if failure == "" {
 		failure = defaultScheduledFailureCode
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin scheduled failure: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var taskID string
-	var failures int
-	err = tx.QueryRow(ctx,
-		`SELECT task.id::text, task.consecutive_failures FROM scheduled_task_runs AS run
-		 JOIN scheduled_tasks AS task ON task.id = run.task_id
-		 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3 FOR UPDATE OF task`,
-		runID, userID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &failures)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("lock scheduled failure task: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE scheduled_task_runs SET state = $1, error = $2, finished_at = NOW() WHERE id = $3`, model.ScheduledTaskRunStateFailed, failure, runID); err != nil {
-		return fmt.Errorf("fail scheduled run: %w", err)
-	}
-	state := model.ScheduledTaskStateActive
-	if failures+1 >= 3 {
-		state = model.ScheduledTaskStatePaused
-	}
-	if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET consecutive_failures = $1, state = $2, updated_at = NOW() WHERE id = $3::uuid`, failures+1, state, taskID); err != nil {
-		return fmt.Errorf("record scheduled task failure: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit scheduled failure: %w", err)
-	}
-	return nil
+	return inTxErr(ctx, r.pool, "scheduled failure", func(tx pgx.Tx) error {
+		var taskID string
+		var failures int
+		err := tx.QueryRow(ctx,
+			`SELECT task.id::text, task.consecutive_failures FROM scheduled_task_runs AS run
+			 JOIN scheduled_tasks AS task ON task.id = run.task_id
+			 WHERE run.id = $1 AND task.user_id = $2 AND run.state = $3 FOR UPDATE OF task`,
+			runID, userID, model.ScheduledTaskRunStateRunning).Scan(&taskID, &failures)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock scheduled failure task: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE scheduled_task_runs SET state = $1, error = $2, finished_at = NOW() WHERE id = $3`, model.ScheduledTaskRunStateFailed, failure, runID); err != nil {
+			return fmt.Errorf("fail scheduled run: %w", err)
+		}
+		state := model.ScheduledTaskStateActive
+		if failures+1 >= 3 {
+			state = model.ScheduledTaskStatePaused
+		}
+		if _, err := tx.Exec(ctx, `UPDATE scheduled_tasks SET consecutive_failures = $1, state = $2, updated_at = NOW() WHERE id = $3::uuid`, failures+1, state, taskID); err != nil {
+			return fmt.Errorf("record scheduled task failure: %w", err)
+		}
+		return nil
+	})
 }
 
 const (

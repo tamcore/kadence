@@ -240,18 +240,12 @@ func (r *ScheduledHandoffRepository) ListPendingBySourceConversation(
 // DiscardDraft deletes one unconfirmed Scheduled draft and its definition
 // conversation, retaining a durable dismissed source-slot tombstone.
 func (r *ScheduledHandoffRepository) DiscardDraft(ctx context.Context, userID int64, taskID string) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin discard chat handoff draft: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := discardDraftTask(ctx, tx, userID, taskID, true); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit discard chat handoff draft: %w", err)
-	}
-	return nil
+	return inTxErr(ctx, r.pool, "discard chat handoff draft", func(tx pgx.Tx) error {
+		if err := discardDraftTask(ctx, tx, userID, taskID, true); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // CleanupDrafts hard-deletes only supplied owner-scoped draft artifacts. It
@@ -260,18 +254,12 @@ func (r *ScheduledHandoffRepository) CleanupDrafts(ctx context.Context, userID i
 	if len(handoffIDs) == 0 {
 		return nil
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin cleanup chat handoff drafts: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := cleanupDraftHandoffs(ctx, tx, userID, handoffIDs); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit cleanup chat handoff drafts: %w", err)
-	}
-	return nil
+	return inTxErr(ctx, r.pool, "cleanup chat handoff drafts", func(tx pgx.Tx) error {
+		if err := cleanupDraftHandoffs(ctx, tx, userID, handoffIDs); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 const handoffHydrationQuery = `SELECT ` + handoffCols + `,

@@ -96,3 +96,11 @@ func inTx[T any](ctx context.Context, pool *pgxpool.Pool, wrap string, fn func(p
 	}
 	return out, nil
 }
+
+// inTxErr is inTx for operations that produce no value beyond success.
+func inTxErr(ctx context.Context, pool *pgxpool.Pool, wrap string, fn func(pgx.Tx) error) error {
+	_, err := inTx(ctx, pool, wrap, func(tx pgx.Tx) (struct{}, error) {
+		return struct{}{}, fn(tx)
+	})
+	return err
+}
