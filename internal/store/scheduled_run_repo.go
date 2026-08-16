@@ -45,16 +45,8 @@ func (r *ScheduledTaskRepository) ListRuns(ctx context.Context, taskID string, u
 	if err != nil {
 		return nil, fmt.Errorf("list scheduled task runs: %w", err)
 	}
-	defer rows.Close()
-	runs := make([]model.ScheduledTaskRun, 0)
-	for rows.Next() {
-		run, err := scanScheduledTaskRun(rows)
-		if err != nil {
-			return nil, err
-		}
-		runs = append(runs, run)
-	}
-	if err := rows.Err(); err != nil {
+	runs, err := collectRows(rows, "list scheduled task runs", scanScheduledTaskRun)
+	if err != nil {
 		return nil, err
 	}
 	if len(runs) == 0 {

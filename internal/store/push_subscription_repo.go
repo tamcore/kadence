@@ -21,7 +21,7 @@ func NewPushSubscriptionRepository(pool *pgxpool.Pool) *PushSubscriptionReposito
 
 const pushSubCols = `id::text, user_id, endpoint, p256dh, auth, user_agent, created_at, last_success_at, failure_count`
 
-func scanPushSub(row pgx.Row) (model.PushSubscription, error) {
+func scanPushSub(row rowScanner) (model.PushSubscription, error) {
 	var s model.PushSubscription
 	err := row.Scan(&s.ID, &s.UserID, &s.Endpoint, &s.P256dh, &s.Auth, &s.UserAgent, &s.CreatedAt, &s.LastSuccessAt, &s.FailureCount)
 	return s, err
@@ -66,16 +66,7 @@ func (r *PushSubscriptionRepository) ListByUser(ctx context.Context, userID int6
 	if err != nil {
 		return nil, fmt.Errorf("list push subscriptions: %w", err)
 	}
-	defer rows.Close()
-	var out []model.PushSubscription
-	for rows.Next() {
-		s, err := scanPushSub(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan push subscription: %w", err)
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collectRows(rows, "list push subscriptions", scanPushSub)
 }
 
 // IncrementFailure bumps the failure count for id and returns the new value.

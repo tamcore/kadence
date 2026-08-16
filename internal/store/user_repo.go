@@ -33,7 +33,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{pool: pool}
 }
 
-func scanUser(row pgx.Row) (model.User, error) {
+func scanUser(row rowScanner) (model.User, error) {
 	var u model.User
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.DisplayName, &u.UnitSystem,
 		&u.Location, &u.AboutMe, &u.Timezone, &u.CreatedAt, &u.WebAuthnHandle)
@@ -75,16 +75,7 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]model.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
-	defer rows.Close()
-	var out []model.User
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return collectRows(rows, "list users", scanUser)
 }
 
 // Delete removes a user by id.

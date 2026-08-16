@@ -104,3 +104,14 @@ func inTxErr(ctx context.Context, pool *pgxpool.Pool, wrap string, fn func(pgx.T
 	})
 	return err
 }
+
+// collectRows drains rows through scan and wraps any failure. It replaces the
+// hand-written next/scan/append loop each repository used to repeat.
+func collectRows[T any](rows pgx.Rows, wrap string, scan func(rowScanner) (T, error)) ([]T, error) {
+	defer rows.Close()
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (T, error) { return scan(row) })
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", wrap, err)
+	}
+	return out, nil
+}

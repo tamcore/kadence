@@ -302,16 +302,7 @@ func (r *ScheduledTaskRepository) ListByUser(ctx context.Context, userID int64, 
 	if err != nil {
 		return nil, fmt.Errorf("list scheduled tasks: %w", err)
 	}
-	defer rows.Close()
-	var tasks []model.ScheduledTask
-	for rows.Next() {
-		task, err := scanScheduledTask(rows)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
-	}
-	return tasks, rows.Err()
+	return collectRows(rows, "list scheduled tasks", scanScheduledTask)
 }
 
 // Pause transitions exactly the expected active revision without writing any

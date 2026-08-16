@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -22,7 +21,7 @@ func NewWebAuthnCredentialRepository(pool *pgxpool.Pool) *WebAuthnCredentialRepo
 	return &WebAuthnCredentialRepository{pool: pool}
 }
 
-func scanWebAuthnCred(row pgx.Row) (model.WebAuthnCredential, error) {
+func scanWebAuthnCred(row rowScanner) (model.WebAuthnCredential, error) {
 	var c model.WebAuthnCredential
 	var signCount int64
 	err := row.Scan(&c.ID, &c.PublicID, &c.UserID, &c.CredentialID, &c.PublicKey,
@@ -61,19 +60,7 @@ func (r *WebAuthnCredentialRepository) ListByUser(ctx context.Context, userID in
 	if err != nil {
 		return nil, fmt.Errorf("list webauthn credentials: %w", err)
 	}
-	defer rows.Close()
-	out := make([]model.WebAuthnCredential, 0)
-	for rows.Next() {
-		c, err := scanWebAuthnCred(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan webauthn credential: %w", err)
-		}
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list webauthn credentials: %w", err)
-	}
-	return out, nil
+	return collectRows(rows, "list webauthn credentials", scanWebAuthnCred)
 }
 
 // Rename sets a credential's name, owner-scoped.
