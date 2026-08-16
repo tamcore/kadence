@@ -28,7 +28,6 @@ func newUser(t *testing.T, repo *store.UserRepository, name string) model.User {
 
 func TestSessionCreateGetDelete(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -52,7 +51,6 @@ func TestSessionCreateGetDelete(t *testing.T) {
 
 func TestSessionExpiredIsNotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -66,7 +64,6 @@ func TestSessionExpiredIsNotFound(t *testing.T) {
 
 func TestSessionDeleteAllByUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -84,7 +81,6 @@ func TestSessionDeleteAllByUser(t *testing.T) {
 
 func TestSessionDeleteOthersByUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -116,7 +112,6 @@ func TestSessionDeleteOthersByUser(t *testing.T) {
 
 func TestSessionDeleteExpired(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -146,7 +141,6 @@ func TestSessionDeleteExpired(t *testing.T) {
 
 func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	repo := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -202,7 +196,6 @@ func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 // value itself.
 func TestSessionCreateGetRoundTripsThroughHash(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -231,7 +224,6 @@ func TestSessionCreateGetRoundTripsThroughHash(t *testing.T) {
 // looking up sessions.id by the raw token never matches: only the hash does.
 func TestSessionRawTokenNeverStored(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()
@@ -275,7 +267,7 @@ func assertRawSessionIDAbsentButHashPresent(t *testing.T, pool *pgxpool.Pool, ra
 // that separates the two id forms. Feeding a ListByUser result's hashed id to a
 // method that takes the RAW id would hash it a second time, match no row, and
 // return a nil error — a silent no-op on an auth-adjacent path. Because
-// HashSessionID returns model.SessionIDHash while Touch/Delete/UpdateExpiry/
+// HashSessionID returns model.SessionIDHash while Touch/Delete/
 // DeleteOthersByUser take a plain string, that misuse does not compile:
 //
 //	sessions.Touch(ctx, list[0].IDHash, ip, now) // type error, by design
@@ -293,7 +285,6 @@ func TestSessionRawAndHashedIDsCannotBeConfused(t *testing.T) {
 	rawIDTakers := map[string]any{
 		"Touch":              (*store.SessionRepository).Touch,
 		"Delete":             (*store.SessionRepository).Delete,
-		"UpdateExpiry":       (*store.SessionRepository).UpdateExpiry,
 		"DeleteOthersByUser": (*store.SessionRepository).DeleteOthersByUser,
 		"GetByID":            (*store.SessionRepository).GetByID,
 	}
@@ -320,7 +311,6 @@ func TestSessionRawAndHashedIDsCannotBeConfused(t *testing.T) {
 // while the raw id still drives Touch/Delete as before.
 func TestListByUserReportsOnlyTheHashedID(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	ctx := context.Background()

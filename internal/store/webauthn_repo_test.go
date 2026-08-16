@@ -12,7 +12,6 @@ import (
 
 func TestWebAuthnRepo_CreateListGet(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
@@ -39,19 +38,10 @@ func TestWebAuthnRepo_CreateListGet(t *testing.T) {
 	if !got.BackupEligible || !got.BackupState {
 		t.Fatalf("backup flags not persisted: %+v", got)
 	}
-
-	byCred, err := repo.GetByCredentialID(ctx, []byte("cred-abc"))
-	if err != nil || byCred.UserID != u.ID {
-		t.Fatalf("getByCredentialID err=%v row=%+v", err, byCred)
-	}
-	if _, err := repo.GetByCredentialID(ctx, []byte("missing")); err != store.ErrNotFound {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
 }
 
 func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
@@ -85,7 +75,6 @@ func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 
 func TestWebAuthnRepo_UpdateSignCount(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
@@ -106,7 +95,6 @@ func TestWebAuthnRepo_UpdateSignCount(t *testing.T) {
 
 func TestUserRepo_GetByWebAuthnHandle(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	u := newUser(t, users, "wa-handle")

@@ -34,9 +34,6 @@ func (f *fakeCreds) Create(_ context.Context, c model.WebAuthnCredential) error 
 func (f *fakeCreds) ListByUser(_ context.Context, _ int64) ([]model.WebAuthnCredential, error) {
 	return f.list, nil
 }
-func (f *fakeCreds) GetByCredentialID(_ context.Context, _ []byte) (model.WebAuthnCredential, error) {
-	return model.WebAuthnCredential{}, nil
-}
 func (f *fakeCreds) Rename(_ context.Context, _ string, _ int64, _ string) error { return f.renameErr }
 func (f *fakeCreds) DeleteByPublicIDForUser(_ context.Context, _ string, _ int64) error {
 	return f.deleteErr

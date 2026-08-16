@@ -44,12 +44,13 @@ func (f *fakeChunks) SearchTopKByVisibleDocuments(
 	return f.documentSearch, nil
 }
 
-func TestRAGRetrieveReturnsContentsAndEmbedding(t *testing.T) {
+func TestRAGRetrieveTurnReturnsContentsAndEmbedding(t *testing.T) {
 	fc := &fakeChunks{search: []model.Chunk{{Content: "you ran 10k last week"}}}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
-	contents, emb, err := rag.Retrieve(context.Background(), 1, "how was my run?")
-	if err != nil || len(contents) != 1 || contents[0] != "you ran 10k last week" || len(emb) != 3 {
-		t.Fatalf("retrieve: %v %v %v", err, contents, emb)
+	retrieval, err := rag.RetrieveTurn(context.Background(), 1, "how was my run?", nil)
+	if err != nil || len(retrieval.Broad) != 1 || retrieval.Broad[0] != "you ran 10k last week" ||
+		len(retrieval.Embedding) != 3 {
+		t.Fatalf("retrieve turn: %v %+v", err, retrieval)
 	}
 }
 

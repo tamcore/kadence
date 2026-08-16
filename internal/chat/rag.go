@@ -48,16 +48,6 @@ func (r *RAG) Embed(ctx context.Context, text string) ([]float32, error) {
 	return vecs[0], nil
 }
 
-// Retrieve embeds the query and returns the top-k chunk contents plus the query
-// embedding (so the caller can reuse it to store the query as a chunk).
-func (r *RAG) Retrieve(ctx context.Context, userID int64, query string) ([]string, []float32, error) {
-	retrieval, err := r.RetrieveTurn(ctx, userID, query, nil)
-	if err != nil {
-		return nil, retrieval.Embedding, err
-	}
-	return retrieval.Broad, retrieval.Embedding, nil
-}
-
 // TurnRetrieval is one query embedding reused for broad memory and selected
 // document sections.
 type TurnRetrieval struct {

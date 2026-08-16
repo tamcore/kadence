@@ -18,7 +18,6 @@ const (
 
 func TestDocumentCreateListDeleteScoped(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	ctx := context.Background()
@@ -67,7 +66,6 @@ func TestDocumentCreateListDeleteScoped(t *testing.T) {
 
 func TestDocumentDeleteNotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	ctx := context.Background()
@@ -109,7 +107,6 @@ func TestDocumentDeleteNotFound(t *testing.T) {
 
 func TestDocumentDeleteCascadesChunks(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
@@ -130,7 +127,6 @@ func TestDocumentDeleteCascadesChunks(t *testing.T) {
 
 func TestPublicDocumentChunkOwnerlessRetrievable(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")

@@ -61,7 +61,6 @@ func setupDeliveredScheduledRun(t *testing.T, pool *pgxpool.Pool) deliveredRunEn
 
 func TestClaimUndispatchedDeliveriesIsExactlyOnce(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	setupDeliveredScheduledRun(t, pool)
 	repo := store.NewPushSubscriptionRepository(pool)
@@ -102,7 +101,6 @@ func TestClaimUndispatchedDeliveriesIsExactlyOnce(t *testing.T) {
 
 func TestClaimReturnsTaskTitleAndConversation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	env := setupDeliveredScheduledRun(t, pool)
 	repo := store.NewPushSubscriptionRepository(pool)

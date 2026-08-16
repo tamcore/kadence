@@ -14,7 +14,6 @@ import (
 
 func TestDocumentRepositoryListVisibleByIDsPreservesOrderAndIncludesMarkdown(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	ctx := context.Background()
@@ -58,7 +57,6 @@ func TestDocumentRepositoryListVisibleByIDsPreservesOrderAndIncludesMarkdown(t *
 
 func TestDocumentRepositoryListVisibleByIDsFailsClosedForInvisibleMissingAndDeleted(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	ctx := context.Background()
@@ -115,7 +113,6 @@ func TestDocumentRepositoryListVisibleByIDsFailsClosedForInvisibleMissingAndDele
 
 func TestChunkRepositorySearchTopKByVisibleDocumentsBatchesAndLimitsPerDocument(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "current-model")

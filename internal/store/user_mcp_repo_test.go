@@ -26,7 +26,6 @@ const (
 
 func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 
 	users := store.NewUserRepository(pool)
@@ -104,7 +103,6 @@ func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 // rather than erroring.
 func TestUserServerRepo_AliasAndHintRoundTrip(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 
 	users := store.NewUserRepository(pool)
@@ -153,7 +151,6 @@ func TestUserServerRepo_AliasAndHintRoundTrip(t *testing.T) {
 // see another owner's MCP server rows.
 func TestUserServerRepo_OwnerIsolation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 
 	users := store.NewUserRepository(pool)

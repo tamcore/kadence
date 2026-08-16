@@ -78,32 +78,6 @@ func (s Schedule) NextAfter(after time.Time) (time.Time, error) {
 	return next, nil
 }
 
-// CoalesceMissed returns one catch-up occurrence (the most recent due one)
-// and the following future occurrence. It is for recurring schedules only.
-func (s Schedule) CoalesceMissed(now time.Time) (time.Time, time.Time, error) {
-	if !s.At.IsZero() {
-		return time.Time{}, time.Time{}, errors.New("scheduled: one-off schedules cannot coalesce")
-	}
-	rule, err := s.recurrence()
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	missed := rule.Before(now, true)
-	if missed.IsZero() {
-		return time.Time{}, time.Time{}, errNoOccurrence
-	}
-	next := rule.After(now, false)
-	if next.IsZero() {
-		return time.Time{}, time.Time{}, errNoOccurrence
-	}
-	return missed, next, nil
-}
-
-// OccurrenceKey is the stable UTC identity of one task occurrence.
-func OccurrenceKey(occurrence time.Time) string {
-	return occurrence.UTC().Format(time.RFC3339Nano)
-}
-
 func (s Schedule) recurrence() (*rrule.RRule, error) {
 	location, err := ValidateTimezone(s.Timezone)
 	if err != nil {

@@ -11,7 +11,6 @@ import (
 
 func TestPushSubscriptionUpsertAndList(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-upsert", "push-upsert@example.com")
@@ -47,7 +46,6 @@ func TestPushSubscriptionUpsertAndList(t *testing.T) {
 
 func TestPushSubscriptionDeleteByEndpointScopedToUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-delete", "push-delete@example.com")
@@ -74,7 +72,6 @@ func TestPushSubscriptionDeleteByEndpointScopedToUser(t *testing.T) {
 
 func TestPushSubscriptionDeleteByIDAndFailureLifecycle(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-lifecycle", "push-lifecycle@example.com")

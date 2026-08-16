@@ -75,9 +75,6 @@ func Load() (*Registry, error) {
 	return reg, nil
 }
 
-// ParseForTest exposes parse for package tests.
-func ParseForTest(data []byte) (Skill, error) { return parse(data) }
-
 func parse(data []byte) (Skill, error) {
 	s := string(data)
 	const open = "---\n"

@@ -30,7 +30,6 @@ func vec1024(prefix ...float32) []float32 {
 
 func TestChunkSearchTopKOrdersByCosine(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
@@ -51,7 +50,6 @@ func TestChunkSearchTopKOrdersByCosine(t *testing.T) {
 
 func TestChunkScopedToUserPlusPublic(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
@@ -69,7 +67,6 @@ func TestChunkScopedToUserPlusPublic(t *testing.T) {
 
 func TestChunkCascadeOnConversationDelete(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
@@ -90,7 +87,6 @@ func TestChunkCascadeOnConversationDelete(t *testing.T) {
 
 func TestListContentForUserReturnsOwnAndPublicNotOthersPrivate(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
@@ -118,7 +114,6 @@ func TestListContentForUserReturnsOwnAndPublicNotOthersPrivate(t *testing.T) {
 
 func TestSearchContentForUserFiltersByContent(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
@@ -140,7 +135,6 @@ func TestSearchContentForUserFiltersByContent(t *testing.T) {
 
 func TestChunkRepository_SearchTopK_FiltersByEmbeddingModel(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	ctx := context.Background()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
@@ -170,7 +164,6 @@ func TestChunkRepository_SearchTopK_FiltersByEmbeddingModel(t *testing.T) {
 
 func TestChunkRepository_AdoptAndStatusAndReembed(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	ctx := context.Background()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
@@ -241,7 +234,6 @@ func TestChunkRepository_AdoptAndStatusAndReembed(t *testing.T) {
 // bypasses the embed client's own dimension guard.
 func TestChunkEmbeddingColumnPinnedTo1024Dims(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
 	ctx := context.Background()
@@ -280,7 +272,6 @@ func TestChunkEmbeddingColumnPinnedTo1024Dims(t *testing.T) {
 func TestChunkRepository_InsertBatch_WritesSameRowsAsIndividualInserts(t *testing.T) {
 	const wantChunkTwo = "chunk two"
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	ctx := context.Background()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
@@ -328,7 +319,6 @@ func TestChunkRepository_InsertBatch_WritesSameRowsAsIndividualInserts(t *testin
 
 func TestChunkRepository_InsertBatch_EmptyIsNoop(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewChunkRepository(pool, "m1")
 	if err := repo.InsertBatch(context.Background(), nil, nil); err != nil {
 		t.Fatalf("InsertBatch with no chunks: %v", err)
@@ -337,7 +327,6 @@ func TestChunkRepository_InsertBatch_EmptyIsNoop(t *testing.T) {
 
 func TestChunkRepository_InsertBatch_RejectsMismatchedLengths(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewChunkRepository(pool, "m1")
 	chunks := []model.Chunk{{Scope: model.ScopePublic, SourceKind: model.ChunkSourceDocument, Content: "x"}}
 	if err := repo.InsertBatch(context.Background(), chunks, nil); err == nil {

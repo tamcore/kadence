@@ -17,7 +17,6 @@ const (
 
 func TestMCPAuditRepositoryLifecycleFilteringAndRetention(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewMCPAuditRepository(pool)
 	ctx := context.Background()
 	started := time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
@@ -76,7 +75,6 @@ func TestMCPAuditRepositoryLifecycleFilteringAndRetention(t *testing.T) {
 
 func TestMCPAuditRepositoryStoresAndFiltersGuardDecision(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewMCPAuditRepository(pool)
 	ctx := context.Background()
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)

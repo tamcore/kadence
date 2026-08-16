@@ -87,7 +87,6 @@ func (*intentIntegrationSnapshot) ToolHints() []string { return nil }
 
 func TestMCPIntentGuardPersistsPostgresAuditOutcomes(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewMCPAuditRepository(pool)
 	started := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 

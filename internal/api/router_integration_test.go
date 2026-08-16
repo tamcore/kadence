@@ -29,7 +29,6 @@ const testCSRFSecret = "0123456789abcdef0123456789abcdef"
 
 func TestLoginThenCurrentUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 
@@ -77,7 +76,6 @@ func TestLoginThenCurrentUser(t *testing.T) {
 
 func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 
@@ -142,7 +140,6 @@ func (j *cookieJar) apply(req *http.Request) {
 
 func TestChatEndToEnd(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	convs := store.NewConversationRepository(pool)
@@ -205,7 +202,6 @@ func TestChatEndToEnd(t *testing.T) {
 // cfg.UploadMaxBytes at the route level.
 func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 	docs := store.NewDocumentRepository(pool)
@@ -336,7 +332,6 @@ func (f chatFakeProvider) StreamChatWithTools(ctx context.Context, req provider.
 
 func TestRouter_WebAuthnEnabledEndpoint(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
 

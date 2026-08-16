@@ -21,7 +21,7 @@ import (
 
 const (
 	// Upload endpoints apply handler-level limits and are exempted from the
-	// smaller global middleware.MaxBodyBytes cap (see isUploadRoute).
+	// smaller global middleware.MaxBodyBytesExempt cap (see isUploadRoute).
 	// Multipart chat is exempt only for its upload media type; JSON chat
 	// remains globally capped.
 	documentsPath      = "/api/documents"

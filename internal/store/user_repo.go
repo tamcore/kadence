@@ -154,19 +154,6 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id int64, displayNam
 	return nil
 }
 
-// UpdateTimezone stores a user's IANA timezone preference. Validation belongs
-// to the caller because this repository is deliberately persistence-only.
-func (r *UserRepository) UpdateTimezone(ctx context.Context, id int64, timezone string) error {
-	command, err := r.pool.Exec(ctx, `UPDATE users SET timezone = $1 WHERE id = $2`, timezone, id)
-	if err != nil {
-		return fmt.Errorf("update timezone: %w", err)
-	}
-	if command.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // UpdatePassword updates a user's password hash.
 func (r *UserRepository) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
 	if _, err := r.pool.Exec(ctx, `UPDATE users SET password_hash = $1 WHERE id = $2`, passwordHash, id); err != nil {

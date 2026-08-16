@@ -291,10 +291,6 @@ func sourceFingerprint(content string) []byte {
 	return sum[:]
 }
 
-func boundedHandoffDefinition(now time.Time, timezone, instruction string, recent []model.Message, visible []provider.ToolDefinition) string {
-	return boundedHandoffDefinitionLimit(now, timezone, instruction, recent, visible, maxHandoffContextBytes)
-}
-
 func boundedHandoffDefinitionLimit(now time.Time, timezone, instruction string, recent []model.Message, visible []provider.ToolDefinition, limit int) string {
 	prefix := "Instruction:\n" + instruction + "\n\nCurrent UTC:\n" + now.UTC().Format(time.RFC3339) +
 		"\n\nActor timezone:\n" + handoffTimezone(timezone) +

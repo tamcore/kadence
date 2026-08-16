@@ -28,7 +28,12 @@ var (
 )
 
 // SetupTestDB starts (once per package) a Postgres container, runs migrations,
-// and returns a shared pool. Skips the calling test under -short.
+// and returns a shared pool truncated to an empty state. Skips the calling test
+// under -short.
+//
+// The container and pool are shared by every test in the package, so isolation
+// comes from the truncate on each call rather than from a fresh database. Tests
+// using this pool must therefore not run in parallel with each other.
 func SetupTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testing.Short() {
@@ -63,11 +68,12 @@ func SetupTestDB(t *testing.T) *pgxpool.Pool {
 	if pool == nil {
 		t.Fatal("test pool not initialized")
 	}
+	cleanTables(t, pool)
 	return pool
 }
 
-// CleanTables truncates all data tables for test isolation.
-func CleanTables(t *testing.T, p *pgxpool.Pool) {
+// cleanTables truncates all data tables for test isolation.
+func cleanTables(t *testing.T, p *pgxpool.Pool) {
 	t.Helper()
 	_, err := p.Exec(context.Background(), "TRUNCATE mcp_call_audit, users, sessions, documents RESTART IDENTITY CASCADE")
 	if err != nil {

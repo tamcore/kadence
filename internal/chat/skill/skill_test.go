@@ -77,9 +77,3 @@ func TestForHistory(t *testing.T) {
 		t.Fatal("history token must not be treated as a tool glob")
 	}
 }
-
-func TestParseErrors(t *testing.T) {
-	if _, err := skill.ParseForTest([]byte("no frontmatter here")); err == nil {
-		t.Fatal("expected error for missing frontmatter")
-	}
-}

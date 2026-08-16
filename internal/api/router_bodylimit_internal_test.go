@@ -2,7 +2,7 @@ package api
 
 // This file lives in package api (not api_test) specifically to reach the
 // unexported isUploadRoute predicate and prove, without a database, that the
-// document-upload routes are wired outside the global MaxBodyBytes cap.
+// document-upload routes are wired outside the global MaxBodyBytesExempt cap.
 //
 // A full end-to-end proof (authenticated upload over the global cap but
 // under UploadMaxBytes) needs a real session, which needs a DB — that's
@@ -70,7 +70,7 @@ func TestIsUploadRoute(t *testing.T) {
 // (middleware.MaxBodyBytesExempt(cap, isUploadRoute)) does not truncate/limit
 // bodies on the upload routes, even when the global cap is far smaller than
 // the body sent — while a non-upload route with the same construction is
-// still capped. This is the "outside the MaxBodyBytes group" guarantee,
+// still capped. This is the "outside the MaxBodyBytesExempt group" guarantee,
 // verified at the middleware level rather than by standing up the full
 // authenticated router (which needs a DB).
 func TestMaxBodyBytesExempt_UploadRoutesBypassGlobalCap(t *testing.T) {

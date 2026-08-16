@@ -41,7 +41,6 @@ const (
 
 func TestConversationAndMessageFlow(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
@@ -89,7 +88,6 @@ func TestConversationAndMessageFlow(t *testing.T) {
 
 func TestScheduledDefinitionHistoryExcludes198Deliveries(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -131,7 +129,6 @@ func TestScheduledDefinitionHistoryExcludes198Deliveries(t *testing.T) {
 
 func TestMessageToolCallsPersisted(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
@@ -173,7 +170,6 @@ func TestMessageToolCallsPersisted(t *testing.T) {
 
 func TestConversationScopedToOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	ctx := context.Background()
@@ -189,7 +185,6 @@ func TestConversationScopedToOwner(t *testing.T) {
 
 func TestConversationUpdateTitle(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	ctx := context.Background()
@@ -219,7 +214,6 @@ func TestConversationUpdateTitle(t *testing.T) {
 
 func TestConversationUpdateTitleIfCurrent(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	ctx := context.Background()
@@ -285,7 +279,6 @@ func requireConversationOrder(t *testing.T, list []model.Conversation, err error
 
 func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	ctx := context.Background()
@@ -368,7 +361,6 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 
 func TestMessageRepositoryChatWritesAndRewindsTouchActivity(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -440,7 +432,6 @@ func TestMessageRepositoryChatWritesAndRewindsTouchActivity(t *testing.T) {
 
 func TestMessageRepositoryActivityNeverRegresses(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -497,7 +488,6 @@ func TestMessageRepositoryActivityNeverRegresses(t *testing.T) {
 
 func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -598,7 +588,6 @@ func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.
 
 func TestMessageRepositoryEditAndRewind(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
@@ -670,7 +659,6 @@ func TestMessageRepositoryEditAndRewind(t *testing.T) {
 
 func TestMessageRepositoryRegenerateAndRewind(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
@@ -744,7 +732,6 @@ func TestMessageRepositoryRegenerateAndRewind(t *testing.T) {
 
 func TestMessageRepositoryRewindValidatesOwnerKindAndRole(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
@@ -778,7 +765,6 @@ func TestMessageRepositoryRewindValidatesOwnerKindAndRole(t *testing.T) {
 
 func TestMessageRepositoryDeleteUserAndRewindValidatesTargetAndOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -828,7 +814,6 @@ func TestMessageRepositoryDeleteUserAndRewindValidatesTargetAndOwner(t *testing.
 
 func TestMessageRepositoryDeleteFirstUserMessageCleansDraftHandoff(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -871,7 +856,6 @@ func TestMessageRepositoryDeleteFirstUserMessageCleansDraftHandoff(t *testing.T)
 
 func TestMessageRepositoryDeleteFirstUserMessageReturnsActiveDeliverySentinel(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -914,7 +898,6 @@ func TestMessageRepositoryDeleteFirstUserMessageReturnsActiveDeliverySentinel(t 
 
 func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
@@ -952,7 +935,6 @@ func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testi
 
 func TestChatRepositoryAssistantHandoffBindingIsAtomic(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -993,7 +975,6 @@ func TestChatRepositoryAssistantHandoffBindingIsAtomic(t *testing.T) {
 
 func TestChatRepositoryRegenerateRewindsDraftHandoffsButKeepsConfirmed(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1048,7 +1029,6 @@ func TestChatRepositoryRegenerateRewindsDraftHandoffsButKeepsConfirmed(t *testin
 
 func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDelivery(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1123,7 +1103,6 @@ func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDeliv
 // generic wrapped error, so handlers can map it to a friendly 409.
 func TestChatRepositoryDeleteBlockedByActiveDeliveryReturnsSentinel(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1163,7 +1142,6 @@ func TestChatRepositoryDeleteBlockedByActiveDeliveryReturnsSentinel(t *testing.T
 // definition conversation.
 func TestChatRepositoryDeleteChatWithOnlyDraftHandoffCleansUp(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -75,18 +74,6 @@ func (r *WebAuthnCredentialRepository) ListByUser(ctx context.Context, userID in
 		return nil, fmt.Errorf("list webauthn credentials: %w", err)
 	}
 	return out, nil
-}
-
-// GetByCredentialID finds a credential by its raw credential id.
-func (r *WebAuthnCredentialRepository) GetByCredentialID(ctx context.Context, credID []byte) (model.WebAuthnCredential, error) {
-	c, err := scanWebAuthnCred(r.pool.QueryRow(ctx, `SELECT `+webauthnCredCols+` FROM webauthn_credentials WHERE credential_id=$1`, credID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return model.WebAuthnCredential{}, ErrNotFound
-	}
-	if err != nil {
-		return model.WebAuthnCredential{}, fmt.Errorf("scan webauthn credential: %w", err)
-	}
-	return c, nil
 }
 
 // Rename sets a credential's name, owner-scoped.

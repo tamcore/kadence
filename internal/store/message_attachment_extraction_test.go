@@ -13,7 +13,6 @@ import (
 
 func TestMessageRepositoryUpdateChatAttachmentExtractionsIsOwnedAndScoped(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)

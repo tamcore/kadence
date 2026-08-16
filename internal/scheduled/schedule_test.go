@@ -151,29 +151,6 @@ func TestScheduleNextAfterUsesStableLocalOccurrenceAtAutumnDSTFallback(t *testin
 	if !next.Equal(want) || next.Hour() != 2 || next.Minute() != 30 {
 		t.Fatalf("next = %s, want %s at 02:30 local", next, want)
 	}
-	if got, wantKey := scheduled.OccurrenceKey(next), want.UTC().Format(time.RFC3339Nano); got != wantKey {
-		t.Fatalf("OccurrenceKey(next) = %q, want %q", got, wantKey)
-	}
-}
-
-func TestScheduleCoalesceMissed(t *testing.T) {
-	t.Parallel()
-	spec := scheduled.Schedule{
-		DTStart:  time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC),
-		RRULE:    rruleDaily,
-		Timezone: timezoneUTC,
-	}
-	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
-	occurrence, next, err := spec.CoalesceMissed(now)
-	if err != nil {
-		t.Fatalf("CoalesceMissed: %v", err)
-	}
-	if want := time.Date(2026, 7, 24, 9, 0, 0, 0, time.UTC); !occurrence.Equal(want) {
-		t.Fatalf("occurrence = %s, want latest missed %s", occurrence, want)
-	}
-	if want := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC); !next.Equal(want) {
-		t.Fatalf("next = %s, want first future %s", next, want)
-	}
 }
 
 func TestScheduleNoOccurrencePaths(t *testing.T) {
@@ -186,9 +163,6 @@ func TestScheduleNoOccurrencePaths(t *testing.T) {
 	if _, err := oneOff.NextAfter(now); err == nil {
 		t.Fatal("expired one-off NextAfter unexpectedly succeeded")
 	}
-	if _, _, err := oneOff.CoalesceMissed(now); err == nil {
-		t.Fatal("one-off CoalesceMissed unexpectedly succeeded")
-	}
 	counted := scheduled.Schedule{
 		DTStart:  now,
 		RRULE:    "FREQ=DAILY;COUNT=1",
@@ -197,23 +171,9 @@ func TestScheduleNoOccurrencePaths(t *testing.T) {
 	if _, err := counted.NextAfter(now); err == nil {
 		t.Fatal("exhausted recurrence NextAfter unexpectedly succeeded")
 	}
-	if _, _, err := counted.CoalesceMissed(now); err == nil {
-		t.Fatal("exhausted recurrence CoalesceMissed unexpectedly succeeded")
-	}
-	future := scheduled.Schedule{
-		DTStart:  now.Add(time.Hour),
-		RRULE:    rruleDaily,
-		Timezone: timezoneUTC,
-	}
-	if _, _, err := future.CoalesceMissed(now); err == nil {
-		t.Fatal("future recurrence CoalesceMissed unexpectedly succeeded")
-	}
 	invalid := scheduled.Schedule{DTStart: now, RRULE: "not an rrule", Timezone: timezoneUTC}
 	if _, err := invalid.NextAfter(now); err == nil {
 		t.Fatal("invalid recurrence NextAfter unexpectedly succeeded")
-	}
-	if _, _, err := invalid.CoalesceMissed(now); err == nil {
-		t.Fatal("invalid recurrence CoalesceMissed unexpectedly succeeded")
 	}
 	if err := (scheduled.Schedule{At: now.Add(time.Hour), Timezone: timezoneMars}).Validate(now); err == nil {
 		t.Fatal("invalid timezone Validate unexpectedly succeeded")
@@ -285,13 +245,5 @@ func TestScheduleJSONOmitsUnusedRepresentation(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestOccurrenceKey(t *testing.T) {
-	t.Parallel()
-	instant := time.Date(2026, 7, 24, 9, 30, 45, 123456789, time.FixedZone("CEST", 2*60*60))
-	if got, want := scheduled.OccurrenceKey(instant), "2026-07-24T07:30:45.123456789Z"; got != want {
-		t.Fatalf("OccurrenceKey() = %q, want %q", got, want)
 	}
 }

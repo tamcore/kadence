@@ -127,16 +127,6 @@ func (r *SessionRepository) Touch(ctx context.Context, id string, ip string, at 
 	return nil
 }
 
-// UpdateExpiry extends a session's expiry. id is the raw session id; it is
-// hashed before the lookup.
-func (r *SessionRepository) UpdateExpiry(ctx context.Context, id string, expiresAt time.Time) error {
-	_, err := r.pool.Exec(ctx, `UPDATE sessions SET expires_at = $2 WHERE id = $1`, hashedID(id), expiresAt)
-	if err != nil {
-		return fmt.Errorf("update session expiry: %w", err)
-	}
-	return nil
-}
-
 // Delete removes a single session. id is the raw session id; it is hashed
 // before the lookup.
 func (r *SessionRepository) Delete(ctx context.Context, id string) error {

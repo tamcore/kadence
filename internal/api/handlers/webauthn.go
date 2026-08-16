@@ -24,7 +24,6 @@ const defaultPasskeyName = "Passkey"
 type webauthnCreds interface {
 	Create(ctx context.Context, c model.WebAuthnCredential) error
 	ListByUser(ctx context.Context, userID int64) ([]model.WebAuthnCredential, error)
-	GetByCredentialID(ctx context.Context, credID []byte) (model.WebAuthnCredential, error)
 	Rename(ctx context.Context, publicID string, userID int64, name string) error
 	DeleteByPublicIDForUser(ctx context.Context, publicID string, userID int64) error
 	UpdateSignCount(ctx context.Context, credID []byte, signCount uint32, lastUsed time.Time) error

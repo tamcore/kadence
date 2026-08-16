@@ -15,7 +15,6 @@ import (
 
 func TestUserRepositoryCreateAndGet(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewUserRepository(pool)
 	ctx := context.Background()
 
@@ -46,7 +45,6 @@ func TestUserRepositoryCreateAndGet(t *testing.T) {
 
 func TestUserRepositoryGetByUsernameNotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewUserRepository(pool)
 
 	_, err := repo.GetByUsername(context.Background(), "ghost")
@@ -57,7 +55,6 @@ func TestUserRepositoryGetByUsernameNotFound(t *testing.T) {
 
 func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewUserRepository(pool)
 	ctx := context.Background()
 
@@ -103,7 +100,6 @@ func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 
 func TestUserRepository_UpdateUserAndCountAdmins(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewUserRepository(pool)
 	ctx := context.Background()
 
@@ -144,7 +140,6 @@ func TestUserRepository_UpdateUserAndCountAdmins(t *testing.T) {
 
 func TestUserRepositoryListDeleteCount(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	repo := store.NewUserRepository(pool)
 	ctx := context.Background()
 
@@ -170,7 +165,6 @@ func TestUserRepositoryListDeleteCount(t *testing.T) {
 
 func TestUserRepositoryDeleteCascadesScheduledAudit(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -212,7 +206,6 @@ func TestUserRepositoryDeleteCascadesScheduledAudit(t *testing.T) {
 
 func TestScheduledTaskSoftDeleteRetainsAudit(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)

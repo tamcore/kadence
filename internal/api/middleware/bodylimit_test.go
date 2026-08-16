@@ -12,7 +12,7 @@ import (
 )
 
 func TestMaxBodyBytes_AllowsBodyAtOrUnderLimit(t *testing.T) {
-	h := middleware.MaxBodyBytes(5)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := middleware.MaxBodyBytesExempt(5, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read body: %v", err)
@@ -35,7 +35,7 @@ func TestMaxBodyBytes_AllowsBodyAtOrUnderLimit(t *testing.T) {
 
 func TestMaxBodyBytes_OverLimitYieldsMaxBytesError(t *testing.T) {
 	var readErr error
-	h := middleware.MaxBodyBytes(5)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := middleware.MaxBodyBytesExempt(5, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, readErr = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusBadRequest)
 	}))
@@ -52,7 +52,7 @@ func TestMaxBodyBytes_OverLimitYieldsMaxBytesError(t *testing.T) {
 
 func TestMaxBodyBytes_ZeroOrNegativeDisables(t *testing.T) {
 	for _, limit := range []int64{0, -1} {
-		h := middleware.MaxBodyBytes(limit)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := middleware.MaxBodyBytesExempt(limit, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			b, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Fatalf("read body: %v", err)

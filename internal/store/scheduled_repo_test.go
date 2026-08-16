@@ -28,7 +28,6 @@ const (
 
 func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -40,8 +39,9 @@ func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
 	if u.Timezone != scheduledTimezoneUTC {
 		t.Fatalf("default timezone = %q, want UTC", u.Timezone)
 	}
-	if err := users.UpdateTimezone(ctx, u.ID, scheduledTimezoneBerlin); err != nil {
-		t.Fatalf("UpdateTimezone: %v", err)
+	if _, err := pool.Exec(ctx, `UPDATE users SET timezone = $1 WHERE id = $2`,
+		scheduledTimezoneBerlin, u.ID); err != nil {
+		t.Fatalf("set timezone: %v", err)
 	}
 	updated, err := users.GetByID(ctx, u.ID)
 	if err != nil || updated.Timezone != scheduledTimezoneBerlin {
@@ -62,7 +62,6 @@ func TestScheduledUserTimezoneAndConversationKind(t *testing.T) {
 
 func TestScheduledTaskCreateHasNilDeliveryConversation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -85,7 +84,6 @@ func TestScheduledTaskCreateHasNilDeliveryConversation(t *testing.T) {
 
 func TestScheduledTaskRepositoryOwnerScopeAndActiveLimit(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -161,7 +159,6 @@ func TestScheduledTaskRepositoryOwnerScopeAndActiveLimit(t *testing.T) {
 
 func TestScheduledTaskRepositoryBoundsListResponses(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -233,7 +230,6 @@ func TestScheduledTaskRepositoryBoundsListResponses(t *testing.T) {
 
 func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -302,7 +298,6 @@ func TestScheduledTaskRepositoryClaimsRunsAndRetention(t *testing.T) {
 
 func TestScheduledTaskRepositoryRunSummaries(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -340,7 +335,6 @@ func TestScheduledTaskRepositoryRunSummaries(t *testing.T) {
 
 func TestScheduledTaskRepositoryListsOnlyStaleRunningOccurrences(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -425,7 +419,6 @@ func TestScheduledTaskRepositoryListsOnlyStaleRunningOccurrences(t *testing.T) {
 
 func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -519,7 +512,6 @@ func TestScheduledTaskRepositoryDraftRevisionProposalCAS(t *testing.T) {
 
 func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -622,7 +614,6 @@ func TestScheduledTaskRepositoryLifecycleCASDoesNotOverwriteDraftRevision(t *tes
 
 func TestScheduledTaskRepositoryRejectsDraftRevisionWhileRunInProgress(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -706,7 +697,6 @@ func TestScheduledTaskRepositoryRejectsLifecycleChangesWhileRunInProgress(t *tes
 	for _, runState := range []string{model.ScheduledTaskRunStatePending, model.ScheduledTaskRunStateRunning} {
 		for _, change := range changes {
 			t.Run(runState+"/"+change.name, func(t *testing.T) {
-				testutil.CleanTables(t, pool)
 				users := store.NewUserRepository(pool)
 				conversations := store.NewConversationRepository(pool)
 				repo := store.NewScheduledTaskRepository(pool, 10)
@@ -760,7 +750,6 @@ func TestScheduledTaskRepositoryRejectsLifecycleChangesWhileRunInProgress(t *tes
 
 func TestScheduledTaskRepositoryRunNowIsAtomicAndClaimsPendingRunOnce(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -851,7 +840,6 @@ $$`); err != nil {
 
 func TestScheduledTaskRepositorySanitizesPublicFailureCode(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -885,7 +873,6 @@ func TestScheduledTaskRepositorySanitizesPublicFailureCode(t *testing.T) {
 
 func TestScheduledTaskRepositoryPausesAfterThreeFailures(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -918,7 +905,6 @@ func TestScheduledTaskRepositoryPausesAfterThreeFailures(t *testing.T) {
 
 func TestScheduledTaskRepositoryDeliveryResetsFailures(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -958,7 +944,6 @@ func TestScheduledTaskRepositoryDeliveryResetsFailures(t *testing.T) {
 
 func TestScheduledTaskRepositoryFinishSuccessIsAtomicAndCASProtected(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1025,7 +1010,6 @@ func TestScheduledTaskRepositoryFinishSuccessIsAtomicAndCASProtected(t *testing.
 
 func TestScheduledTaskRepositoryFinishSuccessDeliversToChatConversationAndBumpsActivity(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1089,7 +1073,6 @@ func TestScheduledTaskRepositoryFinishSuccessDeliversToChatConversationAndBumpsA
 
 func TestScheduledTaskRepositoryFinishSuccessRecordsDeliveryMessageID(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1138,7 +1121,6 @@ func TestScheduledTaskRepositoryFinishSuccessRecordsDeliveryMessageID(t *testing
 
 func TestConfirmProposalPromotesDirectConversationToChat(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1168,7 +1150,6 @@ func TestConfirmProposalPromotesDirectConversationToChat(t *testing.T) {
 
 func TestConfirmProposalKeepsPresetChatOriginatedDelivery(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1208,7 +1189,6 @@ func TestConfirmProposalKeepsPresetChatOriginatedDelivery(t *testing.T) {
 
 func TestScheduledTaskRepositoryFinishNoChangeAndFailureTransitions(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1268,7 +1248,6 @@ func TestScheduledTaskRepositoryFinishNoChangeAndFailureTransitions(t *testing.T
 
 func TestScheduledTaskRepositoryFinishPreservesPauseAndMissingToolFailureCount(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1333,7 +1312,6 @@ func TestScheduledTaskRepositoryFinishPreservesPauseAndMissingToolFailureCount(t
 
 func TestScheduledTaskRepositoryCreateRunRequiresTaskOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1359,7 +1337,6 @@ func TestScheduledTaskRepositoryCreateRunRequiresTaskOwner(t *testing.T) {
 
 func TestScheduledTaskRepositoryActiveLimitSerializesConcurrentCreates(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
@@ -1425,7 +1402,6 @@ func TestScheduledTaskRepositoryActiveLimitSerializesConcurrentCreates(t *testin
 
 func TestScheduledTaskRepositoryClaimDueSkipsLockedTask(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	ctx := context.Background()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)

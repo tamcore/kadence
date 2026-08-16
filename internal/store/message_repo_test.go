@@ -11,7 +11,6 @@ import (
 
 func TestListChatHistoryIncludesScheduledDeliveryForChatConversation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -48,7 +47,6 @@ func TestListChatHistoryIncludesScheduledDeliveryForChatConversation(t *testing.
 
 func TestListChatHistoryExcludesScheduledMessagesForScheduledConversation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)

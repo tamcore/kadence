@@ -16,7 +16,6 @@ import (
 
 func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -105,7 +104,6 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 
 func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -191,7 +189,6 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 
 func TestMessageRepositoryRejectsCrossConversationAttachmentPayloadID(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -235,7 +232,6 @@ func TestMessageRepositoryRejectsCrossConversationAttachmentPayloadID(t *testing
 
 func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -285,7 +281,6 @@ func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {
 
 func TestMessageRepositoryNewConversationAndFirstInputRollBackTogether(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -323,7 +318,6 @@ func TestMessageRepositoryNewConversationAndFirstInputRollBackTogether(t *testin
 
 func TestMessageRepositoryDocumentReferenceSnapshotSurvivesDelete(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -374,7 +368,6 @@ func TestMessageRepositoryDocumentReferenceSnapshotSurvivesDelete(t *testing.T) 
 
 func TestMessageRepositoryConversationDeleteCascadesInputRelations(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -418,7 +411,6 @@ func TestMessageRepositoryConversationDeleteCascadesInputRelations(t *testing.T)
 
 func TestMessageRepositoryEditPreservesTargetInputAndDeletesSuffixRelations(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -484,7 +476,6 @@ func TestMessageRepositoryEditPreservesTargetInputAndDeletesSuffixRelations(t *t
 
 func TestMessageRepositoryRegenerateReusesPrecedingUserInput(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -541,7 +532,6 @@ func TestMessageRepositoryRegenerateReusesPrecedingUserInput(t *testing.T) {
 
 func TestMessageRepositoryDeleteUserAndRewindDeletesSuffixRelations(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -657,7 +647,6 @@ func TestMessageRepositoryDeleteUserAndRewindDeletesSuffixRelations(t *testing.T
 
 func TestMessageRepositoryChatUserInputEnforcesConversationOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -697,7 +686,6 @@ func TestMessageRepositoryChatUserInputEnforcesConversationOwner(t *testing.T) {
 
 func TestMessageRepositoryChatUserInputDeleteRaceRollsBack(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -765,7 +753,6 @@ func TestMessageRepositoryChatUserInputDeleteRaceRollsBack(t *testing.T) {
 
 func TestMessageRepositoryChatUserInputMapsDocumentForeignKeyViolation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
@@ -841,7 +828,6 @@ func TestMessageRepositoryChatUserInputMapsDocumentForeignKeyViolation(t *testin
 
 func TestMessageAttachmentRejectsMismatchedSize(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	testutil.CleanTables(t, pool)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)

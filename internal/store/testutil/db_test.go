@@ -7,7 +7,6 @@ import (
 
 func TestSetupTestDBMigratesSchema(t *testing.T) {
 	pool := SetupTestDB(t)
-	CleanTables(t, pool)
 
 	var n int
 	if err := pool.QueryRow(context.Background(), "SELECT COUNT(*) FROM users").Scan(&n); err != nil {
@@ -18,5 +17,26 @@ func TestSetupTestDBMigratesSchema(t *testing.T) {
 	}
 	if err := pool.QueryRow(context.Background(), "SELECT COUNT(*) FROM sessions").Scan(&n); err != nil {
 		t.Fatalf("query sessions: %v", err)
+	}
+}
+
+// TestSetupTestDBTruncatesLeftoverRows is the guarantee that lets every caller
+// drop its own explicit truncate: a later setup must not see earlier rows.
+func TestSetupTestDBTruncatesLeftoverRows(t *testing.T) {
+	pool := SetupTestDB(t)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO users (username, email, password_hash, role)
+		 VALUES ('leftover', 'leftover@example.test', 'x', 'user')`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	pool = SetupTestDB(t)
+
+	var n int
+	if err := pool.QueryRow(context.Background(), "SELECT COUNT(*) FROM users").Scan(&n); err != nil {
+		t.Fatalf("query users: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("users count = %d, want 0 after re-setup", n)
 	}
 }

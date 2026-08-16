@@ -1953,10 +1953,6 @@ func (s *Service) resolveMCPAndSystemPrompt(ctx context.Context, uc UserContext)
 	return mcpSnap, systemPrompt
 }
 
-func (s *Service) fitRoutesForSnapshot(mcpSnap MCPUserSnapshot) []resolvedFITRoute {
-	return resolveFITRoutes(mcpSnap, s.fitRoutes)
-}
-
 func (s *Service) retrieveRAGContext(
 	ctx context.Context,
 	conversationID string,
@@ -2472,21 +2468,6 @@ func (s *Service) skillTool() provider.ToolDefinition {
 		Description: b.String(),
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"the skill name to load"}},"required":["name"]}`),
 	}
-}
-
-// dispatchTool routes one tool call: the built-in load_skill,
-// request_credentials, and pre-gated triggering tools are handled locally;
-// everything else goes to MCP. gated tracks which skills have already
-// pre-gated a call this turn (so the retried call executes for real).
-func (s *Service) dispatchTool(
-	ctx, streamCtx context.Context, conversationID string, userID int64, username string,
-	mcpSnap MCPUserSnapshot, tc provider.ToolCall,
-	gated map[string]bool, redactor *turnRedactor, sink EventSink,
-) provider.Message {
-	return s.dispatchToolWithTurn(
-		ctx, streamCtx, conversationID, userID, UserContext{Username: username}, model.Message{}, nil,
-		mcpSnap, tc, gated, &toolTurnState{}, redactor, sink,
-	)
 }
 
 func (s *Service) dispatchToolWithTurn(
