@@ -76,10 +76,6 @@ func (a mcpSnapshotAdapter) ToolsFor(ctx context.Context) ([]provider.ToolDefini
 	return a.snap.ToolsFor(ctx)
 }
 
-func (a mcpSnapshotAdapter) Call(ctx context.Context, toolName, argsJSON string) (string, error) {
-	return a.snap.Call(ctx, toolName, argsJSON)
-}
-
 func (a mcpSnapshotAdapter) CallWithTransform(
 	ctx context.Context, toolName, argsJSON string, transform chat.ArgumentTransform,
 ) (string, error) {

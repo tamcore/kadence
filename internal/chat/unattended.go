@@ -332,7 +332,7 @@ func (s *UnattendedSnapshot) callRemote(ctx context.Context, toolName, arguments
 
 func (s *UnattendedSnapshot) callAllowedRemote(ctx context.Context, toolName, arguments string) (string, error) {
 	return s.audit.Call(ctx, toolName, arguments, func(callCtx context.Context) (string, error) {
-		return s.mcp.Call(callCtx, toolName, arguments)
+		return s.mcp.CallWithTransform(callCtx, toolName, arguments, IdentityArguments)
 	})
 }
 

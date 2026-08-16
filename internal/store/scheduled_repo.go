@@ -51,8 +51,6 @@ const scheduledTaskCols = "id::text, user_id, conversation_id::text, version, na
 	"consecutive_failures, next_run_at, last_run_at, created_at, updated_at, deleted_at, " +
 	"delivery_conversation_id::text"
 
-type rowScanner interface{ Scan(...any) error }
-
 func scanScheduledTask(row rowScanner) (model.ScheduledTask, error) {
 	var task model.ScheduledTask
 	var tools, monitoring []byte

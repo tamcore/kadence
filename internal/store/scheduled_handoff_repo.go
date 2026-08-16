@@ -293,9 +293,7 @@ const handoffHydrationQuery = `SELECT ` + handoffCols + `,
         ORDER BY id DESC LIMIT 1
   ) AS latest ON TRUE`
 
-type handoffRowScanner interface{ Scan(...any) error }
-
-func scanHydratedHandoff(row handoffRowScanner) (HydratedChatHandoff, error) {
+func scanHydratedHandoff(row rowScanner) (HydratedChatHandoff, error) {
 	var result HydratedChatHandoff
 	var hasTask bool
 	var task model.ScheduledTask

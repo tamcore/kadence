@@ -606,32 +606,6 @@ func (r *MessageRepository) GetByID(
 	return messages[0], nil
 }
 
-// ListRecentByConversation returns at most limit newest messages while
-// preserving chronological order in the returned conversation history.
-func (r *MessageRepository) ListRecentByConversation(ctx context.Context, conversationID string, limit int) ([]model.Message, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id, role, content, tool_calls, purpose, created_at
-		   FROM (
-		        SELECT id, conversation_id::text, role, content, tool_calls, purpose, created_at
-		          FROM messages
-		         WHERE conversation_id = $1::uuid
-		         ORDER BY id DESC
-		         LIMIT $2
-		   ) AS recent
-		  ORDER BY id`, conversationID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list recent messages: %w", err)
-	}
-	messages, err := scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
-		return nil, err
-	}
-	return messages, nil
-}
-
 // ListRecentDefinitionByConversation returns only Scheduled definition
 // exchanges. Unattended delivery messages remain visible in the conversation
 // and run history but cannot consume the definition compiler's bounded context.

@@ -70,9 +70,6 @@ type MCPTools interface {
 type MCPUserSnapshot interface {
 	// ToolsFor returns the tool definitions available to this snapshot's user.
 	ToolsFor(ctx context.Context) ([]provider.ToolDefinition, error)
-	// Call invokes a named tool with JSON-encoded arguments and returns its
-	// (also JSON-ish/plain text) result.
-	Call(ctx context.Context, toolName, argsJSON string) (string, error)
 	// CallWithTransform invokes an authorized tool after applying transform to
 	// its clean arguments.
 	CallWithTransform(ctx context.Context, toolName, argsJSON string, transform ArgumentTransform) (string, error)

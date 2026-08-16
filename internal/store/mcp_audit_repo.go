@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -91,7 +92,7 @@ func (r *MCPAuditRepository) Get(ctx context.Context, id int64, cutoff time.Time
 		 WHERE id = $1 AND started_at >= $2`, id, cutoff)
 	call, err := scanMCPAudit(row)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return model.MCPAuditCall{}, ErrNotFound
 		}
 		return model.MCPAuditCall{}, fmt.Errorf("get MCP audit: %w", err)
@@ -162,11 +163,7 @@ func (r *MCPAuditRepository) DeleteBefore(ctx context.Context, cutoff time.Time)
 	return tag.RowsAffected(), nil
 }
 
-type mcpAuditScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanMCPAudit(row mcpAuditScanner) (model.MCPAuditCall, error) {
+func scanMCPAudit(row rowScanner) (model.MCPAuditCall, error) {
 	var call model.MCPAuditCall
 	err := row.Scan(
 		&call.ID, &call.ActorUserID, &call.ActorUsername, &call.ConversationID,

@@ -71,3 +71,7 @@ func Close(pool *pgxpool.Pool) {
 		pool.Close()
 	}
 }
+
+// rowScanner is the part of pgx.Row and pgx.Rows the repositories' scan
+// helpers need, so one helper can serve a QueryRow result and a rows cursor.
+type rowScanner interface{ Scan(...any) error }

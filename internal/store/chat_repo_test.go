@@ -70,10 +70,6 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	if err != nil || len(list) != 3 || list[0].Content != "hello" || list[1].Role != model.MsgRoleAssistant {
 		t.Fatalf("list messages: %v %+v", err, list)
 	}
-	recent, err := msgs.ListRecentByConversation(ctx, c.ID, 2)
-	if err != nil || len(recent) != 2 || recent[0].Content != "hi there" || recent[1].Content != "latest" {
-		t.Fatalf("list recent messages: %v %+v", err, recent)
-	}
 
 	got, err := convs.GetByID(ctx, c.ID, u.ID)
 	if err != nil || got.Title != "First chat" {

@@ -51,7 +51,6 @@ type ExecutionToolCatalog interface {
 // immutable routes.
 type ExecutionToolSnapshot interface {
 	ToolsFor(context.Context) ([]provider.ToolDefinition, error)
-	Call(context.Context, string, string) (string, error)
 	CallWithDefinition(context.Context, provider.ToolDefinition, string) (string, error)
 }
 
