@@ -513,10 +513,12 @@ func (s *Service) streamPersistedTurn(
 		full = secret.Redact(full, redactor.snapshot(s.secrets, userID))
 	}
 
-	assistantMsg, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, userMsg, full, turnState.Calls, handoffIDs(turnState.Handoffs))
+	saveCtx, cancelSave := assistantSaveContext(ctx)
+	defer cancelSave()
+	assistantMsg, err := s.msgs.AddChatAssistantIfLatestUser(saveCtx, conversationID, userMsg, full, turnState.Calls, handoffIDs(turnState.Handoffs))
 	if err != nil {
 		slog.Error("persist assistant message", "err", err)
-		s.cleanupScheduledDrafts(ctx, userID, turnState.Handoffs)
+		s.cleanupScheduledDrafts(saveCtx, userID, turnState.Handoffs)
 		return s.fail(sink, "could not save response")
 	}
 

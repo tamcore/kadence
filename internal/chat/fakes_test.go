@@ -156,6 +156,7 @@ type fakeMsgs struct {
 	regenerateCalls            int
 	assistantSaveContextErrors []error
 	assistantSaveHadDeadlines  []bool
+	assistantSaveDeadlineIn    []time.Duration
 	assistantHandoffIDs        []string
 	assistantHandoffTraces     [][]string
 }
@@ -234,8 +235,13 @@ func (f *fakeMsgs) UpdateChatAttachmentExtractions(
 func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 	ctx context.Context, convID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string,
 ) (model.Message, error) {
-	_, hadDeadline := ctx.Deadline()
+	deadline, hadDeadline := ctx.Deadline()
 	f.assistantSaveHadDeadlines = append(f.assistantSaveHadDeadlines, hadDeadline)
+	remaining := time.Duration(0)
+	if hadDeadline {
+		remaining = time.Until(deadline)
+	}
+	f.assistantSaveDeadlineIn = append(f.assistantSaveDeadlineIn, remaining)
 	f.assistantSaveContextErrors = append(f.assistantSaveContextErrors, ctx.Err())
 	f.assistantHandoffIDs = append([]string(nil), handoffIDs...)
 	f.assistantHandoffTraces = append(f.assistantHandoffTraces, append([]string(nil), handoffIDs...))

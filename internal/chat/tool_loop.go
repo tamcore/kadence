@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
@@ -24,6 +25,18 @@ func (e *providerStreamFailure) Unwrap() error { return e.err }
 
 const scheduledPartialFallback = "I prepared the scheduling task drafts below, but could not finish the response."
 
+// assistantSaveTimeout bounds a persistence write that runs on a context
+// detached from the request's, so it cannot outlive a shutdown.
+const assistantSaveTimeout = 5 * time.Second
+
+// assistantSaveContext returns a context for persisting an assistant message.
+// The common reason a turn ends early is that the client hung up, which cancels
+// the request context; saving on it would fail exactly when the save matters,
+// leaving a user message with no reply and nothing to regenerate from.
+func assistantSaveContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), assistantSaveTimeout)
+}
+
 func (s *Service) persistPartialAssistantAndFail(
 	ctx context.Context, conversationID string, userID int64, expectedUser model.Message, content string,
 	state toolTurnState, sink EventSink,
@@ -34,10 +47,12 @@ func (s *Service) persistPartialAssistantAndFail(
 		}
 		content = scheduledPartialFallback
 	}
-	assistantMessage, err := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, content, state.Calls, handoffIDs(state.Handoffs))
+	saveCtx, cancel := assistantSaveContext(ctx)
+	defer cancel()
+	assistantMessage, err := s.msgs.AddChatAssistantIfLatestUser(saveCtx, conversationID, expectedUser, content, state.Calls, handoffIDs(state.Handoffs))
 	if err != nil {
 		slog.Error("persist partial assistant message", "err", err)
-		s.cleanupScheduledDrafts(ctx, userID, state.Handoffs)
+		s.cleanupScheduledDrafts(saveCtx, userID, state.Handoffs)
 		return s.fail(sink, "the assistant could not complete the response")
 	}
 	return s.failWithAssistant(sink, "the assistant could not complete the response", assistantMessage)

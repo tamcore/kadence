@@ -168,7 +168,9 @@ func (s *Service) persistGuardrailRefusal(
 	ctx context.Context, conversationID string, expectedUser model.Message, sink EventSink,
 ) error {
 	refusal := s.guardrail.RefusalMessage()
-	assistantMessage, saveErr := s.msgs.AddChatAssistantIfLatestUser(ctx, conversationID, expectedUser, refusal, nil, nil)
+	saveCtx, cancel := assistantSaveContext(ctx)
+	defer cancel()
+	assistantMessage, saveErr := s.msgs.AddChatAssistantIfLatestUser(saveCtx, conversationID, expectedUser, refusal, nil, nil)
 	if saveErr != nil {
 		return s.fail(sink, "could not save response")
 	}

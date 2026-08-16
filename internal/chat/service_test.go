@@ -436,6 +436,10 @@ func (nearDeadlineProvider) StreamChatWithTools(
 	return provider.StreamResult{Content: "completed near deadline"}, nil
 }
 
+// svcTurnTimeout is the short per-turn budget these cases run under, so the
+// assertions can compare the save context's deadline against it.
+const svcTurnTimeout = 40 * time.Millisecond
+
 func TestTurnDeadlineDoesNotReplaceAssistantPersistenceContext(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -450,7 +454,7 @@ func TestTurnDeadlineDoesNotReplaceAssistantPersistenceContext(t *testing.T) {
 			svc := chat.NewService(tc.provider,
 				chat.ServiceConfig{
 					Model: testModel, MaxTokens: testMaxTokens,
-					Timeout: 40 * time.Millisecond,
+					Timeout: svcTurnTimeout,
 				},
 				chat.Deps{
 					Convs: &fakeConvs{byID: map[string]model.Conversation{
@@ -479,12 +483,20 @@ func TestTurnDeadlineDoesNotReplaceAssistantPersistenceContext(t *testing.T) {
 					msgs.assistantSaveContextErrors,
 				)
 			}
-			if msgs.assistantSaveContextErrors[0] != nil ||
-				msgs.assistantSaveHadDeadlines[0] {
+			// The save must not run under the turn's own (here 40ms) budget: a
+			// turn that just exhausted it would have nothing left to persist
+			// with. Its own, comfortably longer deadline is fine.
+			if msgs.assistantSaveContextErrors[0] != nil {
 				t.Fatalf(
-					"assistant persistence inherited external deadline: err=%v deadline=%v",
+					"assistant persistence context already failed: err=%v",
 					msgs.assistantSaveContextErrors[0],
-					msgs.assistantSaveHadDeadlines[0],
+				)
+			}
+			if msgs.assistantSaveHadDeadlines[0] &&
+				msgs.assistantSaveDeadlineIn[0] <= 10*svcTurnTimeout {
+				t.Fatalf(
+					"assistant persistence inherited the turn deadline: %v left, turn budget %v",
+					msgs.assistantSaveDeadlineIn[0], svcTurnTimeout,
 				)
 			}
 		})
