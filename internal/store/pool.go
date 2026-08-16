@@ -75,3 +75,24 @@ func Close(pool *pgxpool.Pool) {
 // rowScanner is the part of pgx.Row and pgx.Rows the repositories' scan
 // helpers need, so one helper can serve a QueryRow result and a rows cursor.
 type rowScanner interface{ Scan(...any) error }
+
+// inTx runs fn inside a transaction: it rolls back when fn fails and commits
+// otherwise, so no caller can forget either. wrap names the operation in the
+// begin/commit error messages ("begin <wrap>", "commit <wrap>"); errors from
+// fn itself pass through unwrapped, since they already describe themselves.
+func inTx[T any](ctx context.Context, pool *pgxpool.Pool, wrap string, fn func(pgx.Tx) (T, error)) (T, error) {
+	var zero T
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return zero, fmt.Errorf("begin %s: %w", wrap, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	out, err := fn(tx)
+	if err != nil {
+		return zero, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return zero, fmt.Errorf("commit %s: %w", wrap, err)
+	}
+	return out, nil
+}

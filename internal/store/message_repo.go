@@ -60,23 +60,12 @@ func (r *MessageRepository) AddWithToolCalls(ctx context.Context, conversationID
 // conversation row lock. Assistant writes use the same lock, so a later user
 // turn or rewind is ordered before a stale assistant can be appended.
 func (r *MessageRepository) AddChatUser(ctx context.Context, conversationID, content string) (model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Message{}, fmt.Errorf("begin add chat user: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if err := lockChatConversation(ctx, tx, conversationID); err != nil {
-		return model.Message{}, err
-	}
-	message, err := addMessageWithPurpose(ctx, tx, conversationID, model.MsgRoleUser, content, nil, messagePurposeChat)
-	if err != nil {
-		return model.Message{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Message{}, fmt.Errorf("commit add chat user: %w", err)
-	}
-	return message, nil
+	return inTx(ctx, r.pool, "add chat user", func(tx pgx.Tx) (model.Message, error) {
+		if err := lockChatConversation(ctx, tx, conversationID); err != nil {
+			return model.Message{}, err
+		}
+		return addMessageWithPurpose(ctx, tx, conversationID, model.MsgRoleUser, content, nil, messagePurposeChat)
+	})
 }
 
 // AddChatUserInput atomically appends one ordinary chat user message and its
@@ -84,15 +73,48 @@ func (r *MessageRepository) AddChatUser(ctx context.Context, conversationID, con
 func (r *MessageRepository) AddChatUserInput(
 	ctx context.Context, conversationID string, userID int64, input model.ChatUserInput,
 ) (model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Message{}, fmt.Errorf("begin add chat user input: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	return inTx(ctx, r.pool, "add chat user input", func(tx pgx.Tx) (model.Message, error) {
+		if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+			return model.Message{}, err
+		}
+		return insertChatUserInput(ctx, tx, conversationID, userID, input)
+	})
+}
 
-	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
-		return model.Message{}, err
+// CreateConversationWithChatUserInput atomically creates one ordinary chat
+// conversation and its first rich user input. A failure while inserting the
+// message, attachments, or document references rolls the conversation back.
+func (r *MessageRepository) CreateConversationWithChatUserInput(
+	ctx context.Context, userID int64, title string, input model.ChatUserInput,
+) (model.Conversation, model.Message, error) {
+	type created struct {
+		conversation model.Conversation
+		message      model.Message
 	}
+	out, err := inTx(ctx, r.pool, "create conversation with chat user input",
+		func(tx pgx.Tx) (created, error) {
+			conversation, err := insertConversation(ctx, tx, userID, title, model.ConversationKindChat)
+			if err != nil {
+				return created{}, err
+			}
+			message, err := insertChatUserInput(ctx, tx, conversation.ID, userID, input)
+			if err != nil {
+				return created{}, err
+			}
+			return created{conversation: conversation, message: message}, nil
+		})
+	if err != nil {
+		return model.Conversation{}, model.Message{}, err
+	}
+	return out.conversation, out.message, nil
+}
+
+// insertChatUserInput writes one ordinary-chat user message plus its
+// attachments and document references. The caller supplies the transaction and
+// is responsible for having taken the conversation lock.
+func insertChatUserInput(
+	ctx context.Context, tx pgx.Tx, conversationID string, userID int64, input model.ChatUserInput,
+) (model.Message, error) {
 	message, err := addMessageWithPurpose(
 		ctx, tx, conversationID, model.MsgRoleUser, input.Content, nil, messagePurposeChat,
 	)
@@ -109,52 +131,7 @@ func (r *MessageRepository) AddChatUserInput(
 	if err != nil {
 		return model.Message{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Message{}, fmt.Errorf("commit add chat user input: %w", err)
-	}
 	return message, nil
-}
-
-// CreateConversationWithChatUserInput atomically creates one ordinary chat
-// conversation and its first rich user input. A failure while inserting the
-// message, attachments, or document references rolls the conversation back.
-func (r *MessageRepository) CreateConversationWithChatUserInput(
-	ctx context.Context, userID int64, title string, input model.ChatUserInput,
-) (model.Conversation, model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Conversation{}, model.Message{},
-			fmt.Errorf("begin create conversation with chat user input: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	conversation, err := insertConversation(
-		ctx, tx, userID, title, model.ConversationKindChat,
-	)
-	if err != nil {
-		return model.Conversation{}, model.Message{}, err
-	}
-	message, err := addMessageWithPurpose(
-		ctx, tx, conversation.ID, model.MsgRoleUser, input.Content, nil, messagePurposeChat,
-	)
-	if err != nil {
-		return model.Conversation{}, model.Message{}, err
-	}
-	message.Attachments, err = insertMessageAttachments(ctx, tx, message.ID, input.Attachments)
-	if err != nil {
-		return model.Conversation{}, model.Message{}, err
-	}
-	message.DocumentReferences, err = insertMessageDocumentReferences(
-		ctx, tx, message.ID, userID, input.DocumentIDs,
-	)
-	if err != nil {
-		return model.Conversation{}, model.Message{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Conversation{}, model.Message{},
-			fmt.Errorf("commit create conversation with chat user input: %w", err)
-	}
-	return conversation, message, nil
 }
 
 // UpdateChatAttachmentExtractions atomically persists deferred document
@@ -163,62 +140,55 @@ func (r *MessageRepository) UpdateChatAttachmentExtractions(
 	ctx context.Context, conversationID string, messageID, userID int64,
 	attachments []model.MessageAttachment,
 ) (model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Message{}, fmt.Errorf("begin update chat attachment extractions: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
-		return model.Message{}, err
-	}
-	message, err := getMessageForRewind(ctx, tx, conversationID, messageID)
-	if err != nil {
-		return model.Message{}, err
-	}
-	if message.Role != model.MsgRoleUser {
-		return model.Message{}, ErrWrongMessageRole
-	}
-	messages := []model.Message{message}
-	if err := hydrateMessageRelations(ctx, tx, messages, true); err != nil {
-		return model.Message{}, err
-	}
-	message = messages[0]
-	if len(message.Attachments) != len(attachments) {
-		return model.Message{}, ErrNotFound
-	}
-	for i := range attachments {
-		stored := &message.Attachments[i]
-		extracted := attachments[i]
-		if stored.ID != extracted.ID ||
-			stored.MessageID != extracted.MessageID ||
-			stored.Ordinal != extracted.Ordinal ||
-			stored.Kind != extracted.Kind {
-			return model.Message{}, ErrNotFound
+	return inTx(ctx, r.pool, "update chat attachment extractions", func(tx pgx.Tx) (model.Message, error) {
+		if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+			return model.Message{}, err
 		}
-		if stored.Kind != model.AttachmentKindDocument || stored.ExtractionComplete {
-			continue
-		}
-		tag, err := tx.Exec(ctx,
-			`UPDATE message_attachments
-			    SET extracted_markdown = $1, extraction_complete = TRUE
-			  WHERE id = $2 AND message_id = $3 AND kind = $4`,
-			extracted.ExtractedMarkdown, stored.ID, message.ID,
-			model.AttachmentKindDocument,
-		)
+		message, err := getMessageForRewind(ctx, tx, conversationID, messageID)
 		if err != nil {
-			return model.Message{}, fmt.Errorf("update message attachment extraction: %w", err)
+			return model.Message{}, err
 		}
-		if tag.RowsAffected() != 1 {
+		if message.Role != model.MsgRoleUser {
+			return model.Message{}, ErrWrongMessageRole
+		}
+		messages := []model.Message{message}
+		if err := hydrateMessageRelations(ctx, tx, messages, true); err != nil {
+			return model.Message{}, err
+		}
+		message = messages[0]
+		if len(message.Attachments) != len(attachments) {
 			return model.Message{}, ErrNotFound
 		}
-		stored.ExtractedMarkdown = extracted.ExtractedMarkdown
-		stored.ExtractionComplete = true
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Message{}, fmt.Errorf("commit update chat attachment extractions: %w", err)
-	}
-	return message, nil
+		for i := range attachments {
+			stored := &message.Attachments[i]
+			extracted := attachments[i]
+			if stored.ID != extracted.ID ||
+				stored.MessageID != extracted.MessageID ||
+				stored.Ordinal != extracted.Ordinal ||
+				stored.Kind != extracted.Kind {
+				return model.Message{}, ErrNotFound
+			}
+			if stored.Kind != model.AttachmentKindDocument || stored.ExtractionComplete {
+				continue
+			}
+			tag, err := tx.Exec(ctx,
+				`UPDATE message_attachments
+				    SET extracted_markdown = $1, extraction_complete = TRUE
+				  WHERE id = $2 AND message_id = $3 AND kind = $4`,
+				extracted.ExtractedMarkdown, stored.ID, message.ID,
+				model.AttachmentKindDocument,
+			)
+			if err != nil {
+				return model.Message{}, fmt.Errorf("update message attachment extraction: %w", err)
+			}
+			if tag.RowsAffected() != 1 {
+				return model.Message{}, ErrNotFound
+			}
+			stored.ExtractedMarkdown = extracted.ExtractedMarkdown
+			stored.ExtractionComplete = true
+		}
+		return message, nil
+	})
 }
 
 func insertMessageAttachments(
@@ -343,58 +313,51 @@ func isDocumentReferenceForeignKeyViolation(err error) bool {
 func (r *MessageRepository) AddChatAssistantIfLatestUser(
 	ctx context.Context, conversationID string, expectedUser model.Message, content string, toolCalls []model.MessageToolCall, handoffIDs []string,
 ) (model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Message{}, fmt.Errorf("begin add chat assistant: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if err := lockChatConversation(ctx, tx, conversationID); err != nil {
-		return model.Message{}, err
-	}
-	var latestID int64
-	var latestRole, latestContent string
-	err = tx.QueryRow(ctx,
-		`SELECT id, role, content FROM messages
-		  WHERE conversation_id = $1::uuid AND purpose = $2
-		  ORDER BY id DESC LIMIT 1`,
-		conversationID, messagePurposeChat,
-	).Scan(&latestID, &latestRole, &latestContent)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Message{}, ErrStaleChatTurn
-	}
-	if err != nil {
-		return model.Message{}, fmt.Errorf("load latest chat message: %w", err)
-	}
-	if latestID != expectedUser.ID || latestRole != model.MsgRoleUser || latestContent != expectedUser.Content {
-		return model.Message{}, ErrStaleChatTurn
-	}
-	message, err := addMessageWithPurpose(ctx, tx, conversationID, model.MsgRoleAssistant, content, toolCalls, messagePurposeChat)
-	if err != nil {
-		return model.Message{}, err
-	}
-	if len(handoffIDs) > 0 {
-		distinct := make(map[string]struct{}, len(handoffIDs))
-		for _, handoffID := range handoffIDs {
-			distinct[handoffID] = struct{}{}
+	return inTx(ctx, r.pool, "add chat assistant", func(tx pgx.Tx) (model.Message, error) {
+		if err := lockChatConversation(ctx, tx, conversationID); err != nil {
+			return model.Message{}, err
 		}
-		command, err := tx.Exec(ctx,
-			`UPDATE chat_scheduled_handoffs
-			   SET assistant_message_id = $1, updated_at = NOW()
-			 WHERE id = ANY($2::uuid[])
-			   AND source_conversation_id = $3::uuid`,
-			message.ID, handoffIDs, conversationID)
+		var latestID int64
+		var latestRole, latestContent string
+		err := tx.QueryRow(ctx,
+			`SELECT id, role, content FROM messages
+			  WHERE conversation_id = $1::uuid AND purpose = $2
+			  ORDER BY id DESC LIMIT 1`,
+			conversationID, messagePurposeChat,
+		).Scan(&latestID, &latestRole, &latestContent)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Message{}, ErrStaleChatTurn
+		}
 		if err != nil {
-			return model.Message{}, fmt.Errorf("bind chat scheduling handoffs: %w", err)
+			return model.Message{}, fmt.Errorf("load latest chat message: %w", err)
 		}
-		if command.RowsAffected() != int64(len(distinct)) {
-			return model.Message{}, ErrNotFound
+		if latestID != expectedUser.ID || latestRole != model.MsgRoleUser || latestContent != expectedUser.Content {
+			return model.Message{}, ErrStaleChatTurn
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Message{}, fmt.Errorf("commit add chat assistant: %w", err)
-	}
-	return message, nil
+		message, err := addMessageWithPurpose(ctx, tx, conversationID, model.MsgRoleAssistant, content, toolCalls, messagePurposeChat)
+		if err != nil {
+			return model.Message{}, err
+		}
+		if len(handoffIDs) > 0 {
+			distinct := make(map[string]struct{}, len(handoffIDs))
+			for _, handoffID := range handoffIDs {
+				distinct[handoffID] = struct{}{}
+			}
+			command, err := tx.Exec(ctx,
+				`UPDATE chat_scheduled_handoffs
+				   SET assistant_message_id = $1, updated_at = NOW()
+				 WHERE id = ANY($2::uuid[])
+				   AND source_conversation_id = $3::uuid`,
+				message.ID, handoffIDs, conversationID)
+			if err != nil {
+				return model.Message{}, fmt.Errorf("bind chat scheduling handoffs: %w", err)
+			}
+			if command.RowsAffected() != int64(len(distinct)) {
+				return model.Message{}, ErrNotFound
+			}
+		}
+		return message, nil
+	})
 }
 
 // AddDefinition appends one user or assistant exchange to a Scheduled task's
@@ -612,51 +575,44 @@ func (r *MessageRepository) ListRecentDefinitionByConversation(ctx context.Conte
 func (r *MessageRepository) EditAndRewind(
 	ctx context.Context, conversationID string, messageID, userID int64, content string,
 ) (model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Message{}, fmt.Errorf("begin edit rewind: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
-		return model.Message{}, err
-	}
-	target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
-	if err != nil {
-		return model.Message{}, err
-	}
-	if target.Role != model.MsgRoleUser {
-		return model.Message{}, ErrWrongMessageRole
-	}
-	if err := cleanupDraftHandoffsForSourceMessages(ctx, tx, userID, conversationID, messageID); err != nil {
-		return model.Message{}, err
-	}
-	if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
-		return model.Message{}, err
-	}
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM messages WHERE conversation_id = $1::uuid AND id > $2`,
-		conversationID, messageID); err != nil {
-		return model.Message{}, fmt.Errorf("delete messages after edit target: %w", err)
-	}
-	target.Content = content
-	if _, err := tx.Exec(ctx,
-		`UPDATE messages SET content = $3 WHERE conversation_id = $1::uuid AND id = $2`,
-		conversationID, messageID, content); err != nil {
-		return model.Message{}, fmt.Errorf("update edited message: %w", err)
-	}
-	if err := touchChatConversation(ctx, tx, conversationID); err != nil {
-		return model.Message{}, err
-	}
-	targets := []model.Message{target}
-	if err := hydrateMessageRelations(ctx, tx, targets, true); err != nil {
-		return model.Message{}, err
-	}
-	target = targets[0]
-	if err := tx.Commit(ctx); err != nil {
-		return model.Message{}, fmt.Errorf("commit edit rewind: %w", err)
-	}
-	return target, nil
+	return inTx(ctx, r.pool, "edit rewind", func(tx pgx.Tx) (model.Message, error) {
+		if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+			return model.Message{}, err
+		}
+		target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
+		if err != nil {
+			return model.Message{}, err
+		}
+		if target.Role != model.MsgRoleUser {
+			return model.Message{}, ErrWrongMessageRole
+		}
+		if err := cleanupDraftHandoffsForSourceMessages(ctx, tx, userID, conversationID, messageID); err != nil {
+			return model.Message{}, err
+		}
+		if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
+			return model.Message{}, err
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM messages WHERE conversation_id = $1::uuid AND id > $2`,
+			conversationID, messageID); err != nil {
+			return model.Message{}, fmt.Errorf("delete messages after edit target: %w", err)
+		}
+		target.Content = content
+		if _, err := tx.Exec(ctx,
+			`UPDATE messages SET content = $3 WHERE conversation_id = $1::uuid AND id = $2`,
+			conversationID, messageID, content); err != nil {
+			return model.Message{}, fmt.Errorf("update edited message: %w", err)
+		}
+		if err := touchChatConversation(ctx, tx, conversationID); err != nil {
+			return model.Message{}, err
+		}
+		targets := []model.Message{target}
+		if err := hydrateMessageRelations(ctx, tx, targets, true); err != nil {
+			return model.Message{}, err
+		}
+		target = targets[0]
+		return target, nil
+	})
 }
 
 // RegenerateAndRewind removes one owned ordinary-chat assistant message and
@@ -665,57 +621,50 @@ func (r *MessageRepository) EditAndRewind(
 func (r *MessageRepository) RegenerateAndRewind(
 	ctx context.Context, conversationID string, messageID, userID int64,
 ) (model.Message, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return model.Message{}, fmt.Errorf("begin regenerate rewind: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
-		return model.Message{}, err
-	}
-	target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
-	if err != nil {
-		return model.Message{}, err
-	}
-	if target.Role != model.MsgRoleAssistant {
-		return model.Message{}, ErrWrongMessageRole
-	}
-	if err := cleanupDraftHandoffsForAssistantMessages(ctx, tx, userID, conversationID, messageID); err != nil {
-		return model.Message{}, err
-	}
-	prompt, err := scanMessageRow(tx.QueryRow(ctx,
-		`SELECT `+messageCols+`
-		   FROM messages
-		  WHERE conversation_id = $1::uuid AND id < $2 AND role = $3
-		  ORDER BY id DESC LIMIT 1`,
-		conversationID, messageID, model.MsgRoleUser))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Message{}, ErrNotFound
-	}
-	if err != nil {
-		return model.Message{}, fmt.Errorf("load regenerate prompt: %w", err)
-	}
-	if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
-		return model.Message{}, err
-	}
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM messages WHERE conversation_id = $1::uuid AND id >= $2`,
-		conversationID, messageID); err != nil {
-		return model.Message{}, fmt.Errorf("delete regenerated message suffix: %w", err)
-	}
-	if err := touchChatConversation(ctx, tx, conversationID); err != nil {
-		return model.Message{}, err
-	}
-	prompts := []model.Message{prompt}
-	if err := hydrateMessageRelations(ctx, tx, prompts, true); err != nil {
-		return model.Message{}, err
-	}
-	prompt = prompts[0]
-	if err := tx.Commit(ctx); err != nil {
-		return model.Message{}, fmt.Errorf("commit regenerate rewind: %w", err)
-	}
-	return prompt, nil
+	return inTx(ctx, r.pool, "regenerate rewind", func(tx pgx.Tx) (model.Message, error) {
+		if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+			return model.Message{}, err
+		}
+		target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
+		if err != nil {
+			return model.Message{}, err
+		}
+		if target.Role != model.MsgRoleAssistant {
+			return model.Message{}, ErrWrongMessageRole
+		}
+		if err := cleanupDraftHandoffsForAssistantMessages(ctx, tx, userID, conversationID, messageID); err != nil {
+			return model.Message{}, err
+		}
+		prompt, err := scanMessageRow(tx.QueryRow(ctx,
+			`SELECT `+messageCols+`
+			   FROM messages
+			  WHERE conversation_id = $1::uuid AND id < $2 AND role = $3
+			  ORDER BY id DESC LIMIT 1`,
+			conversationID, messageID, model.MsgRoleUser))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Message{}, ErrNotFound
+		}
+		if err != nil {
+			return model.Message{}, fmt.Errorf("load regenerate prompt: %w", err)
+		}
+		if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
+			return model.Message{}, err
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM messages WHERE conversation_id = $1::uuid AND id >= $2`,
+			conversationID, messageID); err != nil {
+			return model.Message{}, fmt.Errorf("delete regenerated message suffix: %w", err)
+		}
+		if err := touchChatConversation(ctx, tx, conversationID); err != nil {
+			return model.Message{}, err
+		}
+		prompts := []model.Message{prompt}
+		if err := hydrateMessageRelations(ctx, tx, prompts, true); err != nil {
+			return model.Message{}, err
+		}
+		prompt = prompts[0]
+		return prompt, nil
+	})
 }
 
 // DeleteUserAndRewind removes one owned ordinary-chat user message and its
@@ -723,69 +672,59 @@ func (r *MessageRepository) RegenerateAndRewind(
 func (r *MessageRepository) DeleteUserAndRewind(
 	ctx context.Context, conversationID string, messageID, userID int64,
 ) (bool, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("begin delete user rewind: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
-		return false, err
-	}
-	target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
-	if err != nil {
-		return false, err
-	}
-	if target.Role != model.MsgRoleUser {
-		return false, ErrWrongMessageRole
-	}
-	var hasEarlierMessage bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS (
-		     SELECT 1 FROM messages
-		      WHERE conversation_id = $1::uuid AND purpose = $2 AND id < $3
-		 )`,
-		conversationID, messagePurposeChat, messageID,
-	).Scan(&hasEarlierMessage); err != nil {
-		return false, fmt.Errorf("check earlier chat messages: %w", err)
-	}
-	if !hasEarlierMessage {
-		if err := cleanupDraftHandoffsForConversation(ctx, tx, userID, conversationID); err != nil {
+	return inTx(ctx, r.pool, "delete user rewind", func(tx pgx.Tx) (bool, error) {
+		if err := lockOwnedChat(ctx, tx, conversationID, userID); err != nil {
+			return false, err
+		}
+		target, err := getMessageForRewind(ctx, tx, conversationID, messageID)
+		if err != nil {
+			return false, err
+		}
+		if target.Role != model.MsgRoleUser {
+			return false, ErrWrongMessageRole
+		}
+		var hasEarlierMessage bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+			     SELECT 1 FROM messages
+			      WHERE conversation_id = $1::uuid AND purpose = $2 AND id < $3
+			 )`,
+			conversationID, messagePurposeChat, messageID,
+		).Scan(&hasEarlierMessage); err != nil {
+			return false, fmt.Errorf("check earlier chat messages: %w", err)
+		}
+		if !hasEarlierMessage {
+			if err := cleanupDraftHandoffsForConversation(ctx, tx, userID, conversationID); err != nil {
+				return false, err
+			}
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`,
+				conversationID, userID,
+			); err != nil {
+				if isDeliveryConversationForeignKeyViolation(err) {
+					return false, ErrConversationHasActiveDelivery
+				}
+				return false, fmt.Errorf("delete first-message conversation: %w", err)
+			}
+			return true, nil
+		}
+		if err := cleanupDraftHandoffsForSourceMessages(ctx, tx, userID, conversationID, messageID); err != nil {
+			return false, err
+		}
+		if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
 			return false, err
 		}
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM conversations WHERE id = $1::uuid AND user_id = $2`,
-			conversationID, userID,
+			`DELETE FROM messages WHERE conversation_id = $1::uuid AND id >= $2`,
+			conversationID, messageID,
 		); err != nil {
-			if isDeliveryConversationForeignKeyViolation(err) {
-				return false, ErrConversationHasActiveDelivery
-			}
-			return false, fmt.Errorf("delete first-message conversation: %w", err)
+			return false, fmt.Errorf("delete user message suffix: %w", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("commit delete first-message conversation: %w", err)
+		if err := touchChatConversation(ctx, tx, conversationID); err != nil {
+			return false, err
 		}
-		return true, nil
-	}
-	if err := cleanupDraftHandoffsForSourceMessages(ctx, tx, userID, conversationID, messageID); err != nil {
-		return false, err
-	}
-	if err := deleteMessageChunksFrom(ctx, tx, conversationID, messageID); err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM messages WHERE conversation_id = $1::uuid AND id >= $2`,
-		conversationID, messageID,
-	); err != nil {
-		return false, fmt.Errorf("delete user message suffix: %w", err)
-	}
-	if err := touchChatConversation(ctx, tx, conversationID); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit delete user rewind: %w", err)
-	}
-	return false, nil
+		return false, nil
+	})
 }
 
 func lockOwnedChat(ctx context.Context, tx pgx.Tx, conversationID string, userID int64) error {
