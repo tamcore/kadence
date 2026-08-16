@@ -160,7 +160,7 @@ func (r *ConversationRepository) Delete(ctx context.Context, id string, userID i
 		var kind string
 		err := tx.QueryRow(ctx, `SELECT kind FROM conversations WHERE id = $1::uuid AND user_id = $2 FOR UPDATE`, id, userID).Scan(&kind)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
+			return errTxNoop
 		}
 		if err != nil {
 			return fmt.Errorf("lock delete conversation: %w", err)

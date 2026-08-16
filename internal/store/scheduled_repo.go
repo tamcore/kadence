@@ -495,7 +495,7 @@ func (r *ScheduledTaskRepository) PauseByConversation(ctx context.Context, conve
 		}
 		rows.Close()
 		if len(taskIDs) == 0 {
-			return false, nil
+			return false, errTxNoop
 		}
 		for _, taskID := range taskIDs {
 			if err := ensureNoScheduledRunInProgress(ctx, tx, taskID); err != nil {

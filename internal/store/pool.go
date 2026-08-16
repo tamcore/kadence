@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -76,6 +77,12 @@ func Close(pool *pgxpool.Pool) {
 // helpers need, so one helper can serve a QueryRow result and a rows cursor.
 type rowScanner interface{ Scan(...any) error }
 
+// errTxNoop lets fn report "nothing to do" without committing. inTx rolls back
+// and returns success, so an operation that is a no-op — deleting a row that is
+// already gone, pausing a conversation with no task — cannot fail on a commit
+// it never needed.
+var errTxNoop = errors.New("store: transaction made no changes")
+
 // inTx runs fn inside a transaction: it rolls back when fn fails and commits
 // otherwise, so no caller can forget either. wrap names the operation in the
 // begin/commit error messages ("begin <wrap>", "commit <wrap>"); errors from
@@ -88,6 +95,9 @@ func inTx[T any](ctx context.Context, pool *pgxpool.Pool, wrap string, fn func(p
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	out, err := fn(tx)
+	if errors.Is(err, errTxNoop) {
+		return zero, nil
+	}
 	if err != nil {
 		return zero, err
 	}
