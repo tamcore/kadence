@@ -381,9 +381,9 @@ func TestGuardrailResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "")
 
 	cfg := Load()
-	if cfg.ResolvedGuardrailModel() != testLLMModel ||
-		cfg.ResolvedGuardrailBaseURL() != testLLMBaseURL ||
-		cfg.ResolvedGuardrailAPIKey() != testLLMAPIKey {
+	if cfg.Guardrail().Model != testLLMModel ||
+		cfg.Guardrail().BaseURL != testLLMBaseURL ||
+		cfg.Guardrail().APIKey != testLLMAPIKey {
 		t.Fatalf("resolvers should fall back to LLM values: %+v", cfg)
 	}
 }
@@ -394,7 +394,7 @@ func TestGuardrailSeparateBackend(t *testing.T) {
 	t.Setenv("KADENCE_GUARDRAIL_BASE_URL", "https://guard.example/v1")
 	t.Setenv("KADENCE_GUARDRAIL_API_KEY", "guard-key")
 	cfg := Load()
-	if cfg.ResolvedGuardrailModel() != "cheap-model" || cfg.ResolvedGuardrailBaseURL() != "https://guard.example/v1" || cfg.ResolvedGuardrailAPIKey() != "guard-key" {
+	if cfg.Guardrail().Model != "cheap-model" || cfg.Guardrail().BaseURL != "https://guard.example/v1" || cfg.Guardrail().APIKey != "guard-key" {
 		t.Fatalf("resolvers should use guardrail-specific values: %+v", cfg)
 	}
 }
@@ -408,9 +408,9 @@ func TestTitleResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_TITLE_API_KEY", "")
 
 	cfg := Load()
-	if cfg.ResolvedTitleModel() != testLLMModel ||
-		cfg.ResolvedTitleBaseURL() != testLLMBaseURL ||
-		cfg.ResolvedTitleAPIKey() != testLLMAPIKey {
+	if cfg.Title().Model != testLLMModel ||
+		cfg.Title().BaseURL != testLLMBaseURL ||
+		cfg.Title().APIKey != testLLMAPIKey {
 		t.Fatal("title resolvers should fall back to LLM values")
 	}
 }
@@ -421,9 +421,9 @@ func TestTitleSeparateBackend(t *testing.T) {
 	t.Setenv("KADENCE_TITLE_API_KEY", "title-key")
 
 	cfg := Load()
-	if cfg.ResolvedTitleModel() != "title-model" ||
-		cfg.ResolvedTitleBaseURL() != "https://title.example/v1" ||
-		cfg.ResolvedTitleAPIKey() != "title-key" {
+	if cfg.Title().Model != "title-model" ||
+		cfg.Title().BaseURL != "https://title.example/v1" ||
+		cfg.Title().APIKey != "title-key" {
 		t.Fatal("title resolvers should use title-specific values")
 	}
 }
@@ -437,9 +437,9 @@ func TestTitleModelOverrideFallsBackIndependently(t *testing.T) {
 	t.Setenv("KADENCE_TITLE_API_KEY", "")
 
 	cfg := Load()
-	if cfg.ResolvedTitleModel() != "title-model" ||
-		cfg.ResolvedTitleBaseURL() != testLLMBaseURL ||
-		cfg.ResolvedTitleAPIKey() != testLLMAPIKey {
+	if cfg.Title().Model != "title-model" ||
+		cfg.Title().BaseURL != testLLMBaseURL ||
+		cfg.Title().APIKey != testLLMAPIKey {
 		t.Fatal("title model override should preserve independent base URL and API key fallbacks")
 	}
 }
@@ -483,9 +483,9 @@ func TestScheduledWorkerResolversFallBackToLLM(t *testing.T) {
 	t.Setenv("KADENCE_SCHEDULED_WORKER_TEMPERATURE", "")
 
 	cfg := Load()
-	if cfg.ResolvedScheduledWorkerModel() != testLLMModel ||
-		cfg.ResolvedScheduledWorkerBaseURL() != testLLMBaseURL ||
-		cfg.ResolvedScheduledWorkerAPIKey() != testLLMAPIKey ||
+	if cfg.ScheduledWorker().Model != testLLMModel ||
+		cfg.ScheduledWorker().BaseURL != testLLMBaseURL ||
+		cfg.ScheduledWorker().APIKey != testLLMAPIKey ||
 		cfg.ScheduledWorkerTemperature != 0.9 {
 		t.Fatalf("scheduled worker resolvers should fall back to LLM values: %+v", cfg)
 	}
@@ -498,9 +498,9 @@ func TestScheduledWorkerExplicitOverrides(t *testing.T) {
 	t.Setenv("KADENCE_SCHEDULED_WORKER_TEMPERATURE", "0.4")
 
 	cfg := Load()
-	if cfg.ResolvedScheduledWorkerModel() != "worker-model" ||
-		cfg.ResolvedScheduledWorkerBaseURL() != "https://worker.example/v1" ||
-		cfg.ResolvedScheduledWorkerAPIKey() != "worker-key" ||
+	if cfg.ScheduledWorker().Model != "worker-model" ||
+		cfg.ScheduledWorker().BaseURL != "https://worker.example/v1" ||
+		cfg.ScheduledWorker().APIKey != "worker-key" ||
 		cfg.ScheduledWorkerTemperature != 0.4 {
 		t.Fatalf("scheduled worker resolvers should use explicit overrides: %+v", cfg)
 	}

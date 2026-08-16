@@ -146,11 +146,11 @@ func newIntentGuard(cfg config.Config) mcpintent.Evaluator {
 		return nil
 	}
 	guard := mcpintent.NewGuard(
-		provider.NewOpenAICompat(cfg.ResolvedGuardrailBaseURL(), cfg.ResolvedGuardrailAPIKey()),
-		mcpintent.Config{Model: cfg.ResolvedGuardrailModel(), HistoryWindow: cfg.GuardrailHistoryWindow},
+		provider.NewOpenAICompat(cfg.Guardrail().BaseURL, cfg.Guardrail().APIKey),
+		mcpintent.Config{Model: cfg.Guardrail().Model, HistoryWindow: cfg.GuardrailHistoryWindow},
 	)
 	slog.Info("MCP intent guard enabled",
-		"model", cfg.ResolvedGuardrailModel(), "base_url", cfg.ResolvedGuardrailBaseURL())
+		"model", cfg.Guardrail().Model, "base_url", cfg.Guardrail().BaseURL)
 	return guard
 }
 
@@ -245,20 +245,20 @@ func Run() error {
 		convs := store.NewConversationRepository(pool)
 		msgs := store.NewMessageRepository(pool)
 		prov := provider.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey)
-		titleProvider := provider.NewTitleOpenAICompat(cfg.ResolvedTitleBaseURL(), cfg.ResolvedTitleAPIKey())
-		titleGenerator := chat.NewLLMConversationTitleGenerator(titleProvider, cfg.ResolvedTitleModel())
+		titleProvider := provider.NewTitleOpenAICompat(cfg.Title().BaseURL, cfg.Title().APIKey)
+		titleGenerator := chat.NewLLMConversationTitleGenerator(titleProvider, cfg.Title().Model)
 		intentGuard := newIntentGuard(cfg)
 		var guardrail *chat.Guardrail
 		if cfg.GuardrailEnabled {
-			gProv := provider.NewOpenAICompat(cfg.ResolvedGuardrailBaseURL(), cfg.ResolvedGuardrailAPIKey())
+			gProv := provider.NewOpenAICompat(cfg.Guardrail().BaseURL, cfg.Guardrail().APIKey)
 			guardrail = chat.NewGuardrail(gProv, chat.GuardrailConfig{
-				Model:          cfg.ResolvedGuardrailModel(),
+				Model:          cfg.Guardrail().Model,
 				DomainName:     cfg.DomainName,
 				AllowedTopics:  cfg.AllowedTopics,
 				RefusalMessage: cfg.RefusalMessage,
 				HistoryWindow:  cfg.GuardrailHistoryWindow,
 			})
-			slog.Info("guardrail enabled", "model", cfg.ResolvedGuardrailModel(), "base_url", cfg.ResolvedGuardrailBaseURL())
+			slog.Info("guardrail enabled", "model", cfg.Guardrail().Model, "base_url", cfg.Guardrail().BaseURL)
 		}
 		documentsRepo := store.NewDocumentRepository(pool)
 		chatContent := buildChatContent(cfg)
@@ -393,15 +393,15 @@ func Run() error {
 				cfg, chatSvc, convs, msgs, scheduledWiring.pauser, scheduledWiring.hydrator,
 			)
 			workerProvider := provider.NewOpenAICompat(
-				cfg.ResolvedScheduledWorkerBaseURL(),
-				cfg.ResolvedScheduledWorkerAPIKey(),
+				cfg.ScheduledWorker().BaseURL,
+				cfg.ScheduledWorker().APIKey,
 			)
 			executor := scheduled.NewExecutor(scheduled.ExecutorDeps{
 				Worker: workerProvider, Synthesis: prov,
 				Tools: scheduledToolsAdapter{catalog: unattendedTools},
 				Store: scheduledTasks,
 				Config: scheduled.ExecutorConfig{
-					WorkerModel:          cfg.ResolvedScheduledWorkerModel(),
+					WorkerModel:          cfg.ScheduledWorker().Model,
 					WorkerMaxTokens:      cfg.ScheduledWorkerMaxTokens,
 					WorkerTemperature:    cfg.ScheduledWorkerTemperature,
 					WorkerTimeout:        cfg.ScheduledWorkerTimeout,

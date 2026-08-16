@@ -38,6 +38,13 @@ func NewMessageRepository(pool *pgxpool.Pool) *MessageRepository {
 	return &MessageRepository{pool: pool}
 }
 
+// messageCols is the column list scanMessageRow reads; messagePurposeCols adds
+// the purpose column scanMessages reads. Keep each in step with its scanner.
+const (
+	messageCols            = "id, conversation_id::text, role, content, tool_calls, created_at"
+	messageColsWithPurpose = "id, conversation_id::text, role, content, tool_calls, purpose, created_at"
+)
+
 // Add appends a message to a conversation (no tool-call audit record).
 func (r *MessageRepository) Add(ctx context.Context, conversationID string, role, content string) (model.Message, error) {
 	return r.AddWithToolCalls(ctx, conversationID, role, content, nil)
@@ -432,7 +439,7 @@ func addMessageWithPurpose(
 		        )
 		      WHERE id = $1::uuid AND kind = $6 AND $5 = $6
 		 )
-		 SELECT id, conversation_id::text, role, content, tool_calls, created_at FROM inserted`,
+		 SELECT `+messageCols+` FROM inserted`,
 		conversationID, role, content, raw, purpose, messagePurposeChat).
 		Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &tcRaw, &m.CreatedAt)
 	if err != nil {
@@ -448,20 +455,9 @@ func addMessageWithPurpose(
 
 // ListByConversation returns a conversation's messages in chronological order.
 func (r *MessageRepository) ListByConversation(ctx context.Context, conversationID string) ([]model.Message, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id::text, role, content, tool_calls, purpose, created_at FROM messages
+	return r.queryHydratedMessages(ctx, "list messages",
+		`SELECT `+messageColsWithPurpose+` FROM messages
 		 WHERE conversation_id = $1::uuid ORDER BY id`, conversationID)
-	if err != nil {
-		return nil, fmt.Errorf("list messages: %w", err)
-	}
-	messages, err := scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
-		return nil, err
-	}
-	return messages, nil
 }
 
 // ListChatHistory returns provider-facing chat history metadata. Attachment
@@ -469,7 +465,7 @@ func (r *MessageRepository) ListByConversation(ctx context.Context, conversation
 func (r *MessageRepository) ListChatHistory(
 	ctx context.Context, conversationID string,
 ) ([]model.Message, error) {
-	rows, err := r.pool.Query(ctx,
+	return r.queryHydratedMessages(ctx, "list chat history",
 		`SELECT m.id, m.conversation_id::text, m.role, m.content, m.tool_calls, m.purpose, m.created_at
 		   FROM messages AS m
 		   JOIN conversations AS c ON c.id = m.conversation_id
@@ -479,19 +475,7 @@ func (r *MessageRepository) ListChatHistory(
 		        OR (c.kind = $3 AND m.purpose IN ('scheduled_delivery', 'scheduled_definition'))
 		    )
 		  ORDER BY m.id`,
-		conversationID, messagePurposeChat, model.ConversationKindChat,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list chat history: %w", err)
-	}
-	messages, err := scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
-		return nil, err
-	}
-	return messages, nil
+		conversationID, messagePurposeChat, model.ConversationKindChat)
 }
 
 // LoadChatAttachmentPayloads loads ordered attachment payloads for selected
@@ -590,7 +574,7 @@ func (r *MessageRepository) GetByID(
 	ctx context.Context, conversationID string, messageID int64,
 ) (model.Message, error) {
 	message, err := scanMessageRow(r.pool.QueryRow(ctx,
-		`SELECT id, conversation_id::text, role, content, tool_calls, created_at
+		`SELECT `+messageCols+`
 		   FROM messages WHERE conversation_id = $1::uuid AND id = $2`,
 		conversationID, messageID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -610,10 +594,10 @@ func (r *MessageRepository) GetByID(
 // exchanges. Unattended delivery messages remain visible in the conversation
 // and run history but cannot consume the definition compiler's bounded context.
 func (r *MessageRepository) ListRecentDefinitionByConversation(ctx context.Context, conversationID string, limit int) ([]model.Message, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT id, conversation_id, role, content, tool_calls, purpose, created_at
+	return r.queryHydratedMessages(ctx, "list recent scheduled definition messages",
+		`SELECT `+messageColsWithPurpose+`
 		   FROM (
-		        SELECT id, conversation_id::text, role, content, tool_calls, purpose, created_at
+		        SELECT `+messageColsWithPurpose+`
 		          FROM messages
 		         WHERE conversation_id = $1::uuid AND purpose = $2
 		         ORDER BY id DESC
@@ -621,17 +605,6 @@ func (r *MessageRepository) ListRecentDefinitionByConversation(ctx context.Conte
 		   ) AS recent
 		  ORDER BY id`,
 		conversationID, messagePurposeScheduledDefinition, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list recent scheduled definition messages: %w", err)
-	}
-	messages, err := scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
-		return nil, err
-	}
-	return messages, nil
 }
 
 // EditAndRewind updates one owned ordinary-chat user message and removes every
@@ -712,7 +685,7 @@ func (r *MessageRepository) RegenerateAndRewind(
 		return model.Message{}, err
 	}
 	prompt, err := scanMessageRow(tx.QueryRow(ctx,
-		`SELECT id, conversation_id::text, role, content, tool_calls, created_at
+		`SELECT `+messageCols+`
 		   FROM messages
 		  WHERE conversation_id = $1::uuid AND id < $2 AND role = $3
 		  ORDER BY id DESC LIMIT 1`,
@@ -861,7 +834,7 @@ func getMessageForRewind(
 	ctx context.Context, tx pgx.Tx, conversationID string, messageID int64,
 ) (model.Message, error) {
 	message, err := scanMessageRow(tx.QueryRow(ctx,
-		`SELECT id, conversation_id::text, role, content, tool_calls, created_at
+		`SELECT `+messageCols+`
 		   FROM messages WHERE conversation_id = $1::uuid AND id = $2`,
 		conversationID, messageID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1033,4 +1006,24 @@ func hydrateMessageRelations(
 	}
 	referenceRows.Close()
 	return nil
+}
+
+// queryHydratedMessages runs one message query and returns fully hydrated rows:
+// scanned, then joined to their attachments and document references. Every
+// message list read goes through it so hydration cannot be forgotten.
+func (r *MessageRepository) queryHydratedMessages(
+	ctx context.Context, wrap string, sql string, args ...any,
+) ([]model.Message, error) {
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", wrap, err)
+	}
+	messages, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateMessageRelations(ctx, r.pool, messages, false); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }

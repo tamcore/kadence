@@ -2,6 +2,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -500,7 +501,7 @@ func (c Config) Validate() error {
 	if c.RAGTopK <= 0 {
 		return errors.New("KADENCE_RAG_TOP_K must be a positive integer")
 	}
-	if c.MCPIntentGuardEnabled && strings.TrimSpace(c.ResolvedGuardrailAPIKey()) == "" {
+	if c.MCPIntentGuardEnabled && strings.TrimSpace(c.Guardrail().APIKey) == "" {
 		return errors.New("KADENCE_GUARDRAIL_API_KEY or KADENCE_LLM_API_KEY is required when KADENCE_MCP_INTENT_GUARD_ENABLED is true")
 	}
 	if err := c.validateMCP(); err != nil {
@@ -612,79 +613,41 @@ func validateFITRoutes(routes []FITRoute) error {
 	return nil
 }
 
-// ResolvedGuardrailModel returns the guardrail model, falling back to the chat model.
-func (c Config) ResolvedGuardrailModel() string {
-	if c.GuardrailModel != "" {
-		return c.GuardrailModel
-	}
-	return c.LLMModel
+// LLMEndpoint is one resolved provider target: which model to call, where,
+// and with which key.
+type LLMEndpoint struct {
+	Model   string
+	BaseURL string
+	APIKey  string
 }
 
-// ResolvedGuardrailBaseURL returns the guardrail base URL, falling back to the chat base URL.
-func (c Config) ResolvedGuardrailBaseURL() string {
-	if c.GuardrailBaseURL != "" {
-		return c.GuardrailBaseURL
-	}
-	return c.LLMBaseURL
+// Guardrail resolves the guardrail classifier's endpoint, falling back field
+// by field to the primary chat endpoint.
+func (c Config) Guardrail() LLMEndpoint {
+	return c.endpointOrChat(c.GuardrailModel, c.GuardrailBaseURL, c.GuardrailAPIKey)
 }
 
-// ResolvedGuardrailAPIKey returns the guardrail API key, falling back to the chat API key.
-func (c Config) ResolvedGuardrailAPIKey() string {
-	if c.GuardrailAPIKey != "" {
-		return c.GuardrailAPIKey
-	}
-	return c.LLMAPIKey
+// ScheduledWorker resolves the unattended worker's endpoint, falling back
+// field by field to the primary chat endpoint.
+func (c Config) ScheduledWorker() LLMEndpoint {
+	return c.endpointOrChat(c.ScheduledWorkerModel, c.ScheduledWorkerBaseURL, c.ScheduledWorkerAPIKey)
 }
 
-// ResolvedScheduledWorkerModel returns the worker model, falling back to the
-// primary chat model.
-func (c Config) ResolvedScheduledWorkerModel() string {
-	if c.ScheduledWorkerModel != "" {
-		return c.ScheduledWorkerModel
-	}
-	return c.LLMModel
+// Title resolves the conversation-title generator's endpoint, falling back
+// field by field to the primary chat endpoint.
+func (c Config) Title() LLMEndpoint {
+	return c.endpointOrChat(c.TitleModel, c.TitleBaseURL, c.TitleAPIKey)
 }
 
-// ResolvedScheduledWorkerBaseURL returns the worker base URL, falling back to
-// the primary chat base URL.
-func (c Config) ResolvedScheduledWorkerBaseURL() string {
-	if c.ScheduledWorkerBaseURL != "" {
-		return c.ScheduledWorkerBaseURL
+// endpointOrChat fills each empty override field from the chat endpoint. The
+// fallback is per field, not all-or-nothing: overriding only the model keeps
+// the chat base URL and key.
+func (c Config) endpointOrChat(model, baseURL, apiKey string) LLMEndpoint {
+	return LLMEndpoint{
+		Model:   cmp.Or(model, c.LLMModel),
+		BaseURL: cmp.Or(baseURL, c.LLMBaseURL),
+		APIKey:  cmp.Or(apiKey, c.LLMAPIKey),
 	}
-	return c.LLMBaseURL
-}
-
-// ResolvedScheduledWorkerAPIKey returns the worker API key, falling back to
-// the primary chat API key.
-func (c Config) ResolvedScheduledWorkerAPIKey() string {
-	if c.ScheduledWorkerAPIKey != "" {
-		return c.ScheduledWorkerAPIKey
-	}
-	return c.LLMAPIKey
-}
-
-// ResolvedTitleModel returns the title model, falling back to the chat model.
-func (c Config) ResolvedTitleModel() string {
-	if c.TitleModel != "" {
-		return c.TitleModel
-	}
-	return c.LLMModel
-}
-
-// ResolvedTitleBaseURL returns the title base URL, falling back to the chat base URL.
-func (c Config) ResolvedTitleBaseURL() string {
-	if c.TitleBaseURL != "" {
-		return c.TitleBaseURL
-	}
-	return c.LLMBaseURL
-}
-
-// ResolvedTitleAPIKey returns the title API key, falling back to the chat API key.
-func (c Config) ResolvedTitleAPIKey() string {
-	if c.TitleAPIKey != "" {
-		return c.TitleAPIKey
-	}
-	return c.LLMAPIKey
 }
 
 func envOr(key, fallback string) string {
