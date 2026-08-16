@@ -697,6 +697,7 @@ func TestScheduledTaskRepositoryRejectsLifecycleChangesWhileRunInProgress(t *tes
 	for _, runState := range []string{model.ScheduledTaskRunStatePending, model.ScheduledTaskRunStateRunning} {
 		for _, change := range changes {
 			t.Run(runState+"/"+change.name, func(t *testing.T) {
+				testutil.CleanTables(t, pool)
 				users := store.NewUserRepository(pool)
 				conversations := store.NewConversationRepository(pool)
 				repo := store.NewScheduledTaskRepository(pool, 10)

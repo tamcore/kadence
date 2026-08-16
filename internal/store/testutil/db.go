@@ -68,12 +68,14 @@ func SetupTestDB(t *testing.T) *pgxpool.Pool {
 	if pool == nil {
 		t.Fatal("test pool not initialized")
 	}
-	cleanTables(t, pool)
+	CleanTables(t, pool)
 	return pool
 }
 
-// cleanTables truncates all data tables for test isolation.
-func cleanTables(t *testing.T, p *pgxpool.Pool) {
+// CleanTables truncates all data tables. SetupTestDB already calls it, so this
+// is only for a test that needs to reset again part-way through — e.g. a
+// subtest loop that reuses one package-level pool.
+func CleanTables(t *testing.T, p *pgxpool.Pool) {
 	t.Helper()
 	_, err := p.Exec(context.Background(), "TRUNCATE mcp_call_audit, users, sessions, documents RESTART IDENTITY CASCADE")
 	if err != nil {
