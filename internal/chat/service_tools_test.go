@@ -160,9 +160,13 @@ func TestStreamToolCallUsesExternalDeadlineWithoutShorteningDurableAuditContext(
 	}
 	// Like the audit writes above, the assistant save must not run under the
 	// caller's short tool deadline. Its own generous deadline is expected.
+	// Like the audit writes above, the assistant save must be bounded by its own
+	// generous deadline rather than the caller's short tool deadline.
 	if len(msgs.assistantSaveHadDeadlines) != 1 ||
 		msgs.assistantSaveContextErrors[0] != nil ||
-		(msgs.assistantSaveHadDeadlines[0] && msgs.assistantSaveDeadlineIn[0] < time.Second) {
+		!msgs.assistantSaveHadDeadlines[0] ||
+		msgs.assistantSaveDeadlineIn[0] < time.Second ||
+		msgs.assistantSaveDeadlineIn[0] > time.Minute {
 		t.Fatalf(
 			"assistant persistence context = deadline:%v remaining:%v err:%v",
 			msgs.assistantSaveHadDeadlines,

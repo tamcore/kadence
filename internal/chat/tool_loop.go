@@ -58,6 +58,9 @@ func (s *Service) persistPartialAssistantAndFail(
 	return s.failWithAssistant(sink, "the assistant could not complete the response", assistantMessage)
 }
 
+// cleanupScheduledDrafts removes drafts a failed turn left behind. It derives
+// its own context because every caller reaches it after a save failed, and that
+// save may have failed by exhausting the very deadline it was given.
 func (s *Service) cleanupScheduledDrafts(ctx context.Context, userID int64, artifacts []scheduled.ChatArtifact) {
 	if s.scheduled == nil {
 		return
@@ -66,7 +69,9 @@ func (s *Service) cleanupScheduledDrafts(ctx context.Context, userID int64, arti
 	if len(ids) == 0 {
 		return
 	}
-	if err := s.scheduled.CleanupChatDrafts(ctx, userID, ids); err != nil {
+	cleanupCtx, cancel := assistantSaveContext(ctx)
+	defer cancel()
+	if err := s.scheduled.CleanupChatDrafts(cleanupCtx, userID, ids); err != nil {
 		slog.Warn("cleanup scheduled chat drafts failed", "handoff_ids", ids, "error_class", fmt.Sprintf("%T", err))
 	}
 }

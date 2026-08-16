@@ -145,20 +145,21 @@ type fakeErr struct{}
 func (*fakeErr) Error() string { return "not found" }
 
 type fakeMsgs struct {
-	added                      []model.Message
-	createdConversation        *model.Conversation
-	rejectAssistant            bool
-	lastInput                  model.ChatUserInput
-	historyErr                 error
-	payloadErr                 error
-	payloadRequests            [][]int64
-	editCalls                  int
-	regenerateCalls            int
-	assistantSaveContextErrors []error
-	assistantSaveHadDeadlines  []bool
-	assistantSaveDeadlineIn    []time.Duration
-	assistantHandoffIDs        []string
-	assistantHandoffTraces     [][]string
+	added                         []model.Message
+	createdConversation           *model.Conversation
+	rejectAssistant               bool
+	assistantSaveExhaustsDeadline bool
+	lastInput                     model.ChatUserInput
+	historyErr                    error
+	payloadErr                    error
+	payloadRequests               [][]int64
+	editCalls                     int
+	regenerateCalls               int
+	assistantSaveContextErrors    []error
+	assistantSaveHadDeadlines     []bool
+	assistantSaveDeadlineIn       []time.Duration
+	assistantHandoffIDs           []string
+	assistantHandoffTraces        [][]string
 }
 
 func (f *fakeMsgs) Add(_ context.Context, convID string, role, content string) (model.Message, error) {
@@ -245,6 +246,12 @@ func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 	f.assistantSaveContextErrors = append(f.assistantSaveContextErrors, ctx.Err())
 	f.assistantHandoffIDs = append([]string(nil), handoffIDs...)
 	f.assistantHandoffTraces = append(f.assistantHandoffTraces, append([]string(nil), handoffIDs...))
+	if f.assistantSaveExhaustsDeadline {
+		if deadline, ok := ctx.Deadline(); ok {
+			<-time.After(time.Until(deadline))
+		}
+		return model.Message{}, errFakeNotFound
+	}
 	if f.rejectAssistant {
 		return model.Message{}, errFakeNotFound
 	}
@@ -259,16 +266,17 @@ func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 }
 
 type fakeScheduledHandoff struct {
-	artifacts         []scheduled.ChatArtifact
-	requests          []scheduled.HandoffRequest
-	actors            []scheduled.Actor
-	cleanup           [][]string
-	confirmation      scheduled.ChatConfirmation
-	confirmationErr   error
-	confirmationCalls int
-	confirmationActor scheduled.Actor
-	confirmationChat  string
-	err               error
+	artifacts            []scheduled.ChatArtifact
+	requests             []scheduled.HandoffRequest
+	actors               []scheduled.Actor
+	cleanup              [][]string
+	cleanupContextErrors []error
+	confirmation         scheduled.ChatConfirmation
+	confirmationErr      error
+	confirmationCalls    int
+	confirmationActor    scheduled.Actor
+	confirmationChat     string
+	err                  error
 }
 
 func (f *fakeScheduledHandoff) DraftFromChat(
@@ -286,8 +294,9 @@ func (f *fakeScheduledHandoff) DraftFromChat(
 	return scheduled.ChatArtifact{HandoffID: "handoff-" + strconv.Itoa(index+1), TaskID: "task-" + strconv.Itoa(index+1), Ordinal: index + 1, ArtifactState: testScheduledArtifactReady}, nil
 }
 
-func (f *fakeScheduledHandoff) CleanupChatDrafts(_ context.Context, _ int64, ids []string) error {
+func (f *fakeScheduledHandoff) CleanupChatDrafts(ctx context.Context, _ int64, ids []string) error {
 	f.cleanup = append(f.cleanup, append([]string(nil), ids...))
+	f.cleanupContextErrors = append(f.cleanupContextErrors, ctx.Err())
 	return nil
 }
 func (f *fakeScheduledHandoff) ConfirmSoleChatDraft(

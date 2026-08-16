@@ -492,11 +492,16 @@ func TestTurnDeadlineDoesNotReplaceAssistantPersistenceContext(t *testing.T) {
 					msgs.assistantSaveContextErrors[0],
 				)
 			}
-			if msgs.assistantSaveHadDeadlines[0] &&
-				msgs.assistantSaveDeadlineIn[0] <= 10*svcTurnTimeout {
+			// Bounded, but not by the turn's budget: no deadline at all would
+			// let a hung database pin the write forever.
+			if !msgs.assistantSaveHadDeadlines[0] {
+				t.Fatal("assistant persistence context has no deadline; a hung save could never time out")
+			}
+			if remaining := msgs.assistantSaveDeadlineIn[0]; remaining <= 10*svcTurnTimeout ||
+				remaining > time.Minute {
 				t.Fatalf(
-					"assistant persistence inherited the turn deadline: %v left, turn budget %v",
-					msgs.assistantSaveDeadlineIn[0], svcTurnTimeout,
+					"assistant persistence deadline in %v, want bounded and well above the %v turn budget",
+					remaining, svcTurnTimeout,
 				)
 			}
 		})
