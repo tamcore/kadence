@@ -17,13 +17,16 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
     {{- if $csp }}
-    # UPSTREAM WORKAROUND (KADENCE-009). garmin-mcp sends `form-action 'self'`,
+    # UPSTREAM WORKAROUND (KADENCE-009, re-opened as KADENCE-010 — v0.0.6
+    # added the origin to the consent POST's response, which the browser never
+    # reads, so the block persists). garmin-mcp sends `form-action 'self'`,
     # and Chrome applies form-action across a form submission's whole redirect
     # chain. The consent POST answers with a cross-origin 303 to this app's
     # callback, so Chrome blocks the hop: the grant is minted and the code
     # never arrives. Adding only this app's own origin keeps the directive
-    # strict. Delete this and the value once upstream scopes the header to the
-    # transaction's redirect URI.
+    # strict. Delete this and the value once a release carries the origin on
+    # the GET that renders the consent form — that response's policy is the one
+    # the browser enforces the submission against.
     nginx.ingress.kubernetes.io/configuration-snippet: |
       more_clear_headers "Content-Security-Policy";
       more_set_headers "Content-Security-Policy: {{ $csp }}";

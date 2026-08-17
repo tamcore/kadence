@@ -446,9 +446,9 @@ garmin:
       cert-manager.io/cluster-issuer: letsencrypt-prod
       kubernetes.io/tls-acme: "true"
     # Rewrite garmin-mcp's Content-Security-Policy so its consent form may
-    # redirect to this app's callback. See KADENCE-009 and the comment on the
-    # rendered annotation. Requires the ingress controller to permit
-    # configuration snippets. Turn this off once upstream fixes the header.
+    # redirect to this app's callback. Still required as of upstream v0.0.6.
+    # See the comment on the rendered annotation. Requires the ingress
+    # controller to permit configuration snippets.
     relaxFormActionCSP: false
   oauth:
     # The client id Kadence presents. It is also the key upstream files each
