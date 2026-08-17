@@ -61,6 +61,22 @@ spec:
   {{- end }}
   {{- include "kadence.netpol.dnsEgress" . | nindent 2 }}
   {{- include "kadence.netpol.httpsEgress" . | nindent 2 }}
+  {{- if .Values.garmin.enabled }}
+  # The app reaches garmin-mcp at its public URL, because that is the audience
+  # its tokens are minted for and the host its certificate is issued for. That
+  # request hairpins through this cluster's own ingress, and the hairpin is
+  # DNATed to the controller's POD address before egress policy is evaluated —
+  # a private address the httpsEgress rule above deliberately excludes. Without
+  # this rule the call is denied and every discovery attempt times out.
+  - to:
+    - namespaceSelector:
+        {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 8 }}
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+  {{- end }}
   {{- with .Values.networkPolicy.extraAppEgress }}
   {{- toYaml . | nindent 2 }}
   {{- end }}
