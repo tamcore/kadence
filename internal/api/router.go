@@ -43,6 +43,7 @@ type Deps struct {
 	Context     *handlers.Context
 	Credentials *handlers.Credentials
 	MCP         *handlers.MCP
+	MCPOAuth    *handlers.MCPOAuth
 	Profile     *handlers.Profile
 	SessionsAPI *handlers.Sessions
 	WebAuthn    *handlers.WebAuthn
@@ -212,6 +213,18 @@ func mountAuth(r chi.Router, deps Deps) error {
 			r.Post("/api/mcp", deps.MCP.Create)
 			r.Put("/api/mcp/{id}", deps.MCP.Update)
 			r.Delete("/api/mcp/{id}", deps.MCP.Delete)
+		}
+
+		if deps.MCPOAuth != nil {
+			r.Get("/api/mcp/integrations", deps.MCPOAuth.List)
+			r.Post("/api/mcp/oauth/{server}/start", deps.MCPOAuth.Start)
+			r.Delete("/api/mcp/oauth/{server}", deps.MCPOAuth.Unlink)
+			// The callback is the authorization server's redirect target, so it
+			// is a GET the CSRF middleware does not guard. Its state and
+			// browser-cookie binding is what authorizes it, and the session
+			// cookie rides along because it is SameSite=Lax on a top-level
+			// navigation.
+			r.Get("/api/mcp/oauth/callback", deps.MCPOAuth.Callback)
 		}
 
 		if deps.Documents != nil {
