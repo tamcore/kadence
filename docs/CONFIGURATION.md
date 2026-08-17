@@ -229,7 +229,7 @@ user's own bearer token.
 | `MCP_<NAME>_<SCOPE>_OAUTH_CLIENT_ID` | yes | The client id registered with that server. |
 | `MCP_<NAME>_<SCOPE>_OAUTH_CLIENT_SECRET` | no | Only for a confidential client. A public client with PKCE needs none. |
 | `MCP_<NAME>_<SCOPE>_OAUTH_RESOURCE` | yes | The RFC 8707 resource indicator. Must equal the server's own `_URL`. |
-| `MCP_<NAME>_<SCOPE>_OAUTH_SCOPES` | yes | Comma-separated. `garmin:read` and `garmin:write` are grantable; `garmin:destructive` is refused at boot until the in-turn confirmation path exists. |
+| `MCP_<NAME>_<SCOPE>_OAUTH_SCOPES` | yes | Comma-separated. `garmin:read`, `garmin:write` and `garmin:destructive` are grantable; any other scope is refused at boot. |
 
 Adding a scope does not widen an authorization a user already gave: a refresh
 cannot grant what was never consented to. Every already-linked user must
@@ -238,6 +238,18 @@ changes` with a **Reconnect** button until they do. Enabling the write tier in
 the Helm chart therefore needs both halves — `garmin.oauth.scopes` gains
 `garmin:write` AND `garmin.enableWriteTools: true` — and every existing link
 needs one reconnect.
+
+The destructive tier (`garmin.enableDestructiveTools`) asks the user to confirm
+each call while it is in flight, on the chat stream that made it. Two
+consequences follow. It requires `replicaCount: 1`, because the goroutine
+waiting for that answer lives in one pod and the answering request could
+otherwise land on another — the chart refuses to render the combination. And a
+scheduled or otherwise unattended run refuses every such call outright, since
+there is no stream to ask on.
+
+The wait is 25 seconds, bounded by the MCP client transport's own 30-second cap
+on an in-flight server request rather than chosen for comfort. An unanswered
+prompt is a refusal.
 
 Such a server also requires `KADENCE_PUBLIC_URL` and a 32-byte
 `KADENCE_ENCRYPTION_KEY` — the per-user tokens are stored encrypted. Register

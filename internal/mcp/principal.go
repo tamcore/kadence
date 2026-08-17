@@ -151,13 +151,18 @@ const (
 	// ScopeGarminWrite gates the write tier. A granted scope is only half the
 	// gate: the deployment must also enable the tier.
 	ScopeGarminWrite = "garmin:write"
+	// ScopeGarminDestructive gates tools that delete. It is only grantable
+	// because the mid-turn confirmation path exists: the server asks before
+	// every such call, and a question nobody can answer refuses it.
+	ScopeGarminDestructive = "garmin:destructive"
 )
 
-// grantableScopes bounds what Kadence may ask for. The destructive tier
-// additionally requires an interactive confirmation the client must answer
-// mid-call, which does not exist yet, so a configuration naming it is refused
-// rather than quietly requested and then refused on every call.
-var grantableScopes = map[string]bool{ScopeGarminRead: true, ScopeGarminWrite: true}
+// grantableScopes bounds what Kadence may ask for.
+var grantableScopes = map[string]bool{
+	ScopeGarminRead:        true,
+	ScopeGarminWrite:       true,
+	ScopeGarminDestructive: true,
+}
 
 // IntegrationID is the stable public identifier of this server in URLs, API
 // payloads, and the sealed-record context. It is the lowercased name, resolved

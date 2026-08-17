@@ -21,6 +21,7 @@ const (
 	envGarminScopes            = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead
 	envGarminAuthMode          = "MCP_GARMIN_GLOBAL_AUTH_MODE=oauth"
 	envGarminScopesDestructive = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:destructive"
+	envGarminScopesUngrantable = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:root"
 	testPrincipalKey           = "42/garmin"
 	testBearer42               = "tok-42"
 	testOtherUsername          = "bob"
@@ -282,18 +283,21 @@ func TestWriteScopeIsGrantable(t *testing.T) {
 	}
 }
 
-func TestDestructiveScopeIsStillRefused(t *testing.T) {
+func TestDestructiveScopeIsGrantable(t *testing.T) {
 	env := []string{
 		envGarminURL, envGarminTransport,
 		envGarminAuthMode, envGarminClientID, envGarminResource,
-		"MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead + ",garmin:destructive",
+		"MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead + "," + ScopeGarminDestructive,
 	}
 	got, err := ServersFromEnv(env)
 	if err != nil {
 		t.Fatalf("ServersFromEnv: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatal("the destructive scope was accepted before the confirmation path exists")
+	if len(got) != 1 {
+		t.Fatalf("got %d servers, want the destructive tier to be accepted", len(got))
+	}
+	if len(got[0].OAuthScopes) != 2 {
+		t.Fatalf("scopes = %v, want both to survive", got[0].OAuthScopes)
 	}
 }
 
@@ -307,7 +311,7 @@ func TestServersFromEnvDropsOAuthServerMissingClientOrResource(t *testing.T) {
 		"no client id": {envGarminResource, envGarminScopes},
 		"no resource":  {envGarminClientID, envGarminScopes},
 		"no scopes":    {envGarminClientID, envGarminResource},
-		"ungrantable":  {envGarminClientID, envGarminResource, envGarminScopesDestructive},
+		"ungrantable":  {envGarminClientID, envGarminResource, envGarminScopesUngrantable},
 		"resource mismatch": {envGarminClientID, envGarminScopes,
 			"MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=https://other.example.invalid/mcp"},
 		"neither": {},
@@ -523,5 +527,22 @@ func TestToolsForUsesResolvedPrincipal(t *testing.T) {
 	want := clientCacheKey(s, principalAuth{principal: "42", bearer: testBearer42})
 	if _, ok := reg.clients[want]; !ok {
 		t.Fatalf("no client cached under the resolved principal and token; cache holds %d entries", len(reg.clients))
+	}
+}
+
+func TestAnUnknownScopeIsStillRefused(t *testing.T) {
+	// The allowlist is the boundary of what Kadence will ever ask a user to
+	// grant. A scope nobody implemented must not reach the consent screen.
+	env := []string{
+		envGarminURL, envGarminTransport,
+		envGarminAuthMode, envGarminClientID, envGarminResource,
+		envGarminScopesUngrantable,
+	}
+	got, err := ServersFromEnv(env)
+	if err != nil {
+		t.Fatalf("ServersFromEnv: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("an unknown scope survived validation: %+v", got)
 	}
 }

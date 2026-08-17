@@ -449,9 +449,10 @@ garmin:
     # The client id Kadence presents. It is also the key upstream files each
     # user's consent under: changing it orphans every existing authorization.
     clientID: kadence
-    # The read and write tiers are grantable. The destructive tier additionally
-    # needs an interactive confirmation path Kadence does not have yet, and the
-    # app refuses to start if it is configured to ask for that scope.
+    # All three tiers are grantable. The destructive tier asks the user to
+    # confirm mid-call, so it additionally requires replicaCount: 1 — the
+    # goroutine waiting for that answer lives in one pod, and the chart
+    # refuses to render otherwise.
     #
     # Adding a scope here does not widen an existing authorization: a refresh
     # cannot grant what was never consented to. Every already-linked user must
@@ -462,6 +463,7 @@ garmin:
   # scope AND the operator flag. Turning a flag on without adding the matching
   # scope above leaves the tools advertised but refused on every call.
   enableWriteTools: false
+  # Requires replicaCount: 1. See the confirmation note above.
   enableDestructiveTools: false
   # The networks a reverse proxy actually terminates in. The forwarded address
   # keys the rate limiter in front of the unauthenticated OAuth endpoints, so a
