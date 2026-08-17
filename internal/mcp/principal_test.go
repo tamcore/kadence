@@ -3,7 +3,10 @@ package mcp
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -15,8 +18,156 @@ const (
 	envGarminTransport = "MCP_GARMIN_GLOBAL_TRANSPORT=streamable-http"
 	envGarminClientID  = "MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID=" + testOAuthClientID
 	envGarminResource  = "MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=" + testOAuthResource
-	envGarminScopes    = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:read"
+	envGarminScopes    = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead
+	testPrincipalKey   = "42/garmin"
+	testBearer42       = "tok-42"
 )
+
+// stubTokens resolves "<userID>/<serverID>" to a bearer token. A missing entry
+// stands in for a user who has not linked the server.
+type stubTokens map[string]string
+
+func (s stubTokens) TokenFor(_ context.Context, userID int64, serverID string) (string, error) {
+	tok, ok := s[strconv.FormatInt(userID, 10)+"/"+serverID]
+	if !ok {
+		return "", errors.New("stub: not linked")
+	}
+	return tok, nil
+}
+
+// oauthTestServer is a fake MCP server that records the Authorization header of
+// every request it sees.
+func oauthTestServer(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	inner := newFakeGarminServer(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+func oauthServerAt(url string) Server {
+	return Server{
+		Name: testGarminName, Scope: scopeGlobal, URL: url,
+		Transport: transportStreamableHTTP, AuthMode: authModeOAuth, FromEnv: true,
+		OAuthClientID: testOAuthClientID, OAuthResource: url, OAuthScopes: []string{ScopeGarminRead},
+	}
+}
+
+func TestPerPrincipalServerSendsThatUsersBearerToken(t *testing.T) {
+	ts, headers := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
+	t.Cleanup(func() { _ = reg.Close() })
+
+	defs, err := reg.ToolsFor(context.Background(), testUsername)
+	if err != nil {
+		t.Fatalf("ToolsFor: %v", err)
+	}
+	if len(defs) == 0 {
+		t.Fatal("a linked user got no tools")
+	}
+	for _, got := range headers() {
+		if got != "Bearer "+testBearer42 {
+			t.Fatalf("Authorization = %q, want Bearer tok-42", got)
+		}
+	}
+	if len(headers()) == 0 {
+		t.Fatal("the server saw no request")
+	}
+}
+
+func TestTwoUsersEachSendTheirOwnBearerToken(t *testing.T) {
+	ts, headers := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{"alice": 42, "bob": 43})
+	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42, "43/garmin": "tok-43"})
+	t.Cleanup(func() { _ = reg.Close() })
+
+	for _, user := range []string{"alice", "bob"} {
+		if _, err := reg.ToolsFor(context.Background(), user); err != nil {
+			t.Fatalf("ToolsFor(%s): %v", user, err)
+		}
+	}
+
+	saw := map[string]bool{}
+	for _, h := range headers() {
+		saw[h] = true
+	}
+	if !saw["Bearer "+testBearer42] || !saw["Bearer tok-43"] {
+		t.Fatalf("both users' tokens were not used: %v", saw)
+	}
+	if len(saw) != 2 {
+		t.Fatalf("unexpected Authorization headers: %v", saw)
+	}
+}
+
+func TestUnlinkedUserGetsNoToolsAndNoDial(t *testing.T) {
+	ts, headers := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{}) // nobody is linked
+	t.Cleanup(func() { _ = reg.Close() })
+
+	defs, err := reg.ToolsFor(context.Background(), testUsername)
+	if err != nil {
+		t.Fatalf("ToolsFor: %v", err)
+	}
+	if len(defs) != 0 {
+		t.Fatalf("an unlinked user got %d tools, want 0", len(defs))
+	}
+	if got := headers(); len(got) != 0 {
+		t.Fatalf("an unlinked user still reached the server: %v", got)
+	}
+}
+
+func TestCallReportsThatTheServerNeedsLinking(t *testing.T) {
+	ts, _ := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{})
+	t.Cleanup(func() { _ = reg.Close() })
+
+	if _, err := reg.Call(context.Background(), testUsername, "garmin__get_activities", "{}"); err == nil {
+		t.Fatal("Call succeeded for an unlinked user")
+	}
+}
+
+func TestBasicAuthServerStillSendsBasicAuth(t *testing.T) {
+	ts, headers := oauthTestServer(t)
+	s := Server{
+		Name: testGarminName, Scope: scopeGlobal, URL: ts.URL,
+		Transport: transportStreamableHTTP, AuthUser: "kadence-basic", AuthPass: "pw", FromEnv: true,
+	}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	t.Cleanup(func() { _ = reg.Close() })
+
+	if _, err := reg.ToolsFor(context.Background(), testUsername); err != nil {
+		t.Fatalf("ToolsFor: %v", err)
+	}
+	for _, got := range headers() {
+		if !strings.HasPrefix(got, "Basic ") {
+			t.Fatalf("Authorization = %q, want a Basic credential", got)
+		}
+	}
+}
 
 // stubPrincipals resolves usernames to fixed ids.
 type stubPrincipals map[string]int64
@@ -77,7 +228,7 @@ func TestServersFromEnvParsesOAuthClient(t *testing.T) {
 	if s.OAuthResource != testOAuthResource {
 		t.Fatalf("resource = %q", s.OAuthResource)
 	}
-	if len(s.OAuthScopes) != 1 || s.OAuthScopes[0] != "garmin:read" {
+	if len(s.OAuthScopes) != 1 || s.OAuthScopes[0] != ScopeGarminRead {
 		t.Fatalf("scopes = %v, want one deduplicated garmin:read", s.OAuthScopes)
 	}
 }
@@ -145,13 +296,13 @@ func TestClientForIsolatesPrincipalsOnOAuthServer(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	a, releaseA, err := reg.clientFor(context.Background(), s, "7")
+	a, releaseA, err := reg.clientFor(context.Background(), s, principalAuth{principal: "7"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 7): %v", err)
 	}
 	defer releaseA()
 
-	b, releaseB, err := reg.clientFor(context.Background(), s, "8")
+	b, releaseB, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8): %v", err)
 	}
@@ -174,13 +325,13 @@ func TestClientForSharesOneClientOnBasicServer(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	a, releaseA, err := reg.clientFor(context.Background(), s, "7")
+	a, releaseA, err := reg.clientFor(context.Background(), s, principalAuth{principal: "7"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 7): %v", err)
 	}
 	defer releaseA()
 
-	b, releaseB, err := reg.clientFor(context.Background(), s, "8")
+	b, releaseB, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8): %v", err)
 	}
@@ -200,12 +351,12 @@ func TestEvictClientEvictsOnlyThatPrincipal(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	_, releaseA, err := reg.clientFor(context.Background(), s, "7")
+	_, releaseA, err := reg.clientFor(context.Background(), s, principalAuth{principal: "7"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 7): %v", err)
 	}
 	releaseA()
-	b, releaseB, err := reg.clientFor(context.Background(), s, "8")
+	b, releaseB, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8): %v", err)
 	}
@@ -216,7 +367,7 @@ func TestEvictClientEvictsOnlyThatPrincipal(t *testing.T) {
 	if _, ok := reg.clients[clientCacheKey(s, "7")]; ok {
 		t.Fatal("principal 7's client survived its own eviction")
 	}
-	again, release, err := reg.clientFor(context.Background(), s, "8")
+	again, release, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8, after evict): %v", err)
 	}
@@ -243,7 +394,7 @@ func TestConcurrentPrincipalsNeverShareAClient(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			c, release, err := reg.clientFor(context.Background(), s, strconv.Itoa(i+1))
+			c, release, err := reg.clientFor(context.Background(), s, principalAuth{principal: strconv.Itoa(i + 1)})
 			if err != nil {
 				errs[i] = err
 				return
@@ -295,6 +446,7 @@ func TestToolsForUsesResolvedPrincipal(t *testing.T) {
 	}
 	reg := NewRegistry([]Server{s}, nil, nil)
 	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
 	t.Cleanup(func() { _ = reg.Close() })
 
 	defs, err := reg.ToolsFor(context.Background(), testUsername)

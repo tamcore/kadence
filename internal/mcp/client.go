@@ -176,7 +176,7 @@ func newClient(ctx context.Context, s Server, httpClient *http.Client) (mcpClien
 // verify HTTPS MCP servers' certs against a custom CA); nil leaves mcp-go's
 // default client in place, preserving today's behavior.
 func newTransportClient(s Server, httpClient *http.Client) (*mcpclient.Client, error) {
-	headers := basicAuthHeaders(s)
+	headers := authHeaders(s)
 
 	switch s.Transport {
 	case transportStreamableHTTP:
@@ -210,9 +210,16 @@ func newTransportClient(s Server, httpClient *http.Client) (*mcpclient.Client, e
 	}
 }
 
-// basicAuthHeaders returns the HTTP headers to apply for the server's
-// configured basic-auth credentials, or nil if no AuthUser is set.
-func basicAuthHeaders(s Server) map[string]string {
+// authHeaders returns the Authorization header for this server: the user's own
+// bearer token when the credential is per user, the shared basic-auth
+// credential otherwise, and nil when neither is configured.
+func authHeaders(s Server) map[string]string {
+	if s.PerPrincipal() {
+		if s.bearer == "" {
+			return nil
+		}
+		return map[string]string{"Authorization": "Bearer " + s.bearer}
+	}
 	if s.AuthUser == "" {
 		return nil
 	}

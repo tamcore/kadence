@@ -59,6 +59,7 @@ type Registry struct {
 	httpClient *http.Client // optional CA-verifying client; nil = mcp-go default
 	userSrc    UserServerSource
 	principals PrincipalSource
+	tokens     TokenSource
 
 	mu      sync.Mutex
 	clients map[string]*leasedClient // keyed by Name+"/"+Scope; env servers only
@@ -184,13 +185,13 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 	applicable, prefixes := applicableServersWithPrefixes(username, servers)
 	for i, s := range applicable {
 		func() {
-			principal, err := r.principalFor(ctx, s, username)
+			auth, err := r.authFor(ctx, s, username)
 			if err != nil {
-				slog.Warn("mcp: skipping server (no principal)", "server", s.Name, "scope", s.Scope, "error", err)
+				slog.Warn("mcp: skipping server (no usable authorization)", "server", s.Name, "scope", s.Scope, "error", err)
 				return
 			}
 
-			client, release, err := r.clientFor(ctx, s, principal)
+			client, release, err := r.clientFor(ctx, s, auth)
 			if err != nil {
 				slog.Warn("mcp: skipping server (connect failed)", "server", s.Name, "scope", s.Scope, "error", err)
 				return
@@ -200,7 +201,7 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 			tools, err := client.ListTools(ctx)
 			if err != nil {
 				slog.Warn("mcp: skipping server (list tools failed)", "server", s.Name, "scope", s.Scope, "error", err)
-				r.evictClient(s, principal)
+				r.evictClient(s, auth.principal)
 				return
 			}
 
@@ -261,12 +262,12 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 		return "", fmt.Errorf("mcp: tool %q is not enabled for server %q", realTool, prefix)
 	}
 
-	principal, err := r.principalFor(ctx, s, username)
+	auth, err := r.authFor(ctx, s, username)
 	if err != nil {
 		return "", err
 	}
 
-	client, release, err := r.clientFor(ctx, s, principal)
+	client, release, err := r.clientFor(ctx, s, auth)
 	if err != nil {
 		return "", fmt.Errorf("mcp: connect to server %s: %w", s.Name, err)
 	}
@@ -274,7 +275,7 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 
 	out, err := client.CallTool(ctx, realTool, argsJSON)
 	if err != nil {
-		r.evictClient(s, principal)
+		r.evictClient(s, auth.principal)
 		return "", err
 	}
 	return out, nil
@@ -302,7 +303,7 @@ func (r *Registry) Probe(ctx context.Context, s Server) ([]ToolInfo, error) {
 		return nil, fmt.Errorf("mcp: probe %s/%s: %w", s.Name, s.Scope, ErrProbeNeedsPrincipal)
 	}
 
-	client, release, err := r.clientFor(ctx, s, "")
+	client, release, err := r.clientFor(ctx, s, principalAuth{})
 	if err != nil {
 		return nil, fmt.Errorf("mcp: probe connect %s/%s: %w", s.Name, s.Scope, err)
 	}
@@ -428,7 +429,7 @@ func serverPrefixes(servers []Server) []string {
 // dialTimeout: without this, canceling the "leader" caller's context (e.g. an
 // aborted chat stream) would abort the in-flight dial and hand every waiter
 // sharing it a context.Canceled error unrelated to their own request.
-func (r *Registry) clientFor(ctx context.Context, s Server, principal string) (mcpClient, func(), error) {
+func (r *Registry) clientFor(ctx context.Context, s Server, auth principalAuth) (mcpClient, func(), error) {
 	noop := func() {}
 
 	if !r.isEnvServer(s) {
@@ -439,7 +440,8 @@ func (r *Registry) clientFor(ctx context.Context, s Server, principal string) (m
 		return c, func() { _ = c.Close() }, nil
 	}
 
-	key := clientCacheKey(s, principal)
+	key := clientCacheKey(s, auth.principal)
+	s.bearer = auth.bearer
 
 	if c, release, ok := r.leaseCached(key); ok {
 		return c, release, nil

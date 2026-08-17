@@ -44,23 +44,64 @@ func (r *Registry) principalSource() PrincipalSource {
 	return r.principals
 }
 
-// principalFor returns the cache/credential principal for a dispatch to s on
-// behalf of username. A server that shares one credential needs none, so it
-// returns the empty string; a per-principal server resolves the immutable
-// user id.
-func (r *Registry) principalFor(ctx context.Context, s Server, username string) (string, error) {
+// errNoTokenSource is returned when a per-principal server has no way to obtain
+// a user's bearer token.
+var errNoTokenSource = errors.New("mcp: no token source configured")
+
+// TokenSource hands out a live access token for one user's authorization with
+// one server. A failure means that user cannot use the server right now —
+// usually because they have not linked it, or must link it again.
+type TokenSource interface {
+	TokenFor(ctx context.Context, userID int64, serverID string) (string, error)
+}
+
+// SetTokenSource installs the provider of per-user bearer tokens.
+func (r *Registry) SetTokenSource(src TokenSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tokens = src
+}
+
+func (r *Registry) tokenSource() TokenSource {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tokens
+}
+
+// principalAuth is the identity and the credential for one dispatch. They
+// travel together so a cached client can never be handed a bearer that belongs
+// to a different principal.
+type principalAuth struct {
+	principal string
+	bearer    string
+}
+
+// authFor resolves the identity and credential for a dispatch to s on behalf of
+// username. A server that shares one credential needs neither, so it returns
+// the zero value; a per-principal server resolves the immutable user id and
+// that user's own token.
+func (r *Registry) authFor(ctx context.Context, s Server, username string) (principalAuth, error) {
 	if !s.PerPrincipal() {
-		return "", nil
+		return principalAuth{}, nil
 	}
 	src := r.principalSource()
 	if src == nil {
-		return "", fmt.Errorf("%w for server %s/%s", errNoPrincipalSource, s.Name, s.Scope)
+		return principalAuth{}, fmt.Errorf("%w for server %s/%s", errNoPrincipalSource, s.Name, s.Scope)
 	}
 	id, err := src.UserIDFor(ctx, username)
 	if err != nil {
-		return "", fmt.Errorf("mcp: resolve principal for %s/%s: %w", s.Name, s.Scope, err)
+		return principalAuth{}, fmt.Errorf("mcp: resolve principal for %s/%s: %w", s.Name, s.Scope, err)
 	}
-	return strconv.FormatInt(id, 10), nil
+
+	tokens := r.tokenSource()
+	if tokens == nil {
+		return principalAuth{}, fmt.Errorf("%w for server %s/%s", errNoTokenSource, s.Name, s.Scope)
+	}
+	bearer, err := tokens.TokenFor(ctx, id, s.IntegrationID())
+	if err != nil {
+		return principalAuth{}, fmt.Errorf("mcp: no usable authorization for %s/%s: %w", s.Name, s.Scope, err)
+	}
+	return principalAuth{principal: strconv.FormatInt(id, 10), bearer: bearer}, nil
 }
 
 // validateOAuth reports whether an oauth server carries the client identity it
@@ -92,10 +133,13 @@ func (s Server) validateOAuth() error {
 	return nil
 }
 
+// ScopeGarminRead is the read tier of the garmin MCP server.
+const ScopeGarminRead = "garmin:read"
+
 // grantableScopes bounds what Kadence may ask for. The write and destructive
 // tiers need an interactive confirmation path that does not exist yet, so a
 // configuration naming them is refused rather than quietly requested.
-var grantableScopes = map[string]bool{"garmin:read": true}
+var grantableScopes = map[string]bool{ScopeGarminRead: true}
 
 // IntegrationID is the stable public identifier of this server in URLs, API
 // payloads, and the sealed-record context. It is the lowercased name, resolved

@@ -624,7 +624,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 
 	slowDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), slowServer, "")
+		_, _, err := reg.clientFor(context.Background(), slowServer, principalAuth{})
 		slowDone <- err
 	}()
 
@@ -638,7 +638,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 	// DIFFERENT server must complete promptly rather than queueing behind it.
 	fastDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), fastServer, "")
+		_, _, err := reg.clientFor(context.Background(), fastServer, principalAuth{})
 		fastDone <- err
 	}()
 
@@ -675,7 +675,7 @@ func TestRegistry_ClientForDedupsConcurrentDialsToSameServer(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			clients[i], _, errs[i] = reg.clientFor(context.Background(), s, "")
+			clients[i], _, errs[i] = reg.clientFor(context.Background(), s, principalAuth{})
 		}(i)
 	}
 	wg.Wait()
@@ -711,7 +711,7 @@ func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing
 
 	dialDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), s, "")
+		_, _, err := reg.clientFor(context.Background(), s, principalAuth{})
 		dialDone <- err
 	}()
 
@@ -760,7 +760,7 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 		err error
 	}, 1)
 	go func() {
-		c, _, err := reg.clientFor(leaderCtx, s, "")
+		c, _, err := reg.clientFor(leaderCtx, s, principalAuth{})
 		leaderDone <- struct {
 			c   mcpClient
 			err error
@@ -776,7 +776,7 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 	// A follower racing on the same key joins the in-flight dial.
 	followerDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), s, "")
+		_, _, err := reg.clientFor(context.Background(), s, principalAuth{})
 		followerDone <- err
 	}()
 
@@ -902,7 +902,7 @@ func TestClientForReleaseIsNoOpForCachedEnvClient(t *testing.T) {
 	reg.clients[testEnvServerName+"/"+scopeGlobal] = &leasedClient{client: c}
 	reg.mu.Unlock()
 
-	got, release, err := reg.clientFor(context.Background(), s, "")
+	got, release, err := reg.clientFor(context.Background(), s, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -996,7 +996,7 @@ func TestEvictClientDoesNotCloseALeasedClient(t *testing.T) {
 	dialClient = func(context.Context, Server, *http.Client) (mcpClient, error) { return fresh, nil }
 	t.Cleanup(func() { dialClient = restore })
 
-	got, release, err := reg.clientFor(context.Background(), s, "")
+	got, release, err := reg.clientFor(context.Background(), s, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1130,7 +1130,7 @@ func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
 		Transport: transportStreamableHTTP,
 	}
 
-	got, release, err := reg.clientFor(context.Background(), userSrv, "")
+	got, release, err := reg.clientFor(context.Background(), userSrv, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1145,7 +1145,7 @@ func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
 		t.Fatalf("colliding user-defined server entered the cache; size = %d", n)
 	}
 
-	got2, release2, err := reg.clientFor(context.Background(), envSrv, "")
+	got2, release2, err := reg.clientFor(context.Background(), envSrv, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1241,7 @@ func runFanOutEvictionRounds(t *testing.T, assert func(round int, r fanOutEvicti
 		}
 		leaderDone := make(chan result, 1)
 		go func() {
-			c, release, err := reg.clientFor(context.Background(), s, "")
+			c, release, err := reg.clientFor(context.Background(), s, principalAuth{})
 			if err == nil {
 				reg.evictClient(s, "")
 				release()
@@ -1258,7 +1258,7 @@ func runFanOutEvictionRounds(t *testing.T, assert func(round int, r fanOutEvicti
 		}, 1)
 		go func() {
 			followerReady <- struct{}{}
-			c, release, err := reg.clientFor(context.Background(), s, "")
+			c, release, err := reg.clientFor(context.Background(), s, principalAuth{})
 			followerDone <- struct {
 				result
 				release func()
@@ -1346,7 +1346,7 @@ func TestRegistry_DialCompletingAfterCloseIsNotCached(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		_, release, err := reg.clientFor(context.Background(), s, "")
+		_, release, err := reg.clientFor(context.Background(), s, principalAuth{})
 		done <- result{release, err}
 	}()
 	<-dialStarted

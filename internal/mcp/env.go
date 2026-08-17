@@ -106,6 +106,10 @@ type Server struct {
 	// be inferred from Name/Scope, because a user-defined server may collide
 	// with an env server on both.
 	FromEnv bool
+	// bearer is the resolved per-user access token for this dispatch. It is
+	// unexported and set only by the registry immediately before dialing, so a
+	// credential can never be configured statically or copied into a cache key.
+	bearer string
 }
 
 // AppliesTo reports whether this server's tools should be offered to the
