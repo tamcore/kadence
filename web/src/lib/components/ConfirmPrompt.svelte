@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { submitConfirmation } from '$lib/api/confirmations';
 	import { confirmRequest } from '$lib/stores/chat';
+	import { get } from 'svelte/store';
 	import { canReachServer } from '$lib/stores/connection';
 	import type { ConfirmRequest } from '$lib/types';
 	import Button from '$lib/components/Button.svelte';
@@ -19,7 +20,12 @@
 		error = '';
 		try {
 			await submitConfirmation(request.requestId, confirm);
-			confirmRequest.set(null);
+			// Only clear what we answered. A second question can arrive while
+			// this POST is in flight, and clearing blindly would erase a live
+			// prompt the user has not seen yet.
+			if (get(confirmRequest)?.requestId === request.requestId) {
+				confirmRequest.set(null);
+			}
 		} catch {
 			error = 'Could not send your answer. The action was not permitted.';
 		} finally {

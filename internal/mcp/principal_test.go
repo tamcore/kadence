@@ -23,6 +23,7 @@ const (
 	envGarminScopesDestructive = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:destructive"
 	testPrincipalKey           = "42/garmin"
 	testBearer42               = "tok-42"
+	testOtherUsername          = "bob"
 )
 
 // stubTokens resolves "<userID>/<serverID>" to a bearer token. A missing entry
@@ -97,11 +98,11 @@ func TestTwoUsersEachSendTheirOwnBearerToken(t *testing.T) {
 	ts, headers := oauthTestServer(t)
 	s := oauthServerAt(ts.URL)
 	reg := NewRegistry([]Server{s}, nil, nil)
-	reg.SetPrincipalSource(stubPrincipals{"alice": 42, "bob": 43})
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42, testOtherUsername: 43})
 	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42, "43/garmin": "tok-43"})
 	t.Cleanup(func() { _ = reg.Close() })
 
-	for _, user := range []string{"alice", "bob"} {
+	for _, user := range []string{testUsername, testOtherUsername} {
 		if _, err := reg.ToolsFor(context.Background(), user); err != nil {
 			t.Fatalf("ToolsFor(%s): %v", user, err)
 		}

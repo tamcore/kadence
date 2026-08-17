@@ -60,9 +60,10 @@ func (s *recordingSink) firstConfirmEvent() (ChatEvent, bool) {
 // countingBroker counts how many questions were ever registered, which is what
 // proves an unattended turn asked nobody.
 type countingBroker struct {
-	mu       sync.Mutex
-	requests int
-	inner    *confirm.Broker
+	mu        sync.Mutex
+	requests  int
+	abandoned int
+	inner     *confirm.Broker
 }
 
 func newCountingBroker() *countingBroker {
@@ -78,6 +79,19 @@ func (b *countingBroker) NewRequest(userID int64, tool, prompt string) (confirm.
 
 func (b *countingBroker) Await(ctx context.Context, id string) (bool, error) {
 	return b.inner.Await(ctx, id)
+}
+
+func (b *countingBroker) Abandon(userID int64, id string) {
+	b.mu.Lock()
+	b.abandoned++
+	b.mu.Unlock()
+	b.inner.Abandon(userID, id)
+}
+
+func (b *countingBroker) abandonedCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.abandoned
 }
 
 func (b *countingBroker) count() int {
@@ -194,5 +208,41 @@ func TestTheRefusalNamesConfirmationSoTheModelCanRelayIt(t *testing.T) {
 		Confirm(context.Background(), confirmTestUserID, confirmTestTool, confirmTestPrompt)
 	if err == nil || !strings.Contains(err.Error(), "confirm") {
 		t.Fatalf("err = %v, want it to mention confirmation", err)
+	}
+}
+
+// deadSink stands in for a stream the browser has already dropped.
+type deadSink struct{}
+
+func (deadSink) Send(ChatEvent) error { return errors.New("stream closed") }
+func (deadSink) Flush() error         { return errors.New("stream closed") }
+
+func TestAQuestionThatCannotBeDeliveredIsAbandonedAtOnce(t *testing.T) {
+	// Waiting on a prompt that never rendered would block the tool call for
+	// the whole TTL, and would leave an answerable id behind.
+	broker := newCountingBroker()
+	bridge := NewConfirmBridge(broker)
+	ctx := WithConfirmSink(context.Background(), deadSink{})
+
+	done := make(chan confirmOutcome, 1)
+	go func() {
+		allowed, err := bridge.Confirm(ctx, confirmTestUserID, confirmTestTool, confirmTestPrompt)
+		done <- confirmOutcome{allowed, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.allowed {
+			t.Fatal("an undeliverable question was treated as allowed")
+		}
+		if got.err == nil {
+			t.Fatal("an undeliverable question reported no error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Confirm waited on a prompt nobody could see")
+	}
+
+	if n := broker.abandonedCount(); n != 1 {
+		t.Fatalf("abandoned %d questions, want 1", n)
 	}
 }

@@ -1,3 +1,6 @@
+{{- if and .Values.garmin.enableDestructiveTools (gt (int .Values.replicaCount) 1) }}
+{{- fail "garmin.enableDestructiveTools requires replicaCount: 1. A destructive tool asks the user to confirm mid-call, and the goroutine waiting for that answer lives in one app pod. With more than one replica the answering request can land on a different pod, which knows nothing about the question and refuses it, so the action fails even though the user allowed it." }}
+{{- end }}
 {{- if .Values.garmin.enabled }}
 {{- $fullname := include "kadence.garmin.fullname" . }}
 apiVersion: apps/v1

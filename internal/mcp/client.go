@@ -227,9 +227,16 @@ func newTransportClient(s Server, httpClient *http.Client) (*mcpclient.Client, e
 }
 
 // wantsElicitation reports whether this server may ask its caller to confirm.
-// Only a per-principal server can: a confirmation names a user, and a server
-// on one shared credential has none to name.
-func wantsElicitation(s Server) bool { return s.PerPrincipal() }
+//
+// Two conditions. Only a per-principal server can be asked at all: a
+// confirmation names a user, and a server on one shared credential has none to
+// name. And only the streamable-http transport can carry the question —
+// mcp-go's SSE transport has no path for a server-initiated request, so
+// declaring the capability over it would promise something we cannot answer,
+// leaving the server waiting on a reply that can never arrive.
+func wantsElicitation(s Server) bool {
+	return s.PerPrincipal() && s.Transport == transportStreamableHTTP
+}
 
 // clientOptions returns the mcp-go client options for this server. The
 // elicitation handler is stateless — it reads the user and the tool from the

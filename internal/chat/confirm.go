@@ -17,6 +17,7 @@ var ErrNoLiveTurn = errors.New("chat: this run cannot ask you to confirm, so the
 type ConfirmBroker interface {
 	NewRequest(userID int64, tool, prompt string) (confirm.Request, error)
 	Await(ctx context.Context, id string) (bool, error)
+	Abandon(userID int64, id string)
 }
 
 type confirmSinkKey struct{}
@@ -63,8 +64,13 @@ func (b *ConfirmBridge) Confirm(ctx context.Context, userID int64, tool, prompt 
 		return false, err
 	}
 
-	_ = sink.Send(ChatEvent{Type: EventConfirm, RequestID: req.ID, Tool: tool, Message: prompt})
-	_ = sink.Flush()
+	if err := sendConfirmEvent(sink, req.ID, tool, prompt); err != nil {
+		// The question never reached the browser, so waiting for an answer
+		// would block the tool call for the whole TTL on a prompt nobody can
+		// see. Drop the request so a late answer cannot arrive either.
+		b.broker.Abandon(userID, req.ID)
+		return false, err
+	}
 
 	allowed, err := b.broker.Await(ctx, req.ID)
 	if err != nil {
@@ -73,4 +79,13 @@ func (b *ConfirmBridge) Confirm(ctx context.Context, userID int64, tool, prompt 
 		return false, nil
 	}
 	return allowed, nil
+}
+
+// sendConfirmEvent puts the question on the stream, reporting a delivery
+// failure rather than swallowing it.
+func sendConfirmEvent(sink EventSink, id, tool, prompt string) error {
+	if err := sink.Send(ChatEvent{Type: EventConfirm, RequestID: id, Tool: tool, Message: prompt}); err != nil {
+		return err
+	}
+	return sink.Flush()
 }

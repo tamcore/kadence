@@ -205,6 +205,16 @@ func (b *Broker) Submit(userID int64, id string, allowed bool) error {
 	return nil
 }
 
+// Abandon drops one question its asker could not deliver. A late answer for it
+// is refused, exactly as if it had never been registered.
+func (b *Broker) Abandon(userID int64, id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if p, ok := b.requests[id]; ok && p.userID == userID {
+		delete(b.requests, id)
+	}
+}
+
 // PurgeUser abandons every question owned by userID, releasing their waiters
 // at once. A logout must not leave a turn hanging for the rest of the TTL.
 // The entries stay until they expire, so a waiter entering after the purge

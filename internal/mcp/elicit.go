@@ -134,6 +134,9 @@ func validateConfirmRequest(p mcpgo.ElicitationParams) error {
 	if !ok {
 		return errUnsupportedSchema
 	}
+	if kind, _ := schema[schemaKeyType].(string); kind != schemaTypeObject {
+		return errUnsupportedSchema
+	}
 	required, ok := schema[schemaKeyRequired].([]any)
 	if !ok || len(required) != 1 {
 		return errUnsupportedSchema
