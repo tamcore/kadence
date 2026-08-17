@@ -169,6 +169,10 @@ type integrationDTO struct {
 	Status          string `json:"status,omitempty"`
 	Scope           string `json:"scope,omitempty"`
 	AccessExpiresAt string `json:"access_expires_at,omitempty"`
+	// ScopeShortfall names the configured scopes this link was not granted.
+	// It is non-empty when a tier was enabled after the user linked, which a
+	// refresh cannot repair — only authorizing again can.
+	ScopeShortfall []string `json:"scope_shortfall,omitempty"`
 }
 
 // List handles GET /api/mcp/integrations.
@@ -184,7 +188,10 @@ func (h *MCPOAuth) List(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]integrationDTO, 0, len(states))
 	for _, st := range states {
-		dto := integrationDTO{Server: st.ServerID, Linked: st.Linked, Status: st.Status, Scope: st.Scope}
+		dto := integrationDTO{
+			Server: st.ServerID, Linked: st.Linked, Status: st.Status,
+			Scope: st.Scope, ScopeShortfall: st.ScopeShortfall,
+		}
 		if !st.AccessExpiresAt.IsZero() {
 			dto.AccessExpiresAt = st.AccessExpiresAt.UTC().Format(time.RFC3339)
 		}

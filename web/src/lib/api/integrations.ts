@@ -9,6 +9,9 @@ export interface Integration {
 	status?: LinkStatus;
 	scope?: string;
 	access_expires_at?: string;
+	/** Configured scopes this link was never granted. Only a new authorization
+	 * can supply them — a refresh cannot widen scope. */
+	scope_shortfall?: string[];
 }
 
 export interface StartLinkResponse {

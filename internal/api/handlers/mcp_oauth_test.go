@@ -21,6 +21,7 @@ import (
 
 const (
 	oauthTestServerID = "garmin"
+	testReadScope     = "garmin:read"
 	oauthTestAuthURL  = "https://garmin.example.invalid/authorize?state=s"
 	oauthTestCode     = "code-should-not-leak"
 	oauthTestState    = "state-should-not-leak"
@@ -273,7 +274,7 @@ func TestListReportsEachIntegration(t *testing.T) {
 	expiry := time.Date(2026, 8, 17, 21, 0, 0, 0, time.UTC)
 	svc := &fakeLinkService{states: []oauth.LinkState{
 		{ServerID: oauthTestServerID, Linked: true, Status: store.LinkStatusLinked,
-			Scope: "garmin:read", AccessExpiresAt: expiry},
+			Scope: testReadScope, AccessExpiresAt: expiry},
 		{ServerID: "strava"},
 	}}
 	rec := serveOAuth(t, newOAuthHandler(svc), http.MethodGet, "/api/mcp/integrations", nil)
@@ -297,7 +298,7 @@ func TestListReportsEachIntegration(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d integrations, want 2", len(got))
 	}
-	if got[0].Server != oauthTestServerID || !got[0].Linked || got[0].Scope != "garmin:read" {
+	if got[0].Server != oauthTestServerID || !got[0].Linked || got[0].Scope != testReadScope {
 		t.Fatalf("linked entry = %+v", got[0])
 	}
 	if got[0].AccessExpiresAt != expiry.Format(time.RFC3339) {
@@ -314,5 +315,42 @@ func TestCookieNameIsHostPrefixedOnlyWhenSecure(t *testing.T) {
 	}
 	if got := handlers.MCPOAuthCookieName(false); strings.HasPrefix(got, "__Host-") {
 		t.Fatalf("development cookie = %q; a __Host- cookie without Secure is rejected by browsers", got)
+	}
+}
+
+func TestListReportsAScopeShortfall(t *testing.T) {
+	svc := &fakeLinkService{states: []oauth.LinkState{
+		{ServerID: oauthTestServerID, Linked: true, Status: store.LinkStatusLinked,
+			Scope: testReadScope, ScopeShortfall: []string{"garmin:write"}},
+	}}
+	rec := serveOAuth(t, newOAuthHandler(svc), http.MethodGet, "/api/mcp/integrations", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var envelope struct {
+		Data []struct {
+			ScopeShortfall []string `json:"scope_shortfall"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(envelope.Data) != 1 {
+		t.Fatalf("got %d integrations, want 1", len(envelope.Data))
+	}
+	if got := envelope.Data[0].ScopeShortfall; len(got) != 1 || got[0] != "garmin:write" {
+		t.Fatalf("scope_shortfall = %v, want [garmin:write]", got)
+	}
+}
+
+func TestListOmitsAnEmptyScopeShortfall(t *testing.T) {
+	svc := &fakeLinkService{states: []oauth.LinkState{
+		{ServerID: oauthTestServerID, Linked: true, Status: store.LinkStatusLinked, Scope: testReadScope},
+	}}
+	rec := serveOAuth(t, newOAuthHandler(svc), http.MethodGet, "/api/mcp/integrations", nil)
+
+	if strings.Contains(rec.Body.String(), "scope_shortfall") {
+		t.Fatalf("a satisfied link still carried a shortfall: %s", rec.Body.String())
 	}
 }

@@ -379,6 +379,25 @@ describe('/profile', () => {
 		expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
 	});
 
+	it('asks the user to reconnect when a newly enabled permission is missing', async () => {
+		listIntegrationsMock.mockResolvedValueOnce([
+			{
+				server: 'garmin',
+				linked: true,
+				status: 'linked',
+				scope: 'garmin:read',
+				scope_shortfall: ['garmin:write']
+			}
+		]);
+		render(Page);
+
+		expect(
+			await screen.findByText('Connected · garmin:read — reconnect to allow changes')
+		).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
+	});
+
 	it('sends the browser to the authorize URL when connecting', async () => {
 		listIntegrationsMock.mockResolvedValueOnce([{ server: 'garmin', linked: false }]);
 		startLinkMock.mockResolvedValueOnce({ authorize_url: 'https://garmin.invalid/authorize?x=1' });

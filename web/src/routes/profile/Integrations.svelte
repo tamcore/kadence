@@ -94,11 +94,19 @@
 		}
 	}
 
+	// A link that works today but lacks a scope enabled since it was made is
+	// still a link — it just cannot do the new thing. Both cases end at the
+	// same action, so they share one branch.
+	function needsReauth(it: Integration): boolean {
+		return it.status === 'reauth_required' || (it.scope_shortfall?.length ?? 0) > 0;
+	}
+
 	function stateLabel(it: Integration): string {
 		if (!it.linked) return 'Not connected';
 		if (it.status === 'reauth_required') return 'Reconnect needed';
 		if (it.status === 'disconnect_pending') return 'Disconnecting';
-		return it.scope ? `Connected · ${it.scope}` : 'Connected';
+		const connected = it.scope ? `Connected · ${it.scope}` : 'Connected';
+		return needsReauth(it) ? `${connected} — reconnect to allow changes` : connected;
 	}
 </script>
 
@@ -123,11 +131,11 @@
 				<li>
 					<div class="who">
 						<span class="name">{integrationLabel(it.server)}</span>
-						<span class="state" class:needs-attention={it.status === 'reauth_required'}>
+						<span class="state" class:needs-attention={needsReauth(it)}>
 							{stateLabel(it)}
 						</span>
 					</div>
-					{#if it.linked && it.status !== 'reauth_required'}
+					{#if it.linked && !needsReauth(it)}
 						<Button
 							variant="ghost"
 							disabled={!$canReachServer || busy === it.server}
@@ -141,7 +149,7 @@
 							disabled={!$canReachServer || busy === it.server}
 							onclick={() => connect(it.server)}
 						>
-							{it.status === 'reauth_required' ? 'Reconnect' : 'Connect'}
+							{it.linked ? 'Reconnect' : 'Connect'}
 						</Button>
 					{/if}
 				</li>
