@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -162,6 +163,13 @@ type Config struct {
 	FITRoutes   []FITRoute
 	FITMaxBytes int
 
+	// PublicURL is the bare origin this deployment is reachable at
+	// (KADENCE_PUBLIC_URL), e.g. https://kadence.example.com. It is required
+	// once any MCP server uses OAuth, because the redirect URI is built from it
+	// by concatenation and must equal the value registered with the
+	// authorization server byte for byte.
+	PublicURL string
+
 	// User-defined MCP servers. EncryptionKey is a 32-byte key (KADENCE_ENCRYPTION_KEY,
 	// base64-encoded) used to encrypt stored per-user MCP server credentials.
 	// UserMCPAllowedHosts is the host allowlist (KADENCE_USER_MCP_ALLOWED_HOSTS,
@@ -313,6 +321,7 @@ func Load() Config {
 	key, keyErr := decodeKey(os.Getenv("KADENCE_ENCRYPTION_KEY"))
 	cfg.EncryptionKey = key
 	cfg.encryptionKeyErr = keyErr
+	cfg.PublicURL = strings.TrimSpace(os.Getenv("KADENCE_PUBLIC_URL"))
 	cfg.UserMCPAllowedHosts = splitCSV(os.Getenv("KADENCE_USER_MCP_ALLOWED_HOSTS"))
 	cfg.UserMCPMaxServers = envIntOr("KADENCE_USER_MCP_MAX_SERVERS", 10)
 
@@ -441,9 +450,54 @@ func (c Config) ResolvedMaxBodyBytes() int64 {
 // startable" — cmd/server/serve.Run must not duplicate these checks; it may
 // only add further construction-time errors that Validate cannot anticipate
 // (e.g. a malformed WebAuthnRPID rejected by the go-webauthn library itself).
+// oauthMCPConfigured reports whether any MCP server is declared with
+// AUTH_MODE=oauth. It reads the environment directly rather than importing the
+// mcp package, which would make the config package depend on the subsystem that
+// depends on it.
+func oauthMCPConfigured(environ []string) bool {
+	for _, kv := range environ {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(key, "MCP_") || !strings.HasSuffix(key, "_AUTH_MODE") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(value), "oauth") {
+			return true
+		}
+	}
+	return false
+}
+
+// validateOAuthMCPRequirements enforces what a per-user OAuth MCP server needs
+// beyond its own settings: somewhere safe to keep the tokens, and a canonical
+// origin to build the redirect URI from.
+func validateOAuthMCPRequirements(c Config) error {
+	if !oauthMCPConfigured(os.Environ()) {
+		return nil
+	}
+	if len(c.EncryptionKey) == 0 {
+		return errors.New("KADENCE_ENCRYPTION_KEY is required when an MCP server uses oauth: the per-user tokens are stored encrypted")
+	}
+	if c.PublicURL == "" {
+		return errors.New("KADENCE_PUBLIC_URL is required when an MCP server uses oauth")
+	}
+	u, err := url.Parse(c.PublicURL)
+	switch {
+	case err != nil, u.Host == "":
+		return errors.New("KADENCE_PUBLIC_URL must be an absolute URL, e.g. https://kadence.example.com")
+	case u.Scheme != "https":
+		return errors.New("KADENCE_PUBLIC_URL must be https: the redirect URI is registered with an authorization server that refuses cleartext")
+	case u.Path != "", u.RawQuery != "", u.Fragment != "", u.User != nil:
+		return errors.New("KADENCE_PUBLIC_URL must be a bare origin with no path, query, or fragment: the callback path is appended to it")
+	}
+	return nil
+}
+
 func (c Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return errors.New("KADENCE_DATABASE_URL is required")
+	}
+	if err := validateOAuthMCPRequirements(c); err != nil {
+		return err
 	}
 	if c.IsProd() {
 		if c.CSRFSecret == "" {

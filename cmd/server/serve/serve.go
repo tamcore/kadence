@@ -342,14 +342,11 @@ func Run() error {
 				bg.RunForever(rootCtx, slog.Default(), "mcp-health-poller", poller.Run)
 			})
 
-			// userRepo is a *store.UserServerRepo; passed as nil explicitly
-			// when unset to avoid handing NewMCP a non-nil interface wrapping
-			// a nil pointer (which would make h.store != nil checks pass
-			// incorrectly).
-			if userRepo != nil {
-				deps.MCP = handlers.NewMCP(poller, userRepo, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled(), cfg.UserMCPMaxServers)
-			} else {
-				deps.MCP = handlers.NewMCP(poller, nil, cfg.UserMCPAllowedHosts, cfg.UserMCPEnabled(), cfg.UserMCPMaxServers)
+			if err := attachMCPHandlers(rootCtx, &deps, mcpHandlerDeps{
+				cfg: cfg, pool: pool, servers: servers, httpClient: mcpHTTPClient,
+				registry: registry, users: users, userRepo: userRepo, poller: poller,
+			}); err != nil {
+				return err
 			}
 		}
 		if cfg.FITEnabled() {

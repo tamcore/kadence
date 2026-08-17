@@ -53,6 +53,72 @@ func validConfig() Config {
 	}
 }
 
+// oauthServerEnv is the smallest env that declares one OAuth-authenticated MCP
+// server, which is what makes PublicURL and an encryption key mandatory.
+func oauthServerEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("MCP_GARMIN_GLOBAL_URL", "https://garmin.example.invalid/mcp")
+	t.Setenv("MCP_GARMIN_GLOBAL_TRANSPORT", "streamable-http")
+	t.Setenv("MCP_GARMIN_GLOBAL_AUTH_MODE", "oauth")
+	t.Setenv("MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID", "kadence")
+	t.Setenv("MCP_GARMIN_GLOBAL_OAUTH_RESOURCE", "https://garmin.example.invalid/mcp")
+	t.Setenv("MCP_GARMIN_GLOBAL_OAUTH_SCOPES", "garmin:read")
+}
+
+func testEncryptionKey() []byte { return []byte(strings.Repeat("k", 32)) }
+
+func TestValidateRequiresPublicURLWhenAnOAuthServerIsConfigured(t *testing.T) {
+	oauthServerEnv(t)
+	cfg := validConfig()
+	cfg.EncryptionKey = testEncryptionKey()
+	// PublicURL deliberately unset.
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted an oauth MCP server with no KADENCE_PUBLIC_URL")
+	}
+
+	cfg.PublicURL = "https://kadence.example.invalid"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate rejected a valid oauth configuration: %v", err)
+	}
+}
+
+func TestValidateRequiresAnEncryptionKeyWhenAnOAuthServerIsConfigured(t *testing.T) {
+	oauthServerEnv(t)
+	cfg := validConfig()
+	cfg.PublicURL = "https://kadence.example.invalid"
+	// EncryptionKey deliberately unset: the tokens have nowhere safe to live.
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted an oauth MCP server with no encryption key")
+	}
+}
+
+func TestValidateRequiresPublicURLToBeABareOrigin(t *testing.T) {
+	oauthServerEnv(t)
+	for name, raw := range map[string]string{
+		"trailing slash": "https://kadence.example.invalid/",
+		"with a path":    "https://kadence.example.invalid/base",
+		"with a query":   "https://kadence.example.invalid?a=b",
+		"cleartext":      "http://kadence.example.invalid",
+		"not a URL":      "kadence.example.invalid",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.EncryptionKey = testEncryptionKey()
+			cfg.PublicURL = raw
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate accepted %q; the callback URI is built by concatenation and must match the registration byte for byte", raw)
+			}
+		})
+	}
+}
+
+func TestPublicURLIsOptionalWithoutAnOAuthServer(t *testing.T) {
+	cfg := validConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate demanded a public URL with no oauth server configured: %v", err)
+	}
+}
+
 func TestLoadMCPAuditTTL(t *testing.T) {
 	t.Setenv("KADENCE_MCP_AUDIT_TTL", "")
 	if got := Load().MCPAuditTTL; got != 48*time.Hour {

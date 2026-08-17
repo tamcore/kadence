@@ -214,6 +214,27 @@ linked conversation and immutable run audit records.
 | `KADENCE_MCP_AUDIT_TTL` | `48h` | Retention for full remote MCP call audit records. Must be a positive Go duration. Expired records are hidden immediately and deleted on startup, then hourly. |
 | `KADENCE_MCP_CA_FILE` | — | PEM CA bundle for verifying MCP/markitdown TLS. Empty = system trust store. |
 | `KADENCE_USER_MCP_ALLOWED_HOSTS` | — | Comma-separated host allowlist for user-registered MCP servers. Enables the feature only when set together with `KADENCE_ENCRYPTION_KEY`. |
+| `KADENCE_PUBLIC_URL` | — | The bare origin this deployment is reachable at, e.g. `https://kadence.example.com`. Required once any MCP server uses OAuth; no path, query, fragment, or trailing slash, because the callback path is appended to it and the result must equal the registered redirect URI byte for byte. |
+
+### OAuth-authenticated MCP servers
+
+A server whose credential belongs to the user rather than the deployment is
+declared with `AUTH_MODE=oauth` instead of `_AUTH_USER`/`_AUTH_PASS`. Each user
+links their own account through a browser flow, and Kadence then sends that
+user's own bearer token.
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `MCP_<NAME>_<SCOPE>_AUTH_MODE` | yes | `oauth` selects per-user tokens. Anything else keeps basic auth. |
+| `MCP_<NAME>_<SCOPE>_OAUTH_CLIENT_ID` | yes | The client id registered with that server. |
+| `MCP_<NAME>_<SCOPE>_OAUTH_CLIENT_SECRET` | no | Only for a confidential client. A public client with PKCE needs none. |
+| `MCP_<NAME>_<SCOPE>_OAUTH_RESOURCE` | yes | The RFC 8707 resource indicator. Must equal the server's own `_URL`. |
+| `MCP_<NAME>_<SCOPE>_OAUTH_SCOPES` | yes | Comma-separated. Only `garmin:read` is grantable today; naming a write or destructive scope is refused at boot. |
+
+Such a server also requires `KADENCE_PUBLIC_URL` and a 32-byte
+`KADENCE_ENCRYPTION_KEY` — the per-user tokens are stored encrypted. Register
+`<KADENCE_PUBLIC_URL>/api/mcp/oauth/callback` as the client's redirect URI; the
+authorization server matches it exactly.
 | `KADENCE_USER_MCP_MAX_SERVERS` | `10` | Max user-defined MCP servers a single owner may register. `POST /api/mcp` returns 400 over the cap. |
 
 LLM-selected remote MCP calls from chats and Scheduled workers are recorded with
