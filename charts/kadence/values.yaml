@@ -449,14 +449,18 @@ garmin:
     # The client id Kadence presents. It is also the key upstream files each
     # user's consent under: changing it orphans every existing authorization.
     clientID: kadence
-    # Only the read tier is grantable today. The write and destructive tiers
-    # additionally need an interactive confirmation path Kadence does not have
-    # yet, and the app refuses to start if it is configured to ask for one.
+    # The read and write tiers are grantable. The destructive tier additionally
+    # needs an interactive confirmation path Kadence does not have yet, and the
+    # app refuses to start if it is configured to ask for that scope.
+    #
+    # Adding a scope here does not widen an existing authorization: a refresh
+    # cannot grant what was never consented to. Every already-linked user must
+    # authorize again, and the Integrations section prompts them to.
     scopes:
       - garmin:read
   # Both default to false upstream, and a tier needs both halves: the granted
-  # scope AND the operator flag. Leave these off until the confirmation path
-  # exists.
+  # scope AND the operator flag. Turning a flag on without adding the matching
+  # scope above leaves the tools advertised but refused on every call.
   enableWriteTools: false
   enableDestructiveTools: false
   # The networks a reverse proxy actually terminates in. The forwarded address

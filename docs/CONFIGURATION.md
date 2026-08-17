@@ -229,7 +229,15 @@ user's own bearer token.
 | `MCP_<NAME>_<SCOPE>_OAUTH_CLIENT_ID` | yes | The client id registered with that server. |
 | `MCP_<NAME>_<SCOPE>_OAUTH_CLIENT_SECRET` | no | Only for a confidential client. A public client with PKCE needs none. |
 | `MCP_<NAME>_<SCOPE>_OAUTH_RESOURCE` | yes | The RFC 8707 resource indicator. Must equal the server's own `_URL`. |
-| `MCP_<NAME>_<SCOPE>_OAUTH_SCOPES` | yes | Comma-separated. Only `garmin:read` is grantable today; naming a write or destructive scope is refused at boot. |
+| `MCP_<NAME>_<SCOPE>_OAUTH_SCOPES` | yes | Comma-separated. `garmin:read` and `garmin:write` are grantable; `garmin:destructive` is refused at boot until the in-turn confirmation path exists. |
+
+Adding a scope does not widen an authorization a user already gave: a refresh
+cannot grant what was never consented to. Every already-linked user must
+authorize again, and **Settings → Integrations** shows `reconnect to allow
+changes` with a **Reconnect** button until they do. Enabling the write tier in
+the Helm chart therefore needs both halves — `garmin.oauth.scopes` gains
+`garmin:write` AND `garmin.enableWriteTools: true` — and every existing link
+needs one reconnect.
 
 Such a server also requires `KADENCE_PUBLIC_URL` and a 32-byte
 `KADENCE_ENCRYPTION_KEY` — the per-user tokens are stored encrypted. Register
