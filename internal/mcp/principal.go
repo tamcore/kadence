@@ -76,8 +76,31 @@ func (s Server) validateOAuth() error {
 	if strings.TrimSpace(s.OAuthResource) == "" {
 		return fmt.Errorf("mcp: server %s/%s: oauth needs a resource", s.Name, s.Scope)
 	}
+	// The authorization server compares the resource indicator exactly, and the
+	// only resource it serves is its own MCP endpoint — this server's URL.
+	if s.OAuthResource != s.URL {
+		return fmt.Errorf("mcp: server %s/%s: oauth resource must equal the server URL", s.Name, s.Scope)
+	}
+	if len(s.OAuthScopes) == 0 {
+		return fmt.Errorf("mcp: server %s/%s: oauth needs at least one scope", s.Name, s.Scope)
+	}
+	for _, scope := range s.OAuthScopes {
+		if !grantableScopes[scope] {
+			return fmt.Errorf("mcp: server %s/%s: scope %q is not grantable yet", s.Name, s.Scope, scope)
+		}
+	}
 	return nil
 }
+
+// grantableScopes bounds what Kadence may ask for. The write and destructive
+// tiers need an interactive confirmation path that does not exist yet, so a
+// configuration naming them is refused rather than quietly requested.
+var grantableScopes = map[string]bool{"garmin:read": true}
+
+// IntegrationID is the stable public identifier of this server in URLs, API
+// payloads, and the sealed-record context. It is the lowercased name, resolved
+// in exactly one place so no call site lowercases ad hoc.
+func (s Server) IntegrationID() string { return strings.ToLower(s.Name) }
 
 // clientCacheKey is a client's cache identity. A per-principal server keys on
 // the principal as well, because its credential is that one user's: sharing

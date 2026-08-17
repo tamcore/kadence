@@ -15,6 +15,7 @@ const (
 	envGarminTransport = "MCP_GARMIN_GLOBAL_TRANSPORT=streamable-http"
 	envGarminClientID  = "MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID=" + testOAuthClientID
 	envGarminResource  = "MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=" + testOAuthResource
+	envGarminScopes    = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:read"
 )
 
 // stubPrincipals resolves usernames to fixed ids.
@@ -35,6 +36,7 @@ func TestServersFromEnvParsesAuthMode(t *testing.T) {
 		"MCP_GARMIN_GLOBAL_AUTH_MODE=OAuth",
 		envGarminClientID,
 		envGarminResource,
+		envGarminScopes,
 	}
 	got, err := ServersFromEnv(env)
 	if err != nil {
@@ -87,9 +89,13 @@ func TestServersFromEnvDropsOAuthServerMissingClientOrResource(t *testing.T) {
 		"MCP_GARMIN_GLOBAL_AUTH_MODE=oauth",
 	}
 	for name, extra := range map[string][]string{
-		"no client id": {envGarminResource},
-		"no resource":  {envGarminClientID},
-		"neither":      {},
+		"no client id": {envGarminResource, envGarminScopes},
+		"no resource":  {envGarminClientID, envGarminScopes},
+		"no scopes":    {envGarminClientID, envGarminResource},
+		"ungrantable":  {envGarminClientID, envGarminResource, "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:write"},
+		"resource mismatch": {envGarminClientID, envGarminScopes,
+			"MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=https://other.example.invalid/mcp"},
+		"neither": {},
 	} {
 		got, err := ServersFromEnv(append(append([]string{}, base...), extra...))
 		if err != nil {
