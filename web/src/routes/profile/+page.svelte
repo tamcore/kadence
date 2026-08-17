@@ -17,6 +17,7 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ThemePicker from '$lib/components/ThemePicker.svelte';
+	import Integrations from './Integrations.svelte';
 	import { enablePush, disablePush } from '$lib/push/subscribe';
 	import {
 		pushSupported,
@@ -261,6 +262,8 @@
 		<h2>Theme</h2>
 		<ThemePicker />
 	</section>
+
+	<Integrations />
 
 	<section>
 		<h2>Preferences</h2>

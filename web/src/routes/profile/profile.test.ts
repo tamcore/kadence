@@ -17,6 +17,16 @@ vi.mock('$lib/api/sessions', () => ({
 	revokeOtherSessions: (...a: unknown[]) => revokeOtherSessionsMock(...a)
 }));
 
+const listIntegrationsMock = vi.fn().mockResolvedValue([]);
+const startLinkMock = vi.fn();
+const unlinkIntegrationMock = vi.fn();
+vi.mock('$lib/api/integrations', () => ({
+	listIntegrations: (...a: unknown[]) => listIntegrationsMock(...a),
+	startLink: (...a: unknown[]) => startLinkMock(...a),
+	unlinkIntegration: (...a: unknown[]) => unlinkIntegrationMock(...a),
+	integrationLabel: (server: string) => (server === 'garmin' ? 'Garmin Connect' : server)
+}));
+
 const isWebAuthnEnabledMock = vi.fn().mockResolvedValue(true);
 const listPasskeysMock = vi.fn().mockResolvedValue([]);
 const registerPasskeyMock = vi.fn();
@@ -322,5 +332,51 @@ describe('/profile', () => {
 		render(Page);
 		expect(screen.getByRole('radio', { name: 'Metric' })).toBeInTheDocument();
 		expect(screen.getByRole('radio', { name: 'Imperial' })).toBeInTheDocument();
+	});
+
+	it('offers Connect for an integration the user has not linked', async () => {
+		listIntegrationsMock.mockResolvedValueOnce([{ server: 'garmin', linked: false }]);
+		render(Page);
+
+		expect(await screen.findByText('Garmin Connect')).toBeInTheDocument();
+		expect(await screen.findByText('Not connected')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
+	});
+
+	it('shows the granted scope and a Disconnect action for a linked integration', async () => {
+		listIntegrationsMock.mockResolvedValueOnce([
+			{ server: 'garmin', linked: true, status: 'linked', scope: 'garmin:read' }
+		]);
+		render(Page);
+
+		expect(await screen.findByText('Connected · garmin:read')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+	});
+
+	it('asks the user to reconnect when the stored authorization is gone', async () => {
+		listIntegrationsMock.mockResolvedValueOnce([
+			{ server: 'garmin', linked: true, status: 'reauth_required', scope: 'garmin:read' }
+		]);
+		render(Page);
+
+		expect(await screen.findByText('Reconnect needed')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
+	});
+
+	it('sends the browser to the authorize URL when connecting', async () => {
+		listIntegrationsMock.mockResolvedValueOnce([{ server: 'garmin', linked: false }]);
+		startLinkMock.mockResolvedValueOnce({ authorize_url: 'https://garmin.invalid/authorize?x=1' });
+		const assign = vi.fn();
+		Object.defineProperty(window, 'location', {
+			configurable: true,
+			value: { ...window.location, assign, search: '' }
+		});
+		render(Page);
+
+		await fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+
+		await waitFor(() => expect(startLinkMock).toHaveBeenCalledWith('garmin'));
+		await waitFor(() => expect(assign).toHaveBeenCalledWith('https://garmin.invalid/authorize?x=1'));
 	});
 });
