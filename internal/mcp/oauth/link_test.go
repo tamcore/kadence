@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	testUserID   = int64(42)
-	testServerID = "garmin"
+	testUserID     = int64(42)
+	testServerID   = "garmin"
+	testWriteScope = "garmin:write"
 )
 
 // fakeLinkStore is an in-memory LinkStore modelling only what the service
@@ -356,6 +357,53 @@ func TestUnlinkStillDeletesWhenRevocationFails(t *testing.T) {
 	}
 	if st.link != nil {
 		t.Fatal("the local link survived a failed revocation")
+	}
+}
+
+func TestIntegrationsReportsAScopeShortfall(t *testing.T) {
+	now := time.Now().UTC()
+	ts := newTokenServer(t, http.StatusOK, nil)
+	st := newFakeLinkStore()
+	svc := NewService(st, map[string]*Client{testServerID: clientFor(ts, "")},
+		testRedirect, map[string][]string{testServerID: {testScope, testWriteScope}}, fixedNow(now))
+	ctx := context.Background()
+
+	// The deployment now asks for the write tier; this grant carries read only.
+	st.link = linkedAt(now, 10*time.Minute)
+	states, err := svc.Integrations(ctx, testUserID)
+	if err != nil {
+		t.Fatalf("Integrations: %v", err)
+	}
+	if len(states[0].ScopeShortfall) != 1 || states[0].ScopeShortfall[0] != testWriteScope {
+		t.Fatalf("shortfall = %v, want [garmin:write]", states[0].ScopeShortfall)
+	}
+
+	// Once the user has authorized again, the grant covers it.
+	st.link.Scope = testScope + " garmin:write"
+	states, err = svc.Integrations(ctx, testUserID)
+	if err != nil {
+		t.Fatalf("Integrations: %v", err)
+	}
+	if len(states[0].ScopeShortfall) != 0 {
+		t.Fatalf("shortfall = %v, want none", states[0].ScopeShortfall)
+	}
+}
+
+func TestIntegrationsReportsNoShortfallForAnUnlinkedServer(t *testing.T) {
+	now := time.Now().UTC()
+	ts := newTokenServer(t, http.StatusOK, nil)
+	st := newFakeLinkStore()
+	svc := NewService(st, map[string]*Client{testServerID: clientFor(ts, "")},
+		testRedirect, map[string][]string{testServerID: {testScope, testWriteScope}}, fixedNow(now))
+
+	states, err := svc.Integrations(context.Background(), testUserID)
+	if err != nil {
+		t.Fatalf("Integrations: %v", err)
+	}
+	// Nothing is granted yet, so naming a shortfall would be noise: Connect
+	// already asks for everything the deployment wants.
+	if len(states[0].ScopeShortfall) != 0 {
+		t.Fatalf("shortfall = %v for an unlinked server, want none", states[0].ScopeShortfall)
 	}
 }
 

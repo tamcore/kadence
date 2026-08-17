@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,12 @@ type LinkState struct {
 	Status          string
 	Scope           string
 	AccessExpiresAt time.Time
+	// ScopeShortfall names the configured scopes this grant does not carry,
+	// which happens when the deployment starts asking for a wider tier than the
+	// user authorized. A refresh can never widen scope, so the only remedy is a
+	// fresh authorization — and until then every call in the missing tier is
+	// refused by the server.
+	ScopeShortfall []string
 }
 
 // Discoverer builds a client for a server whose metadata is not known yet. It
@@ -150,6 +157,22 @@ func (s *Service) Servers() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// scopeShortfall returns the configured scopes a granted scope string does not
+// carry. The granted string is space separated, as RFC 6749 defines it.
+func scopeShortfall(configured []string, granted string) []string {
+	have := map[string]bool{}
+	for s := range strings.FieldsSeq(granted) {
+		have[s] = true
+	}
+	var missing []string
+	for _, want := range configured {
+		if !have[want] {
+			missing = append(missing, want)
+		}
+	}
+	return missing
 }
 
 func digest(v string) []byte {
@@ -392,6 +415,7 @@ func (s *Service) Integrations(ctx context.Context, userID int64) ([]LinkState, 
 			Status:          link.Status,
 			Scope:           link.Scope,
 			AccessExpiresAt: link.AccessExpiresAt,
+			ScopeShortfall:  scopeShortfall(s.scopes[id], link.Scope),
 		})
 	}
 	return out, nil

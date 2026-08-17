@@ -12,15 +12,17 @@ import (
 )
 
 const (
-	testOAuthClientID  = "kadence"
-	testOAuthResource  = "https://garmin.example.invalid/mcp"
-	envGarminURL       = "MCP_GARMIN_GLOBAL_URL=" + testOAuthResource
-	envGarminTransport = "MCP_GARMIN_GLOBAL_TRANSPORT=streamable-http"
-	envGarminClientID  = "MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID=" + testOAuthClientID
-	envGarminResource  = "MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=" + testOAuthResource
-	envGarminScopes    = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead
-	testPrincipalKey   = "42/garmin"
-	testBearer42       = "tok-42"
+	testOAuthClientID          = "kadence"
+	testOAuthResource          = "https://garmin.example.invalid/mcp"
+	envGarminURL               = "MCP_GARMIN_GLOBAL_URL=" + testOAuthResource
+	envGarminTransport         = "MCP_GARMIN_GLOBAL_TRANSPORT=streamable-http"
+	envGarminClientID          = "MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID=" + testOAuthClientID
+	envGarminResource          = "MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=" + testOAuthResource
+	envGarminScopes            = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead
+	envGarminAuthMode          = "MCP_GARMIN_GLOBAL_AUTH_MODE=oauth"
+	envGarminScopesDestructive = "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:destructive"
+	testPrincipalKey           = "42/garmin"
+	testBearer42               = "tok-42"
 )
 
 // stubTokens resolves "<userID>/<serverID>" to a bearer token. A missing entry
@@ -236,7 +238,7 @@ func TestServersFromEnvParsesOAuthClient(t *testing.T) {
 	env := []string{
 		envGarminURL,
 		envGarminTransport,
-		"MCP_GARMIN_GLOBAL_AUTH_MODE=oauth",
+		envGarminAuthMode,
 		envGarminClientID,
 		"MCP_GARMIN_GLOBAL_OAUTH_CLIENT_SECRET=s3cret",
 		"MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:read, garmin:read ,",
@@ -261,17 +263,50 @@ func TestServersFromEnvParsesOAuthClient(t *testing.T) {
 	}
 }
 
+func TestWriteScopeIsGrantable(t *testing.T) {
+	env := []string{
+		envGarminURL, envGarminTransport,
+		envGarminAuthMode, envGarminClientID, envGarminResource,
+		"MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead + "," + ScopeGarminWrite,
+	}
+	got, err := ServersFromEnv(env)
+	if err != nil {
+		t.Fatalf("ServersFromEnv: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the write scope was refused: %d servers", len(got))
+	}
+	if len(got[0].OAuthScopes) != 2 {
+		t.Fatalf("scopes = %v, want both tiers", got[0].OAuthScopes)
+	}
+}
+
+func TestDestructiveScopeIsStillRefused(t *testing.T) {
+	env := []string{
+		envGarminURL, envGarminTransport,
+		envGarminAuthMode, envGarminClientID, envGarminResource,
+		"MCP_GARMIN_GLOBAL_OAUTH_SCOPES=" + ScopeGarminRead + ",garmin:destructive",
+	}
+	got, err := ServersFromEnv(env)
+	if err != nil {
+		t.Fatalf("ServersFromEnv: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatal("the destructive scope was accepted before the confirmation path exists")
+	}
+}
+
 func TestServersFromEnvDropsOAuthServerMissingClientOrResource(t *testing.T) {
 	base := []string{
 		envGarminURL,
 		envGarminTransport,
-		"MCP_GARMIN_GLOBAL_AUTH_MODE=oauth",
+		envGarminAuthMode,
 	}
 	for name, extra := range map[string][]string{
 		"no client id": {envGarminResource, envGarminScopes},
 		"no resource":  {envGarminClientID, envGarminScopes},
 		"no scopes":    {envGarminClientID, envGarminResource},
-		"ungrantable":  {envGarminClientID, envGarminResource, "MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:write"},
+		"ungrantable":  {envGarminClientID, envGarminResource, envGarminScopesDestructive},
 		"resource mismatch": {envGarminClientID, envGarminScopes,
 			"MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=https://other.example.invalid/mcp"},
 		"neither": {},
