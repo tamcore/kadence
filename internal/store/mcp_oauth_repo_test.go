@@ -335,7 +335,7 @@ func TestMCPOAuthConsumeTransactionIsSingleUseAndExpires(t *testing.T) {
 		t.Fatalf("CreateTransaction: %v", err)
 	}
 
-	got, err := repo.ConsumeTransaction(ctx, tx.StateHash, now)
+	got, err := repo.ConsumeTransaction(ctx, tx.StateHash, userID, tx.BindingHash, now)
 	if err != nil {
 		t.Fatalf("ConsumeTransaction: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestMCPOAuthConsumeTransactionIsSingleUseAndExpires(t *testing.T) {
 	if !bytes.Equal(got.BindingHash, tx.BindingHash) || got.RedirectURI != tx.RedirectURI {
 		t.Fatalf("binding or redirect did not round-trip: %x %q", got.BindingHash, got.RedirectURI)
 	}
-	if _, err := repo.ConsumeTransaction(ctx, tx.StateHash, now); !errors.Is(err, store.ErrTransactionNotFound) {
+	if _, err := repo.ConsumeTransaction(ctx, tx.StateHash, userID, tx.BindingHash, now); !errors.Is(err, store.ErrTransactionNotFound) {
 		t.Fatalf("second consume: %v, want ErrTransactionNotFound", err)
 	}
 
@@ -355,8 +355,143 @@ func TestMCPOAuthConsumeTransactionIsSingleUseAndExpires(t *testing.T) {
 	if err := repo.CreateTransaction(ctx, expired); err != nil {
 		t.Fatalf("CreateTransaction(expired): %v", err)
 	}
-	if _, err := repo.ConsumeTransaction(ctx, expired.StateHash, now); !errors.Is(err, store.ErrTransactionNotFound) {
+	if _, err := repo.ConsumeTransaction(ctx, expired.StateHash, userID, expired.BindingHash, now); !errors.Is(err, store.ErrTransactionNotFound) {
 		t.Fatalf("expired consume: %v, want ErrTransactionNotFound", err)
+	}
+}
+
+func TestMCPOAuthConsumeTransactionRefusesAWrongBindingWithoutDeleting(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	tx := store.MCPOAuthTransaction{
+		StateHash:    []byte("state-hash-3"),
+		UserID:       userID,
+		ServerID:     oauthTestServerID,
+		PKCEVerifier: "verifier-3",
+		RedirectURI:  "https://kadence.example.invalid/api/mcp/oauth/callback",
+		BindingHash:  []byte("binding-hash-3"),
+		ExpiresAt:    now.Add(10 * time.Minute),
+	}
+	if err := repo.CreateTransaction(ctx, tx); err != nil {
+		t.Fatalf("CreateTransaction: %v", err)
+	}
+
+	// Someone who knows the state but holds a different browser cookie.
+	if _, err := repo.ConsumeTransaction(ctx, tx.StateHash, userID, []byte("other-binding"), now); !errors.Is(err, store.ErrTransactionNotFound) {
+		t.Fatalf("wrong binding: %v, want ErrTransactionNotFound", err)
+	}
+	// And someone who is a different user.
+	if _, err := repo.ConsumeTransaction(ctx, tx.StateHash, userID+1, tx.BindingHash, now); !errors.Is(err, store.ErrTransactionNotFound) {
+		t.Fatalf("wrong user: %v, want ErrTransactionNotFound", err)
+	}
+
+	// Neither attempt may have consumed the row: the owner can still complete.
+	got, err := repo.ConsumeTransaction(ctx, tx.StateHash, userID, tx.BindingHash, now)
+	if err != nil {
+		t.Fatalf("owner's consume after two refused attempts: %v", err)
+	}
+	if got.PKCEVerifier != "verifier-3" {
+		t.Fatalf("verifier = %q, want verifier-3", got.PKCEVerifier)
+	}
+}
+
+func TestMCPOAuthSetStatusIfVersionRefusesAStaleCaller(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	observed, err := repo.Get(ctx, userID, oauthTestServerID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// The user re-authorizes while a refresh failure is still being reported.
+	relinked := oauthTestLink(userID)
+	relinked.RefreshToken = "refresh-relinked"
+	if err := repo.Upsert(ctx, relinked); err != nil {
+		t.Fatalf("Upsert(relink): %v", err)
+	}
+
+	if err := repo.SetStatusIfVersion(ctx, userID, oauthTestServerID,
+		store.LinkStatusReauthRequired, observed.CASVersion); !errors.Is(err, store.ErrCASConflict) {
+		t.Fatalf("stale SetStatusIfVersion: %v, want ErrCASConflict", err)
+	}
+	after, err := repo.Get(ctx, userID, oauthTestServerID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != store.LinkStatusLinked {
+		t.Fatalf("status = %q, want linked (a stale failure condemned a fresh link)", after.Status)
+	}
+
+	// A caller at the current version still wins.
+	if err := repo.SetStatusIfVersion(ctx, userID, oauthTestServerID,
+		store.LinkStatusReauthRequired, after.CASVersion); err != nil {
+		t.Fatalf("current SetStatusIfVersion: %v", err)
+	}
+}
+
+func TestMCPOAuthRotateUnderLockRefusesAnUnusableLink(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := repo.SetStatus(ctx, userID, oauthTestServerID, store.LinkStatusDisconnectPending); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+
+	_, err := repo.RotateUnderLock(ctx, userID, oauthTestServerID,
+		func(context.Context, store.MCPOAuthLink) (store.MCPOAuthLink, error) {
+			t.Fatal("refresh ran for a disconnected link")
+			return store.MCPOAuthLink{}, nil
+		})
+	if !errors.Is(err, store.ErrLinkNotUsable) {
+		t.Fatalf("RotateUnderLock: %v, want ErrLinkNotUsable", err)
+	}
+}
+
+func TestMCPOAuthTransactionBounds(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mk := func(state string, expires time.Time) store.MCPOAuthTransaction {
+		return store.MCPOAuthTransaction{
+			StateHash: []byte(state), UserID: userID, ServerID: oauthTestServerID,
+			PKCEVerifier: "v", RedirectURI: "https://k.invalid/cb",
+			BindingHash: []byte("b"), ExpiresAt: expires,
+		}
+	}
+	for _, tx := range []store.MCPOAuthTransaction{
+		mk("live-1", now.Add(time.Minute)),
+		mk("live-2", now.Add(time.Minute)),
+		mk("dead-1", now.Add(-time.Minute)),
+	} {
+		if err := repo.CreateTransaction(ctx, tx); err != nil {
+			t.Fatalf("CreateTransaction: %v", err)
+		}
+	}
+
+	n, err := repo.CountTransactions(ctx, userID, now)
+	if err != nil {
+		t.Fatalf("CountTransactions: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("live transactions = %d, want 2", n)
+	}
+
+	if err := repo.DeleteExpiredTransactions(ctx, userID, now); err != nil {
+		t.Fatalf("DeleteExpiredTransactions: %v", err)
+	}
+	if _, err := repo.ConsumeTransaction(ctx, []byte("dead-1"), userID, []byte("b"), now.Add(-2*time.Minute)); !errors.Is(err, store.ErrTransactionNotFound) {
+		t.Fatalf("expired row survived cleanup: %v", err)
+	}
+	if n, err = repo.CountTransactions(ctx, userID, now); err != nil || n != 2 {
+		t.Fatalf("after cleanup: count=%d err=%v, want 2/nil", n, err)
 	}
 }
 

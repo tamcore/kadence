@@ -33,6 +33,9 @@ var (
 	// that token is consumed either way, and replaying it revokes the whole
 	// family. Move the link to reauth_required instead.
 	ErrRotationUncertain = errors.New("store: mcp oauth rotation outcome unknown")
+	// ErrLinkNotUsable means the link exists but its status forbids use — the
+	// user disconnected it, or an earlier failure condemned it.
+	ErrLinkNotUsable = errors.New("store: mcp oauth link is not usable")
 	// ErrTransactionNotFound means the authorization transaction is unknown,
 	// already consumed, or expired. The three are deliberately one error: a
 	// caller learning which would learn whether a state value ever existed.
@@ -237,6 +240,11 @@ func (r *MCPOAuthRepo) RotateUnderLock(
 	if err != nil {
 		return MCPOAuthLink{}, fmt.Errorf("store: open refresh token: %w", err)
 	}
+	// Re-checked under the lock: a link the user disconnected, or one an earlier
+	// failure condemned, must not be refreshed back to life by a queued rotation.
+	if current.Status != LinkStatusLinked {
+		return MCPOAuthLink{}, fmt.Errorf("%w: status %s", ErrLinkNotUsable, current.Status)
+	}
 
 	rotated, err := refresh(ctx, current)
 	if err != nil {
@@ -284,6 +292,51 @@ func (r *MCPOAuthRepo) SetStatus(ctx context.Context, userID int64, serverID, st
 	return nil
 }
 
+// SetStatusIfVersion sets the status only while the link is still at the
+// version the caller observed. A refresh failure that took a while to surface
+// must not condemn a link the user has since re-authorized, so a moved version
+// is reported as ErrCASConflict and nothing is written.
+func (r *MCPOAuthRepo) SetStatusIfVersion(
+	ctx context.Context, userID int64, serverID, status string, casVersion int64,
+) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE mcp_oauth_tokens
+		   SET status = $1, cas_version = cas_version + 1, updated_at = NOW()
+		 WHERE user_id = $2 AND server_id = $3 AND cas_version = $4`,
+		status, userID, serverID, casVersion)
+	if err != nil {
+		return fmt.Errorf("store: set mcp oauth link status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrCASConflict
+	}
+	return nil
+}
+
+// DeleteExpiredTransactions removes this user's dead authorization
+// transactions. An abandoned link attempt leaves a row behind and nothing else
+// collects it.
+func (r *MCPOAuthRepo) DeleteExpiredTransactions(ctx context.Context, userID int64, now time.Time) error {
+	if _, err := r.pool.Exec(ctx,
+		`DELETE FROM mcp_oauth_transactions WHERE user_id = $1 AND expires_at <= $2`,
+		userID, now); err != nil {
+		return fmt.Errorf("store: delete expired mcp oauth transactions: %w", err)
+	}
+	return nil
+}
+
+// CountTransactions counts this user's live authorization transactions, so a
+// caller can refuse to open an unbounded number of them.
+func (r *MCPOAuthRepo) CountTransactions(ctx context.Context, userID int64, now time.Time) (int, error) {
+	var n int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM mcp_oauth_transactions WHERE user_id = $1 AND expires_at > $2`,
+		userID, now).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count mcp oauth transactions: %w", err)
+	}
+	return n, nil
+}
+
 // Delete removes the link. It is idempotent: an absent link is not an error,
 // because unlinking twice is a user double-clicking, not a fault.
 func (r *MCPOAuthRepo) Delete(ctx context.Context, userID int64, serverID string) error {
@@ -314,26 +367,29 @@ func (r *MCPOAuthRepo) CreateTransaction(ctx context.Context, t MCPOAuthTransact
 	return nil
 }
 
-// ConsumeTransaction deletes and returns the transaction in one statement, so
-// two callbacks racing on one state cannot both proceed. An expired row is
-// treated as absent, and the same call has already removed it.
-func (r *MCPOAuthRepo) ConsumeTransaction(ctx context.Context, stateHash []byte, now time.Time) (MCPOAuthTransaction, error) {
-	t := MCPOAuthTransaction{StateHash: stateHash}
+// ConsumeTransaction deletes and returns the transaction in one statement, and
+// only when the state, the owner, the browser binding, and the expiry all match.
+//
+// Every condition is part of the DELETE rather than a check afterwards. A caller
+// who learned a state value but holds neither the session nor the browser cookie
+// must not be able to delete the row: consuming first and checking second would
+// let them deny the legitimate owner their own link.
+func (r *MCPOAuthRepo) ConsumeTransaction(
+	ctx context.Context, stateHash []byte, userID int64, bindingHash []byte, now time.Time,
+) (MCPOAuthTransaction, error) {
+	t := MCPOAuthTransaction{StateHash: stateHash, UserID: userID, BindingHash: bindingHash}
 	var verifier []byte
 	err := r.pool.QueryRow(ctx, `
 		DELETE FROM mcp_oauth_transactions
-		 WHERE state_hash = $1
-	   RETURNING user_id, server_id, pkce_verifier, redirect_uri, binding_hash, expires_at`,
-		stateHash).
-		Scan(&t.UserID, &t.ServerID, &verifier, &t.RedirectURI, &t.BindingHash, &t.ExpiresAt)
+		 WHERE state_hash = $1 AND user_id = $2 AND binding_hash = $3 AND expires_at > $4
+	   RETURNING server_id, pkce_verifier, redirect_uri, expires_at`,
+		stateHash, userID, bindingHash, now).
+		Scan(&t.ServerID, &verifier, &t.RedirectURI, &t.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MCPOAuthTransaction{}, ErrTransactionNotFound
 	}
 	if err != nil {
 		return MCPOAuthTransaction{}, fmt.Errorf("store: consume mcp oauth transaction: %w", err)
-	}
-	if !t.ExpiresAt.After(now) {
-		return MCPOAuthTransaction{}, ErrTransactionNotFound
 	}
 
 	t.PKCEVerifier, err = r.cipher.OpenWithContext(verifier,
