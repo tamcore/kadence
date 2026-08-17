@@ -7,9 +7,27 @@ metadata:
   labels:
     {{- include "kadence.labels" . | nindent 4 }}
     app.kubernetes.io/component: garmin
-  {{- with .Values.garmin.ingress.annotations }}
+  {{- $csp := "" }}
+  {{- if .Values.garmin.ingress.relaxFormActionCSP }}
+  {{- $csp = printf "default-src 'none'; style-src 'self'; form-action 'self' https://%s; base-uri 'none'; frame-ancestors 'none'" .Values.ingress.host }}
+  {{- end }}
+  {{- if or .Values.garmin.ingress.annotations $csp }}
   annotations:
+    {{- with .Values.garmin.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $csp }}
+    # UPSTREAM WORKAROUND (KADENCE-009). garmin-mcp sends `form-action 'self'`,
+    # and Chrome applies form-action across a form submission's whole redirect
+    # chain. The consent POST answers with a cross-origin 303 to this app's
+    # callback, so Chrome blocks the hop: the grant is minted and the code
+    # never arrives. Adding only this app's own origin keeps the directive
+    # strict. Delete this and the value once upstream scopes the header to the
+    # transaction's redirect URI.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_clear_headers "Content-Security-Policy";
+      more_set_headers "Content-Security-Policy: {{ $csp }}";
+    {{- end }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.garmin.ingress.className }}
