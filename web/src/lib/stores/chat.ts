@@ -8,6 +8,7 @@ import type {
 	ChatEvent,
 	ChatMessage,
 	Conversation,
+	ConfirmRequest,
 	CredentialRequest,
 	Document,
 	MessagePart,
@@ -27,6 +28,7 @@ export const sending = writable(false);
 export const messageActionPending = writable(false);
 export const chatError = writable<string | null>(null);
 export const credentialRequest = writable<CredentialRequest | null>(null);
+export const confirmRequest = writable<ConfirmRequest | null>(null);
 // conversationsRefreshError is set when a background/foreground refresh of the
 // conversation list fails, so the sidebar can show an unobtrusive hint instead
 // of silently leaving the list stale/empty.
@@ -42,6 +44,7 @@ export function newChat(): void {
 	chatError.set(null);
 	sending.set(false);
 	credentialRequest.set(null);
+	confirmRequest.set(null);
 }
 
 // stopGeneration aborts the in-flight stream, if any. The partial assistant
@@ -278,6 +281,7 @@ export async function sendMessage(
 	if (get(sending)) return null;
 	chatError.set(null);
 	credentialRequest.set(null);
+	confirmRequest.set(null);
 	sending.set(true);
 	const restoreBeforeMeta = get(messages);
 	const userIdx = restoreBeforeMeta.length;
@@ -335,6 +339,7 @@ export async function editMessage(messageId: number, text: string): Promise<stri
 
 	chatError.set(null);
 	credentialRequest.set(null);
+	confirmRequest.set(null);
 	sending.set(true);
 	messages.set([
 		...current.slice(0, userIdx),
@@ -376,6 +381,7 @@ export async function regenerateMessage(messageId: number): Promise<string | nul
 
 	chatError.set(null);
 	credentialRequest.set(null);
+	confirmRequest.set(null);
 	sending.set(true);
 	messages.set([
 		...current.slice(0, assistantIdx),
@@ -577,6 +583,12 @@ async function consumeStream(
 					reason: ev.reason,
 					fields: ev.fields
 				});
+			} else if (ev.type === 'confirm_request') {
+				confirmRequest.set({
+					requestId: ev.requestId,
+					tool: ev.tool,
+					message: ev.message
+				});
 			} else if (ev.type === 'error') {
 				receivedTerminal = true;
 				if (uploadBatchID !== undefined) {
@@ -588,12 +600,14 @@ async function consumeStream(
 				if (streamIsActive()) {
 					chatError.set(ev.message);
 					credentialRequest.set(null);
+					confirmRequest.set(null);
 				}
 				break;
 			} else if (ev.type === 'done') {
 				receivedTerminal = true;
 				applyPersistedAssistant(ev);
 				credentialRequest.set(null);
+				confirmRequest.set(null);
 				break;
 			}
 		}
@@ -605,6 +619,7 @@ async function consumeStream(
 			if (streamIsActive()) {
 				chatError.set('The chat stream was interrupted');
 				credentialRequest.set(null);
+				confirmRequest.set(null);
 			}
 			return streamIsActive() ? convId : null;
 		}
@@ -633,6 +648,7 @@ async function consumeStream(
 				return copy;
 			});
 			credentialRequest.set(null);
+			confirmRequest.set(null);
 		}
 		return receivedMeta && streamIsActive() ? convId : null;
 	} finally {

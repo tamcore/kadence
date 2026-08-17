@@ -86,6 +86,15 @@ export interface CredentialRequest {
 	fields: CredentialField[];
 }
 
+// ConfirmRequest is a destructive tool waiting on the user's yes or no. The
+// tool call is blocked while it is shown, and the server gives up after a
+// short window, so an unanswered prompt ends as a refusal.
+export interface ConfirmRequest {
+	requestId: string;
+	tool: string;
+	message: string;
+}
+
 export type ChatEvent =
 	| {
 			type: 'meta';
@@ -99,6 +108,7 @@ export type ChatEvent =
 	| { type: 'tool'; tool: string; status: 'running' | 'done' | 'error'; arguments?: string }
 	| { type: 'scheduled_artifact'; scheduledArtifact: ScheduledArtifact }
 	| { type: 'credentials_request'; requestId: string; reason: string; fields: CredentialField[] }
+	| { type: 'confirm_request'; requestId: string; tool: string; message: string }
 	| {
 			type: 'upload';
 			fileOrdinal: number;

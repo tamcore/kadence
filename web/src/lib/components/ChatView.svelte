@@ -2,6 +2,7 @@
 	import {
 		activeId,
 		chatError,
+		confirmRequest,
 		credentialRequest,
 		deleteUserMessage,
 		editMessage,
@@ -16,6 +17,7 @@
 	import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import CredentialPrompt from '$lib/components/CredentialPrompt.svelte';
+	import ConfirmPrompt from '$lib/components/ConfirmPrompt.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import MessageActions from '$lib/components/MessageActions.svelte';
 	import MessageEditor from '$lib/components/MessageEditor.svelte';
@@ -229,6 +231,11 @@
 		{#if $credentialRequest}
 			<div class="credential-column">
 				<CredentialPrompt request={$credentialRequest} />
+			</div>
+		{/if}
+		{#if $confirmRequest}
+			<div class="credential-column">
+				<ConfirmPrompt request={$confirmRequest} />
 			</div>
 		{/if}
 		{#if $sending}

@@ -12,6 +12,7 @@ vi.mock('$lib/stores/chat', async () => {
 		sending: writable(false),
 		chatError: writable(null),
 		activeId: writable<string | null>(null),
+		confirmRequest: writable(null),
 		credentialRequest: writable(null),
 		messageActionPending: writable(false),
 		sendMessage: (...a: unknown[]) => sendMessageMock(...a),
