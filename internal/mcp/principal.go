@@ -12,9 +12,14 @@ import (
 var errNoPrincipalSource = errors.New("mcp: no principal source configured")
 
 // ErrProbeNeedsPrincipal is returned by Registry.Probe for a per-principal
-// server. Probing has no user, and a server whose credential is per user has
-// no deployment-wide credential to probe with — its health is per user and is
-// reported from each user's own link state instead.
+// server. Probing has no user, and a server whose credential is per user has no
+// deployment-wide credential to probe with, so dialing it would only ever
+// produce an unauthenticated failure.
+//
+// The health poller currently records this as unhealthy for every user, which
+// is wrong but honest: it says "this server was not verified" rather than
+// claiming it works. Splitting deployment liveness from each user's link state
+// belongs to the phase that introduces link state.
 var ErrProbeNeedsPrincipal = errors.New("mcp: server is per-principal and cannot be probed without a user")
 
 // PrincipalSource maps a username to the immutable user id a per-user

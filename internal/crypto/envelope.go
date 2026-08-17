@@ -43,9 +43,26 @@ func (b Context) validate() error {
 	return nil
 }
 
+// aad is the associated data. Each variable-length component is length
+// prefixed, so no two different contexts can encode to the same bytes: a
+// separator inside a server id or record name shifts the lengths rather than
+// the field boundaries.
 func (b Context) aad() []byte {
-	return []byte("v" + strconv.Itoa(int(envelopeVersion)) + "|" +
-		strconv.FormatInt(b.UserID, 10) + "|" + b.ServerID + "|" + b.Record)
+	var sb strings.Builder
+	sb.WriteString("v")
+	sb.WriteString(strconv.Itoa(int(envelopeVersion)))
+	sb.WriteString("|")
+	sb.WriteString(strconv.FormatInt(b.UserID, 10))
+	writeLengthPrefixed(&sb, b.ServerID)
+	writeLengthPrefixed(&sb, b.Record)
+	return []byte(sb.String())
+}
+
+func writeLengthPrefixed(sb *strings.Builder, value string) {
+	sb.WriteString("|")
+	sb.WriteString(strconv.Itoa(len(value)))
+	sb.WriteString(":")
+	sb.WriteString(value)
 }
 
 // SealWithContext returns version||nonce||ciphertext, binding bind as

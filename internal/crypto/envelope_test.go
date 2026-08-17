@@ -81,6 +81,23 @@ func TestOpenWithContextRejectsForeignFormats(t *testing.T) {
 	}
 }
 
+// A separator inside a component must not let one ciphertext open under a
+// different context: "a|b"+"c" and "a"+"b|c" would collide under a plain
+// join, which is why each component is length prefixed.
+func TestOpenWithContextRejectsSeparatorCollision(t *testing.T) {
+	c := envelopeCipher(t)
+	first := Context{UserID: 7, ServerID: "a|b", Record: "c"}
+	second := Context{UserID: 7, ServerID: "a", Record: "b|c"}
+
+	blob, err := c.SealWithContext("secret", first)
+	if err != nil {
+		t.Fatalf("SealWithContext: %v", err)
+	}
+	if _, err := c.OpenWithContext(blob, second); err == nil {
+		t.Fatal("a ciphertext opened under a colliding context, want failure")
+	}
+}
+
 func TestSealWithContextRejectsIncompleteContext(t *testing.T) {
 	c := envelopeCipher(t)
 	for name, bind := range map[string]Context{

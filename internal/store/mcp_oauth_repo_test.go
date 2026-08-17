@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,32 +147,173 @@ func TestMCPOAuthSetStatusAndDelete(t *testing.T) {
 	}
 }
 
-func TestMCPOAuthUpsertReplacesAndResetsCAS(t *testing.T) {
+func TestMCPOAuthUpsertNeverLowersCASVersion(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
 	ctx := context.Background()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	rotated := oauthTestLink(userID)
-	rotated.AccessToken = "access-2"
 	rotated.RefreshToken = oauthRefreshTwo
 	if err := repo.RotateCAS(ctx, rotated); err != nil {
 		t.Fatalf("RotateCAS: %v", err)
 	}
 
 	relinked := oauthTestLink(userID)
-	relinked.AccessToken = "access-fresh"
 	relinked.RefreshToken = "refresh-fresh"
 	if err := repo.Upsert(ctx, relinked); err != nil {
 		t.Fatalf("Upsert(relink): %v", err)
+	}
+
+	// A rotation that was in flight across the relink still holds version 2.
+	// It must lose: its tokens were minted from a grant the user replaced.
+	stale := oauthTestLink(userID)
+	stale.RefreshToken = "refresh-stale"
+	stale.CASVersion = 2
+	if err := repo.RotateCAS(ctx, stale); !errors.Is(err, store.ErrCASConflict) {
+		t.Fatalf("stale RotateCAS after relink: %v, want ErrCASConflict", err)
+	}
+	got, err := repo.Get(ctx, userID, oauthTestServerID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.RefreshToken != "refresh-fresh" {
+		t.Fatalf("stale rotation overwrote the relink: refresh=%q", got.RefreshToken)
+	}
+}
+
+func TestMCPOAuthSetStatusBeatsAnInFlightRotation(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	observed, err := repo.Get(ctx, userID, oauthTestServerID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// The user disconnects while a rotation is in flight.
+	if err := repo.SetStatus(ctx, userID, oauthTestServerID, store.LinkStatusDisconnectPending); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+
+	late := oauthTestLink(userID)
+	late.RefreshToken = oauthRefreshTwo
+	late.CASVersion = observed.CASVersion
+	if err := repo.RotateCAS(ctx, late); !errors.Is(err, store.ErrCASConflict) {
+		t.Fatalf("late RotateCAS: %v, want ErrCASConflict", err)
+	}
+	got, err := repo.Get(ctx, userID, oauthTestServerID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != store.LinkStatusDisconnectPending {
+		t.Fatalf("status = %q, want disconnect_pending (the rotation resurrected the link)", got.Status)
+	}
+}
+
+func TestMCPOAuthRotateUnderLockSerializesTwoWorkers(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	var (
+		mu       sync.Mutex
+		observed []string
+		inFirst  = make(chan struct{})
+		holdOff  = make(chan struct{})
+	)
+	rotate := func(hold bool) error {
+		_, err := repo.RotateUnderLock(ctx, userID, oauthTestServerID,
+			func(_ context.Context, current store.MCPOAuthLink) (store.MCPOAuthLink, error) {
+				mu.Lock()
+				observed = append(observed, current.RefreshToken)
+				mu.Unlock()
+				if hold {
+					close(inFirst)
+					<-holdOff
+				}
+				next := current
+				next.AccessToken = "access-" + current.RefreshToken
+				next.RefreshToken = "next-of-" + current.RefreshToken
+				return next, nil
+			})
+		return err
+	}
+
+	first := make(chan error, 1)
+	go func() { first <- rotate(true) }()
+	<-inFirst
+
+	second := make(chan error, 1)
+	go func() { second <- rotate(false) }()
+
+	// The second worker must be blocked on the row lock: if it were not, it
+	// would already have observed the same refresh token as the first.
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	seenWhileHeld := len(observed)
+	mu.Unlock()
+	if seenWhileHeld != 1 {
+		t.Fatalf("%d workers read the link while it was locked, want 1", seenWhileHeld)
+	}
+
+	close(holdOff)
+	if err := <-first; err != nil {
+		t.Fatalf("first RotateUnderLock: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second RotateUnderLock: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(observed) != 2 {
+		t.Fatalf("observed %d reads, want 2", len(observed))
+	}
+	if observed[0] == observed[1] {
+		t.Fatalf("both workers presented the same refresh token %q", observed[0])
+	}
+	if observed[1] != "next-of-"+observed[0] {
+		t.Fatalf("second worker read %q, want the token the first one wrote", observed[1])
+	}
+}
+
+func TestMCPOAuthRotateUnderLockLeavesTokensOnRefreshFailure(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	ctx := context.Background()
+	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	wantErr := errors.New("upstream refused")
+	if _, err := repo.RotateUnderLock(ctx, userID, oauthTestServerID,
+		func(context.Context, store.MCPOAuthLink) (store.MCPOAuthLink, error) {
+			return store.MCPOAuthLink{}, wantErr
+		}); !errors.Is(err, wantErr) {
+		t.Fatalf("RotateUnderLock: %v, want the refresh error", err)
 	}
 
 	got, err := repo.Get(ctx, userID, oauthTestServerID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.RefreshToken != "refresh-fresh" || got.CASVersion != 1 {
-		t.Fatalf("relink left refresh=%q cas=%d, want refresh-fresh/1", got.RefreshToken, got.CASVersion)
+	if got.RefreshToken != "refresh-1" {
+		t.Fatalf("a failed rotation changed the stored token: %q", got.RefreshToken)
+	}
+}
+
+func TestMCPOAuthRotateUnderLockMissingLink(t *testing.T) {
+	repo, _, userID := newOAuthRepo(t)
+	if _, err := repo.RotateUnderLock(context.Background(), userID, oauthTestServerID,
+		func(context.Context, store.MCPOAuthLink) (store.MCPOAuthLink, error) {
+			t.Fatal("refresh ran for a link that does not exist")
+			return store.MCPOAuthLink{}, nil
+		}); !errors.Is(err, store.ErrLinkNotFound) {
+		t.Fatalf("RotateUnderLock: %v, want ErrLinkNotFound", err)
 	}
 }
 
