@@ -17,10 +17,16 @@ const (
 	testRedirect  = "https://kadence.example.invalid/api/mcp/oauth/callback"
 	testScope     = "garmin:read"
 	testRefreshV1 = "rt-1"
+	testRefreshV2 = "rt-2"
 
 	fieldAccessToken = "access_token"
 	fieldExpiresIn   = "expires_in"
 	fieldError       = "error"
+
+	testAccessV1   = "at-1"
+	testAccessV2   = "at-2"
+	codeBadGrant   = "invalid_grant"
+	codeServerFail = "server_error"
 )
 
 // metadataServer serves both discovery documents for its own origin, so the
@@ -149,7 +155,7 @@ func clientFor(ts *tokenServer, secret string) *Client {
 
 func TestExchangeSendsThePKCEAndResourceAndParsesTheTokens(t *testing.T) {
 	ts := newTokenServer(t, http.StatusOK, map[string]any{
-		fieldAccessToken:  "at-1",
+		fieldAccessToken:  testAccessV1,
 		"token_type":      "Bearer",
 		fieldExpiresIn:    900,
 		paramRefreshToken: testRefreshV1,
@@ -161,7 +167,7 @@ func TestExchangeSendsThePKCEAndResourceAndParsesTheTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if got.AccessToken != "at-1" || got.RefreshToken != testRefreshV1 || got.Scope != testScope {
+	if got.AccessToken != testAccessV1 || got.RefreshToken != testRefreshV1 || got.Scope != testScope {
 		t.Fatalf("tokens parsed wrong: %+v", got)
 	}
 	if got.ExpiresIn != 900*time.Second {
@@ -200,13 +206,13 @@ func TestExchangeAuthenticatesAConfidentialClient(t *testing.T) {
 
 func TestRefreshRotatesAndReportsADeadFamily(t *testing.T) {
 	ok := newTokenServer(t, http.StatusOK, map[string]any{
-		fieldAccessToken: "at-2", fieldExpiresIn: 900, paramRefreshToken: "rt-2", paramScope: testScope,
+		fieldAccessToken: testAccessV2, fieldExpiresIn: 900, paramRefreshToken: testRefreshV2, paramScope: testScope,
 	})
 	got, err := clientFor(ok, "").Refresh(context.Background(), testRefreshV1)
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if got.AccessToken != "at-2" || got.RefreshToken != "rt-2" {
+	if got.AccessToken != testAccessV2 || got.RefreshToken != testRefreshV2 {
 		t.Fatalf("rotation parsed wrong: %+v", got)
 	}
 	if ok.lastForm.Get("grant_type") != "refresh_token" || ok.lastForm.Get("refresh_token") != testRefreshV1 {
@@ -214,7 +220,7 @@ func TestRefreshRotatesAndReportsADeadFamily(t *testing.T) {
 	}
 
 	dead := newTokenServer(t, http.StatusBadRequest, map[string]any{
-		fieldError: "invalid_grant", "error_description": "The refresh token is no longer valid.",
+		fieldError: codeBadGrant, "error_description": "The refresh token is no longer valid.",
 	})
 	if _, err := clientFor(dead, "").Refresh(context.Background(), testRefreshV1); !errors.Is(err, ErrInvalidGrant) {
 		t.Fatalf("Refresh on a dead family: %v, want ErrInvalidGrant", err)
@@ -222,7 +228,7 @@ func TestRefreshRotatesAndReportsADeadFamily(t *testing.T) {
 }
 
 func TestTokenEndpointFaultIsNotADeadFamily(t *testing.T) {
-	broken := newTokenServer(t, http.StatusInternalServerError, map[string]any{fieldError: "server_error"})
+	broken := newTokenServer(t, http.StatusInternalServerError, map[string]any{fieldError: codeServerFail})
 	_, err := clientFor(broken, "").Refresh(context.Background(), testRefreshV1)
 	if err == nil {
 		t.Fatal("Refresh accepted a 500")

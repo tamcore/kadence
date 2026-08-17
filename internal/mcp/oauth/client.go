@@ -37,6 +37,10 @@ const (
 	grantAuthorizationCode = "authorization_code"
 	grantRefreshToken      = "refresh_token"
 	challengeMethodS256    = "S256"
+
+	// errInvalidGrant is the wire code the authorization server sends when a
+	// grant is gone.
+	errCodeInvalidGrant = "invalid_grant"
 )
 
 // maxBodyBytes bounds every document and error body this package reads.
@@ -253,7 +257,7 @@ func (c *Client) token(ctx context.Context, form url.Values) (Tokens, error) {
 		if decodeErr != nil {
 			return Tokens{}, decodeErr
 		}
-		if code == "invalid_grant" {
+		if code == errCodeInvalidGrant {
 			return Tokens{}, ErrInvalidGrant
 		}
 		return Tokens{}, fmt.Errorf("oauth: token endpoint answered %d (%s)", resp.StatusCode, code)
