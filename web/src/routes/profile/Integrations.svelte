@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { canReachServer } from '$lib/stores/connection';
+	import { APIError } from '$lib/api/client';
 	import Button from '$lib/components/Button.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import {
@@ -13,6 +14,7 @@
 
 	let integrations = $state<Integration[]>([]);
 	let loaded = $state(false);
+	let available = $state(true);
 	let error = $state('');
 	let notice = $state('');
 	let busy = $state('');
@@ -21,9 +23,18 @@
 	async function load() {
 		try {
 			integrations = await listIntegrations();
+			available = true;
 			error = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Could not load integrations.';
+			// A deployment with no OAuth integration does not mount the endpoint
+			// at all. That is a configuration, not a fault, so the section
+			// disappears instead of reporting an error nobody can act on.
+			if (e instanceof APIError && e.status === 404) {
+				available = false;
+				error = '';
+			} else {
+				error = e instanceof Error ? e.message : 'Could not load integrations.';
+			}
 		} finally {
 			loaded = true;
 		}
@@ -87,6 +98,7 @@
 	}
 </script>
 
+{#if available}
 <section>
 	<h2>Integrations</h2>
 
@@ -133,6 +145,7 @@
 		</ul>
 	{/if}
 </section>
+{/if}
 
 <ConfirmDialog
 	open={confirming !== ''}

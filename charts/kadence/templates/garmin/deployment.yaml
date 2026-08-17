@@ -1,0 +1,110 @@
+{{- if .Values.garmin.enabled }}
+{{- $fullname := include "kadence.garmin.fullname" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garmin
+spec:
+  replicas: 1
+  # Its state is one SQLite file on a ReadWriteOnce volume, and upstream
+  # supports exactly one active instance. A rolling update would briefly run
+  # two of them against the same file.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: garmin
+  template:
+    metadata:
+      labels:
+        {{- include "kadence.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: garmin
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kadence.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.garmin.podSecurityContext | nindent 8 }}
+      containers:
+      - name: garmin-mcp
+        image: {{ .Values.garmin.image }}
+        imagePullPolicy: {{ .Values.garmin.pullPolicy }}
+        args: ["serve"]
+        ports:
+        - containerPort: {{ .Values.garmin.port }}
+          name: http
+        env:
+        - name: GARMIN_MCP_TRANSPORT
+          value: streamable-http
+        - name: GARMIN_MCP_BIND_ADDRESS
+          value: {{ printf "0.0.0.0:%d" (int .Values.garmin.port) | quote }}
+        - name: GARMIN_MCP_PUBLIC_URL
+          value: {{ include "kadence.garmin.publicURL" . | quote }}
+        # The state directory must be a subdirectory of the mount, never the
+        # mount itself: a volume root is owned by uid 0, and garmin-mcp chmods
+        # its state directory, which a non-root process cannot do to a
+        # directory it does not own. A subdirectory it creates, it owns.
+        - name: GARMIN_MCP_STATE_DIR
+          value: {{ printf "%s/state" .Values.garmin.persistence.mountPath | quote }}
+        - name: GARMIN_MCP_DATABASE_PATH
+          value: {{ printf "%s/state/garmin.db" .Values.garmin.persistence.mountPath | quote }}
+        - name: GARMIN_MCP_MASTER_KEY_FILE
+          value: {{ printf "%s/state/keys" .Values.garmin.persistence.mountPath | quote }}
+        - name: HOME
+          value: {{ .Values.garmin.persistence.mountPath | quote }}
+        - name: GARMIN_MCP_LOG_LEVEL
+          value: {{ .Values.garmin.logLevel | quote }}
+        - name: GARMIN_MCP_LOG_FORMAT
+          value: json
+        # TLS terminates at the ingress, so the forwarded client address may be
+        # believed only from the networks a proxy actually terminates in.
+        - name: GARMIN_MCP_TRUSTED_PROXY_CIDRS
+          value: {{ join "," .Values.garmin.trustedProxyCIDRs | quote }}
+        {{- if .Values.garmin.enableWriteTools }}
+        - name: GARMIN_MCP_ENABLE_WRITE_TOOLS
+          value: "true"
+        {{- end }}
+        {{- if .Values.garmin.enableDestructiveTools }}
+        - name: GARMIN_MCP_ENABLE_DESTRUCTIVE_TOOLS
+          value: "true"
+        {{- end }}
+        # The client registry has no file to mount: upstream reads the whole
+        # list from this one variable.
+        - name: GARMIN_MCP_OAUTH_CLIENTS
+          value: {{ include "kadence.garmin.oauthClients" . | quote }}
+        {{- with .Values.garmin.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        volumeMounts:
+        - name: state
+          mountPath: {{ .Values.garmin.persistence.mountPath }}
+        securityContext:
+          {{- toYaml .Values.garmin.securityContext | nindent 10 }}
+        {{- with .Values.garmin.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+      - name: state
+        persistentVolumeClaim:
+          claimName: {{ $fullname }}-state
+{{- end }}

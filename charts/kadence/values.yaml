@@ -416,6 +416,86 @@ mcp:
   # default) with headroom for more than one file in flight.
   fitFilesSizeLimit: 256Mi
 
+# Optional garmin-mcp deployment. Unlike mcp.servers[] this is not a sidecar
+# behind an nginx basicAuth proxy: it authenticates every request itself with a
+# per-user OAuth 2.1 bearer token, and each user links their own Garmin account
+# through a browser flow it serves.
+#
+# It therefore needs its OWN hostname. The server fixes /authorize, /login,
+# /token, /revoke and both .well-known documents at the origin root, and its
+# issuer must be a bare origin, so sharing Kadence's host would shadow the SPA's
+# own /login and send Kadence's session cookie to it.
+garmin:
+  enabled: false
+  # Pin by digest in production: a tag says nothing about what actually runs.
+  image: ghcr.io/tamcore/garmin-mcp:v0.0.1
+  pullPolicy: IfNotPresent
+  # The hostname this server is published at. Required when enabled.
+  host: ""
+  # The path component of the public URL IS the MCP endpoint path. It may not be
+  # one the server already serves (/token, /login, /authorize, /revoke, or a
+  # .well-known document); start-up refuses those.
+  path: /mcp
+  port: 8080
+  logLevel: info
+  ingress:
+    enabled: true
+    className: nginx
+    tls: true
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      kubernetes.io/tls-acme: "true"
+  oauth:
+    # The client id Kadence presents. It is also the key upstream files each
+    # user's consent under: changing it orphans every existing authorization.
+    clientID: kadence
+    # Only the read tier is grantable today. The write and destructive tiers
+    # additionally need an interactive confirmation path Kadence does not have
+    # yet, and the app refuses to start if it is configured to ask for one.
+    scopes:
+      - garmin:read
+  # Both default to false upstream, and a tier needs both halves: the granted
+  # scope AND the operator flag. Leave these off until the confirmation path
+  # exists.
+  enableWriteTools: false
+  enableDestructiveTools: false
+  # The networks a reverse proxy actually terminates in. The forwarded address
+  # keys the rate limiter in front of the unauthenticated OAuth endpoints, so a
+  # range wider than your proxies lets anything inside it choose its own budget.
+  trustedProxyCIDRs: []
+  persistence:
+    # The SQLite database tolerates exactly one writer. Use ReadWriteOncePod
+    # where the storage class supports it: it is the only mechanism that
+    # enforces that against a second pod.
+    accessMode: ReadWriteOnce
+    size: 1Gi
+    storageClass: ""
+    mountPath: /data
+  # uid 65532, matching mcp.podSecurityContext. fsGroup lets the process write
+  # the volume; it still creates its own state subdirectory, because a mount
+  # root is owned by uid 0 and the server chmods the directory it uses.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  resources: {}
+  extraEnv: []
+  # App-side tool allowlist (globs against the unprefixed tool name). The server
+  # advertises its whole registry regardless of what the grant allows, so
+  # without this the model is offered write and destructive tools that can only
+  # fail. Upstream v0.0.4 filters the list itself; delete this then.
+  tools: []
+  # A "when to use this server" line for the chat system prompt.
+  hint: ""
+
 # Optional markitdown-mcp ingestion sidecar. When enabled, renders a fixed
 # Deployment (markitdown-mcp) + nginx basicAuth sidecar + Service +
 # NetworkPolicy, and wires KADENCE_MARKITDOWN_* env into the main app so it

@@ -1,0 +1,37 @@
+{{- if and .Values.garmin.enabled .Values.garmin.ingress.enabled }}
+{{- $fullname := include "kadence.garmin.fullname" . }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garmin
+  {{- with .Values.garmin.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.garmin.ingress.className }}
+  {{- if .Values.garmin.ingress.tls }}
+  tls:
+  - hosts:
+    - {{ .Values.garmin.host }}
+    secretName: {{ $fullname }}-tls
+  {{- end }}
+  rules:
+  - host: {{ .Values.garmin.host }}
+    http:
+      paths:
+      # The whole host, unrewritten. garmin-mcp fixes /authorize, /login,
+      # /token, /revoke and both .well-known documents at the origin root and
+      # derives its issuer from the public URL, so a rewritten or partial path
+      # breaks discovery rather than merely moving it.
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ $fullname }}
+            port:
+              name: http
+{{- end }}

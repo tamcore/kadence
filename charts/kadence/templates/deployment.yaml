@@ -124,6 +124,36 @@ spec:
           valueFrom: { secretKeyRef: { name: {{ $secret }}, key: password } }
         {{- end }}
         {{- end }}
+        {{- if .Values.garmin.enabled }}
+        {{- $garminURL := include "kadence.garmin.publicURL" . }}
+        # Reached at its public URL rather than through the cluster Service: the
+        # tokens are minted for that exact resource, and the TLS certificate is
+        # issued for that host.
+        - name: MCP_GARMIN_GLOBAL_URL
+          value: {{ $garminURL | quote }}
+        - name: MCP_GARMIN_GLOBAL_TRANSPORT
+          value: "streamable-http"
+        - name: MCP_GARMIN_GLOBAL_AUTH_MODE
+          value: "oauth"
+        - name: MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID
+          value: {{ .Values.garmin.oauth.clientID | quote }}
+        - name: MCP_GARMIN_GLOBAL_OAUTH_RESOURCE
+          value: {{ $garminURL | quote }}
+        - name: MCP_GARMIN_GLOBAL_OAUTH_SCOPES
+          value: {{ join "," .Values.garmin.oauth.scopes | quote }}
+        {{- with .Values.garmin.tools }}
+        - name: MCP_GARMIN_GLOBAL_TOOLS
+          value: {{ join "," . | quote }}
+        {{- end }}
+        {{- with .Values.garmin.hint }}
+        - name: MCP_GARMIN_GLOBAL_HINT
+          value: {{ . | quote }}
+        {{- end }}
+        # The redirect URI is built from this by concatenation and must equal
+        # the one registered with the authorization server byte for byte.
+        - name: KADENCE_PUBLIC_URL
+          value: {{ printf "https://%s" .Values.ingress.host | quote }}
+        {{- end }}
         {{- if .Values.markitdown.enabled }}
         {{- $mdSvc := include "kadence.markitdown.fullname" . }}
         {{- $mdSecret := include "kadence.markitdown.authSecretName" . }}

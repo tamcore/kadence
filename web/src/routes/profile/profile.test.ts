@@ -334,6 +334,19 @@ describe('/profile', () => {
 		expect(screen.getByRole('radio', { name: 'Imperial' })).toBeInTheDocument();
 	});
 
+	it('shows nothing at all when the deployment configures no integration', async () => {
+		// The endpoint is not mounted when no MCP server uses OAuth, so the
+		// section must disappear rather than raise an alert the user cannot act
+		// on — an alert here would also be the only one on the page.
+		const { APIError } = await import('$lib/api/client');
+		listIntegrationsMock.mockRejectedValueOnce(new APIError(404, 'not found'));
+		render(Page);
+
+		await waitFor(() => expect(listIntegrationsMock).toHaveBeenCalled());
+		expect(screen.queryByText('Integrations')).not.toBeInTheDocument();
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+	});
+
 	it('offers Connect for an integration the user has not linked', async () => {
 		listIntegrationsMock.mockResolvedValueOnce([{ server: 'garmin', linked: false }]);
 		render(Page);

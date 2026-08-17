@@ -1,0 +1,37 @@
+{{- if and .Values.garmin.enabled .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kadence.garmin.fullname" . }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garmin
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kadence.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: garmin
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Unlike the basic-auth sidecars, this server is reached from a browser: it
+  # serves the user's Garmin sign-in and consent pages itself. So the ingress
+  # controller must reach it, not only the app.
+  - from:
+    - namespaceSelector:
+        {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 8 }}
+    - podSelector:
+        matchLabels:
+          {{- include "kadence.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: app
+    ports:
+    - protocol: TCP
+      port: {{ .Values.garmin.port }}
+  egress:
+  {{- include "kadence.netpol.dnsEgress" . | nindent 2 }}
+  # Garmin Connect itself, over https. It is a public CDN address that cannot
+  # be narrowed to a fixed range; private space stays excluded so a compromised
+  # container cannot reach the cluster's own services.
+  {{- include "kadence.netpol.httpsEgress" . | nindent 2 }}
+{{- end }}

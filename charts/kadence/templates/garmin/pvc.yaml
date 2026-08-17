@@ -1,0 +1,23 @@
+{{- if .Values.garmin.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kadence.garmin.fullname" . }}-state
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garmin
+  annotations:
+    # The encrypted Garmin token store and its master key live here. Deleting
+    # this volume logs every user out of the integration permanently, and the
+    # tokens cannot be recovered from a backup of the database alone.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+  - {{ .Values.garmin.persistence.accessMode }}
+  {{- with .Values.garmin.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.garmin.persistence.size }}
+{{- end }}

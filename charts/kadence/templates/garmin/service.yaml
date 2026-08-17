@@ -1,0 +1,19 @@
+{{- if .Values.garmin.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kadence.garmin.fullname" . }}
+  labels:
+    {{- include "kadence.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garmin
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kadence.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: garmin
+  ports:
+  - name: http
+    port: {{ .Values.garmin.port }}
+    targetPort: http
+    protocol: TCP
+{{- end }}

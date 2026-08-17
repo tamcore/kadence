@@ -103,6 +103,40 @@ Context: the root context (.), NOT a dict — shared by all servers.
 markitdown-mcp fully qualified name: <release>-markitdown.
 Context: the root context (.).
 */}}
+{{/*
+garmin-mcp fully qualified name: <release>-garmin.
+*/}}
+{{- define "kadence.garmin.fullname" -}}
+{{- printf "%s-garmin" (include "kadence.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+The one canonical URL garmin-mcp publishes. Its issuer, its RFC 8707 resource,
+every endpoint URL, and the path it serves MCP on are all derived from this, and
+changing it invalidates every user's tokens.
+*/}}
+{{- define "kadence.garmin.publicURL" -}}
+{{- printf "https://%s%s" .Values.garmin.host .Values.garmin.path -}}
+{{- end }}
+
+{{/*
+The OAuth client registry, as the JSON array garmin-mcp reads from its
+environment. Kadence registers as a public client: PKCE S256 is mandatory and
+the redirect URI is a single exact https URL on Kadence's own origin, so an
+attacker who knows the client id still cannot receive an authorization code.
+*/}}
+{{- define "kadence.garmin.oauthClients" -}}
+{{- $redirect := printf "https://%s/api/mcp/oauth/callback" .Values.ingress.host -}}
+{{- $client := dict
+      "id" .Values.garmin.oauth.clientID
+      "name" "Kadence"
+      "redirect-uris" (list $redirect)
+      "scopes" .Values.garmin.oauth.scopes
+      "resources" (list (include "kadence.garmin.publicURL" .))
+      "public" true -}}
+{{- list $client | toJson -}}
+{{- end }}
+
 {{- define "kadence.markitdown.fullname" -}}
 {{- printf "%s-markitdown" (include "kadence.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
