@@ -32,7 +32,12 @@ const (
 	fieldTools
 	fieldAlias
 	fieldHint
+	fieldAuthMode
 )
+
+// authModeOAuth is the AuthMode value selecting a per-user OAuth bearer token
+// instead of the shared basic-auth credential.
+const authModeOAuth = "oauth"
 
 // knownFieldSuffixes lists the env-var suffixes recognized after
 // MCP_<NAME>_<SCOPE>. Order matters: longer/more-specific suffixes
@@ -44,6 +49,7 @@ var knownFieldSuffixes = []struct {
 }{
 	{"_AUTH_USER", fieldAuthUser},
 	{"_AUTH_PASS", fieldAuthPass},
+	{"_AUTH_MODE", fieldAuthMode},
 	{"_TRANSPORT", fieldTransport},
 	{"_URL", fieldURL},
 	{"_TOOLS", fieldTools},
@@ -53,11 +59,15 @@ var knownFieldSuffixes = []struct {
 
 // Server describes one remote MCP server derived from the env contract.
 type Server struct {
-	Name      string // e.g. "GARMIN"
-	Scope     string // "GLOBAL" or "USER_<username>"
-	URL       string
-	AuthUser  string
-	AuthPass  string
+	Name     string // e.g. "GARMIN"
+	Scope    string // "GLOBAL" or "USER_<username>"
+	URL      string
+	AuthUser string
+	AuthPass string
+	// AuthMode selects how Kadence authenticates to this server: empty or
+	// "basic" uses AuthUser/AuthPass, "oauth" uses a bearer token held per
+	// user. An oauth server is dialed once per principal (see PerPrincipal).
+	AuthMode  string
 	Transport string // "streamable-http" | "sse"
 	// Tools is an app-side allowlist of glob patterns (path.Match syntax)
 	// matched against the unprefixed tool name. Empty/nil means no
@@ -90,6 +100,11 @@ func (s Server) AppliesTo(username string) bool {
 	return s.Scope == scopeGlobal || s.Scope == userScopePrefix+username
 }
 
+// PerPrincipal reports whether every user needs their own client for this
+// server. An oauth server's credential belongs to the user, so one shared
+// transport would hand user B the bearer token user A dialed with.
+func (s Server) PerPrincipal() bool { return s.AuthMode == authModeOAuth }
+
 // serverBuilder accumulates fields for one (Name, Scope) group while
 // scanning the environment, before being finalized into a Server.
 type serverBuilder struct {
@@ -97,6 +112,7 @@ type serverBuilder struct {
 	url, transport string
 	authUser       string
 	authPass       string
+	authMode       string
 	tools          string
 	alias          string
 	hint           string
@@ -141,6 +157,7 @@ func ServersFromEnv(environ []string) ([]Server, error) {
 			URL:       b.url,
 			AuthUser:  b.authUser,
 			AuthPass:  b.authPass,
+			AuthMode:  b.authMode,
 			Transport: b.transport,
 			Tools:     splitTools(b.tools),
 			Alias:     validatedAlias(b.name, b.scope, b.alias),
@@ -182,6 +199,8 @@ func applyField(b *serverBuilder, matchedField field, value string) {
 		b.authUser = value
 	case fieldAuthPass:
 		b.authPass = value
+	case fieldAuthMode:
+		b.authMode = strings.ToLower(strings.TrimSpace(value))
 	case fieldTools:
 		b.tools = value
 	case fieldAlias:

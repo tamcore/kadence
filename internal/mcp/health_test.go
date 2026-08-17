@@ -34,7 +34,7 @@ func TestHealthPoller_ProbeAllAndStatusFor(t *testing.T) {
 	p.probeAll(context.Background()) // one cycle, synchronous
 
 	// alice sees GLOBAL garmin + GLOBAL down + her USER_alice priv = 3
-	st := p.StatusFor("alice")
+	st := p.StatusFor(testUsername)
 	if len(st) != 3 {
 		t.Fatalf("StatusFor(alice) = %d servers, want 3", len(st))
 	}
@@ -57,7 +57,7 @@ func TestHealthPoller_ProbeAllAndStatusFor(t *testing.T) {
 	}
 
 	// ToolsFor: applicable server returns tools; non-applicable returns false.
-	if tools, ok := p.ToolsFor("alice", "priv"); !ok || len(tools) != 2 {
+	if tools, ok := p.ToolsFor(testUsername, "priv"); !ok || len(tools) != 2 {
 		t.Fatalf("ToolsFor(alice, priv) = %v,%v want 2 tools,true", len(tools), ok)
 	}
 	if _, ok := p.ToolsFor("bob", "priv"); ok {

@@ -58,6 +58,7 @@ type Registry struct {
 	servers    []Server
 	httpClient *http.Client // optional CA-verifying client; nil = mcp-go default
 	userSrc    UserServerSource
+	principals PrincipalSource
 
 	mu      sync.Mutex
 	clients map[string]*leasedClient // keyed by Name+"/"+Scope; env servers only
@@ -183,7 +184,13 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 	applicable, prefixes := applicableServersWithPrefixes(username, servers)
 	for i, s := range applicable {
 		func() {
-			client, release, err := r.clientFor(ctx, s)
+			principal, err := r.principalFor(ctx, s, username)
+			if err != nil {
+				slog.Warn("mcp: skipping server (no principal)", "server", s.Name, "scope", s.Scope, "error", err)
+				return
+			}
+
+			client, release, err := r.clientFor(ctx, s, principal)
 			if err != nil {
 				slog.Warn("mcp: skipping server (connect failed)", "server", s.Name, "scope", s.Scope, "error", err)
 				return
@@ -193,7 +200,7 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 			tools, err := client.ListTools(ctx)
 			if err != nil {
 				slog.Warn("mcp: skipping server (list tools failed)", "server", s.Name, "scope", s.Scope, "error", err)
-				r.evictClient(s)
+				r.evictClient(s, principal)
 				return
 			}
 
@@ -254,7 +261,12 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 		return "", fmt.Errorf("mcp: tool %q is not enabled for server %q", realTool, prefix)
 	}
 
-	client, release, err := r.clientFor(ctx, s)
+	principal, err := r.principalFor(ctx, s, username)
+	if err != nil {
+		return "", err
+	}
+
+	client, release, err := r.clientFor(ctx, s, principal)
 	if err != nil {
 		return "", fmt.Errorf("mcp: connect to server %s: %w", s.Name, err)
 	}
@@ -262,7 +274,7 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 
 	out, err := client.CallTool(ctx, realTool, argsJSON)
 	if err != nil {
-		r.evictClient(s)
+		r.evictClient(s, principal)
 		return "", err
 	}
 	return out, nil
@@ -286,14 +298,18 @@ func (r *Registry) Servers() []Server {
 // the server's TOOLS filter (matching what ToolsFor/Call actually expose).
 // Used by the health poller; reuses the cached client.
 func (r *Registry) Probe(ctx context.Context, s Server) ([]ToolInfo, error) {
-	client, release, err := r.clientFor(ctx, s)
+	if s.PerPrincipal() {
+		return nil, fmt.Errorf("mcp: probe %s/%s: %w", s.Name, s.Scope, ErrProbeNeedsPrincipal)
+	}
+
+	client, release, err := r.clientFor(ctx, s, "")
 	if err != nil {
 		return nil, fmt.Errorf("mcp: probe connect %s/%s: %w", s.Name, s.Scope, err)
 	}
 	defer release()
 	tools, err := client.ListTools(ctx)
 	if err != nil {
-		r.evictClient(s)
+		r.evictClient(s, "")
 		return nil, fmt.Errorf("mcp: probe list tools %s/%s: %w", s.Name, s.Scope, err)
 	}
 	allowed := make([]ToolInfo, 0, len(tools))
@@ -412,7 +428,7 @@ func serverPrefixes(servers []Server) []string {
 // dialTimeout: without this, canceling the "leader" caller's context (e.g. an
 // aborted chat stream) would abort the in-flight dial and hand every waiter
 // sharing it a context.Canceled error unrelated to their own request.
-func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), error) {
+func (r *Registry) clientFor(ctx context.Context, s Server, principal string) (mcpClient, func(), error) {
 	noop := func() {}
 
 	if !r.isEnvServer(s) {
@@ -423,7 +439,7 @@ func (r *Registry) clientFor(ctx context.Context, s Server) (mcpClient, func(), 
 		return c, func() { _ = c.Close() }, nil
 	}
 
-	key := s.Name + "/" + s.Scope
+	key := clientCacheKey(s, principal)
 
 	if c, release, ok := r.leaseCached(key); ok {
 		return c, release, nil
@@ -538,11 +554,11 @@ func (r *Registry) release(lc *leasedClient) {
 // fresh client on every call. If the evicted client is still leased by
 // another in-flight call, closing it is deferred to that caller's release —
 // otherwise we would close a transport out from under it.
-func (r *Registry) evictClient(s Server) {
+func (r *Registry) evictClient(s Server, principal string) {
 	if !r.isEnvServer(s) {
 		return
 	}
-	key := s.Name + "/" + s.Scope
+	key := clientCacheKey(s, principal)
 	r.mu.Lock()
 	lc, ok := r.clients[key]
 	var shouldClose bool
