@@ -74,6 +74,10 @@ func (r *Registry) tokenSource() TokenSource {
 // travel together so a cached client can never be handed a bearer that belongs
 // to a different principal.
 type principalAuth struct {
+	// userID is the resolved id itself, kept alongside its decimal form
+	// because a mid-call confirmation must name the user numerically and
+	// parsing the string back could fail where the original cannot.
+	userID    int64
 	principal string
 	bearer    string
 }
@@ -103,7 +107,7 @@ func (r *Registry) authFor(ctx context.Context, s Server, username string) (prin
 	if err != nil {
 		return principalAuth{}, fmt.Errorf("mcp: no usable authorization for %s/%s: %w", s.Name, s.Scope, err)
 	}
-	return principalAuth{principal: strconv.FormatInt(id, 10), bearer: bearer}, nil
+	return principalAuth{userID: id, principal: strconv.FormatInt(id, 10), bearer: bearer}, nil
 }
 
 // validateOAuth reports whether an oauth server carries the client identity it

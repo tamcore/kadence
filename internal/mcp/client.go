@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -103,6 +104,11 @@ type ToolInfo struct {
 	Schema      json.RawMessage
 }
 
+// ErrToolRefused marks a result the remote server itself produced: the call
+// reached it, it decided against running, and it said so. The connection is
+// healthy, so a caller must not treat this like a transport fault.
+var ErrToolRefused = errors.New("mcp: the server refused the call")
+
 // mcpClient is the registry's seam onto a single remote MCP server
 // connection, satisfied by the real mark3labs/mcp-go client below (and by
 // fakes in tests, if needed).
@@ -162,6 +168,13 @@ func newClient(ctx context.Context, s Server, httpClient *http.Client) (mcpClien
 	initReq := mcpgo.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcpgo.Implementation{Name: "kadence", Version: "0.0.1"}
+	if wantsElicitation(s) {
+		// Declared unconditionally for a per-principal server: without the
+		// capability the server refuses every tool that needs confirmation,
+		// and whether a given call can actually reach a user is decided per
+		// call, not per connection.
+		initReq.Params.Capabilities.Elicitation = &mcpgo.ElicitationCapability{}
+	}
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("mcp: initialize %s/%s: %w", s.Name, s.Scope, err)
@@ -187,11 +200,14 @@ func newTransportClient(s Server, httpClient *http.Client) (*mcpclient.Client, e
 		if httpClient != nil {
 			opts = append(opts, transport.WithHTTPBasicClient(httpClient))
 		}
-		c, err := mcpclient.NewStreamableHttpClient(s.URL, opts...)
+		// Built in two steps rather than through NewStreamableHttpClient: the
+		// elicitation handler is a client option, and that constructor takes
+		// only transport options.
+		tr, err := transport.NewStreamableHTTP(s.URL, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("mcp: new streamable-http client for %s/%s: %w", s.Name, s.Scope, err)
 		}
-		return c, nil
+		return mcpclient.NewClient(tr, clientOptions(s)...), nil
 	case transportSSE:
 		opts := []transport.ClientOption{}
 		if len(headers) > 0 {
@@ -208,6 +224,22 @@ func newTransportClient(s Server, httpClient *http.Client) (*mcpclient.Client, e
 	default:
 		return nil, fmt.Errorf("mcp: unknown transport %q for server %s/%s", s.Transport, s.Name, s.Scope)
 	}
+}
+
+// wantsElicitation reports whether this server may ask its caller to confirm.
+// Only a per-principal server can: a confirmation names a user, and a server
+// on one shared credential has none to name.
+func wantsElicitation(s Server) bool { return s.PerPrincipal() }
+
+// clientOptions returns the mcp-go client options for this server. The
+// elicitation handler is stateless — it reads the user and the tool from the
+// context of the call being confirmed — so one instance serves every caller
+// of a cached client.
+func clientOptions(s Server) []mcpclient.ClientOption {
+	if !wantsElicitation(s) {
+		return nil
+	}
+	return []mcpclient.ClientOption{mcpclient.WithElicitationHandler(elicitHandler{})}
 }
 
 // authHeaders returns the Authorization header for this server: the user's own
@@ -273,7 +305,7 @@ func (c *realMCPClient) CallTool(ctx context.Context, name, argsJSON string) (st
 
 	text := truncateToolResult(flattenTextContent(result.Content))
 	if result.IsError {
-		return "", fmt.Errorf("mcp: tool %s returned an error: %s", name, text)
+		return "", fmt.Errorf("%w: tool %s: %s", ErrToolRefused, name, text)
 	}
 	return text, nil
 }

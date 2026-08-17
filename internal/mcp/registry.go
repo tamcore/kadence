@@ -60,6 +60,7 @@ type Registry struct {
 	userSrc    UserServerSource
 	principals PrincipalSource
 	tokens     TokenSource
+	confirms   ConfirmSource
 
 	mu      sync.Mutex
 	clients map[string]*leasedClient // keyed by Name+"/"+Scope; env servers only
@@ -273,9 +274,22 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 	}
 	defer release()
 
+	// The confirmation target rides the call's own context, so a mid-call
+	// question can be attributed to this user and this tool. It is scoped to
+	// the call, never to the cached client, which several turns share.
+	if src := r.confirmSource(); src != nil && s.PerPrincipal() {
+		ctx = withConfirmTarget(ctx, confirmTarget{userID: auth.userID, tool: toolName, src: src})
+	}
+
 	out, err := client.CallTool(ctx, realTool, argsJSON)
 	if err != nil {
-		r.evictClient(s, auth)
+		// A result the server itself produced — a refused confirmation, a
+		// validation complaint — means the connection is healthy and the
+		// answer arrived. Evicting here would discard a working authenticated
+		// session every time a user says no.
+		if !errors.Is(err, ErrToolRefused) {
+			r.evictClient(s, auth)
+		}
 		return "", err
 	}
 	return out, nil
