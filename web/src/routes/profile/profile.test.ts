@@ -334,12 +334,14 @@ describe('/profile', () => {
 		expect(screen.getByRole('radio', { name: 'Imperial' })).toBeInTheDocument();
 	});
 
-	it('shows nothing at all when the deployment configures no integration', async () => {
-		// The endpoint is not mounted when no MCP server uses OAuth, so the
-		// section must disappear rather than raise an alert the user cannot act
-		// on — an alert here would also be the only one on the page.
+	it.each([404, 405])('shows nothing at all when the endpoint is not mounted (%i)', async (status) => {
+		// No MCP server uses OAuth, so the route does not exist. chi answers 405
+		// rather than 404 because /api/mcp/{id} is still registered for PUT and
+		// DELETE. Either way the section must disappear rather than raise an
+		// alert the user cannot act on — and it would be the only alert on the
+		// page, which the profile e2e asserts against.
 		const { APIError } = await import('$lib/api/client');
-		listIntegrationsMock.mockRejectedValueOnce(new APIError(404, 'not found'));
+		listIntegrationsMock.mockRejectedValueOnce(new APIError(status, 'nope'));
 		render(Page);
 
 		await waitFor(() => expect(listIntegrationsMock).toHaveBeenCalled());

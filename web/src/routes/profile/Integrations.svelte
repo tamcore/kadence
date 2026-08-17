@@ -29,7 +29,11 @@
 			// A deployment with no OAuth integration does not mount the endpoint
 			// at all. That is a configuration, not a fault, so the section
 			// disappears instead of reporting an error nobody can act on.
-			if (e instanceof APIError && e.status === 404) {
+			//
+			// 405 as well as 404: the router still has /api/mcp/{id} for PUT and
+			// DELETE, so an unmounted GET on that shape is answered as
+			// method-not-allowed rather than not-found.
+			if (e instanceof APIError && (e.status === 404 || e.status === 405)) {
 				available = false;
 				error = '';
 			} else {
