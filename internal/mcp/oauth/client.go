@@ -18,6 +18,11 @@ import (
 // retrying is what destroys the family in the first place.
 var ErrInvalidGrant = errors.New("oauth: invalid_grant")
 
+// ErrServerFault is a named refusal from the server itself: it answered, with a
+// status and an error code, rather than leaving the outcome unknown. A refresh
+// that fails this way did not consume the presented token.
+var ErrServerFault = errors.New("oauth: the authorization server refused the request")
+
 // The wire parameter names, spelled once.
 const (
 	paramGrantType    = "grant_type"
@@ -260,7 +265,7 @@ func (c *Client) token(ctx context.Context, form url.Values) (Tokens, error) {
 		if code == errCodeInvalidGrant {
 			return Tokens{}, ErrInvalidGrant
 		}
-		return Tokens{}, fmt.Errorf("oauth: token endpoint answered %d (%s)", resp.StatusCode, code)
+		return Tokens{}, fmt.Errorf("%w: token endpoint answered %d (%s)", ErrServerFault, resp.StatusCode, code)
 	}
 
 	var body struct {

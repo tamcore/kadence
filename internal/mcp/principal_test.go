@@ -117,6 +117,34 @@ func TestTwoUsersEachSendTheirOwnBearerToken(t *testing.T) {
 	}
 }
 
+func TestARotatedTokenRetiresTheCachedClient(t *testing.T) {
+	ts, headers := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	tokens := stubTokens{testPrincipalKey: testBearer42}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(tokens)
+	t.Cleanup(func() { _ = reg.Close() })
+
+	if _, err := reg.ToolsFor(context.Background(), testUsername); err != nil {
+		t.Fatalf("ToolsFor(before rotation): %v", err)
+	}
+
+	// The user's access token rotates, as it does every fifteen minutes.
+	tokens[testPrincipalKey] = "tok-42-rotated"
+	if _, err := reg.ToolsFor(context.Background(), testUsername); err != nil {
+		t.Fatalf("ToolsFor(after rotation): %v", err)
+	}
+
+	saw := map[string]bool{}
+	for _, h := range headers() {
+		saw[h] = true
+	}
+	if !saw["Bearer tok-42-rotated"] {
+		t.Fatalf("the rotated token never reached the server; headers seen: %v", saw)
+	}
+}
+
 func TestUnlinkedUserGetsNoToolsAndNoDial(t *testing.T) {
 	ts, headers := oauthTestServer(t)
 	s := oauthServerAt(ts.URL)
@@ -276,13 +304,13 @@ func TestClientCacheKeyIncludesPrincipalOnlyForOAuth(t *testing.T) {
 	shared := Server{Name: "MARKITDOWN", Scope: scopeGlobal}
 	perUser := Server{Name: "GARMIN", Scope: scopeGlobal, AuthMode: authModeOAuth}
 
-	if got, want := clientCacheKey(shared, "7"), "MARKITDOWN/GLOBAL"; got != want {
+	if got, want := clientCacheKey(shared, principalAuth{principal: "7"}), "MARKITDOWN/GLOBAL"; got != want {
 		t.Fatalf("shared key = %q, want %q", got, want)
 	}
-	if got, want := clientCacheKey(perUser, "7"), "GARMIN/GLOBAL/7"; got != want {
+	if got, want := clientCacheKey(perUser, principalAuth{principal: "7"}), "GARMIN/GLOBAL/7"; got != want {
 		t.Fatalf("per-principal key = %q, want %q", got, want)
 	}
-	if clientCacheKey(perUser, "7") == clientCacheKey(perUser, "8") {
+	if clientCacheKey(perUser, principalAuth{principal: "7"}) == clientCacheKey(perUser, principalAuth{principal: "8"}) {
 		t.Fatal("two principals produced the same cache key")
 	}
 }
@@ -362,9 +390,9 @@ func TestEvictClientEvictsOnlyThatPrincipal(t *testing.T) {
 	}
 	releaseB()
 
-	reg.evictClient(s, "7")
+	reg.evictClient(s, principalAuth{principal: "7"})
 
-	if _, ok := reg.clients[clientCacheKey(s, "7")]; ok {
+	if _, ok := reg.clients[clientCacheKey(s, principalAuth{principal: "7"})]; ok {
 		t.Fatal("principal 7's client survived its own eviction")
 	}
 	again, release, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
@@ -456,7 +484,8 @@ func TestToolsForUsesResolvedPrincipal(t *testing.T) {
 	if len(defs) == 0 {
 		t.Fatal("got no tool definitions for a resolvable principal")
 	}
-	if _, ok := reg.clients[clientCacheKey(s, "42")]; !ok {
-		t.Fatalf("no client cached under the resolved principal; cache holds %d entries", len(reg.clients))
+	want := clientCacheKey(s, principalAuth{principal: "42", bearer: testBearer42})
+	if _, ok := reg.clients[want]; !ok {
+		t.Fatalf("no client cached under the resolved principal and token; cache holds %d entries", len(reg.clients))
 	}
 }

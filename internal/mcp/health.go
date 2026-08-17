@@ -91,6 +91,13 @@ func (p *HealthPoller) probeAll(ctx context.Context) {
 	g.SetLimit(maxConcurrentProbes)
 
 	for _, s := range servers {
+		// A per-principal server has no deployment-wide credential, so a probe
+		// could only ever fail. Reporting that as unhealthy would libel a server
+		// that works for every linked user; its real state is each user's own
+		// link, shown in Settings.
+		if s.PerPrincipal() {
+			continue
+		}
 		g.Go(func() error {
 			p.probeOne(ctx, s)
 			return nil

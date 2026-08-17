@@ -83,38 +83,6 @@ func TestMCPOAuthGetMissingLinkIsErrLinkNotFound(t *testing.T) {
 	}
 }
 
-func TestMCPOAuthRotateCASRejectsAStaleVersion(t *testing.T) {
-	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
-	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
-		t.Fatalf("Upsert: %v", err)
-	}
-
-	first := oauthTestLink(userID)
-	first.AccessToken = "access-2"
-	first.RefreshToken = oauthRefreshTwo
-	first.CASVersion = 1
-	if err := repo.RotateCAS(ctx, first); err != nil {
-		t.Fatalf("RotateCAS(first): %v", err)
-	}
-
-	second := oauthTestLink(userID)
-	second.AccessToken = "access-3"
-	second.RefreshToken = "refresh-3"
-	second.CASVersion = 1 // stale: the first rotation already moved it
-	if err := repo.RotateCAS(ctx, second); !errors.Is(err, store.ErrCASConflict) {
-		t.Fatalf("RotateCAS(second): %v, want ErrCASConflict", err)
-	}
-
-	got, err := repo.Get(ctx, userID, oauthTestServerID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if got.RefreshToken != oauthRefreshTwo || got.CASVersion != 2 {
-		t.Fatalf("stale rotation won: refresh=%q cas=%d", got.RefreshToken, got.CASVersion)
-	}
-}
-
 func TestMCPOAuthSetStatusAndDelete(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
 	ctx := context.Background()
@@ -153,10 +121,17 @@ func TestMCPOAuthUpsertNeverLowersCASVersion(t *testing.T) {
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
-	rotated := oauthTestLink(userID)
-	rotated.RefreshToken = oauthRefreshTwo
-	if err := repo.RotateCAS(ctx, rotated); err != nil {
-		t.Fatalf("RotateCAS: %v", err)
+	if _, err := repo.RotateUnderLock(ctx, userID, oauthTestServerID,
+		func(_ context.Context, current store.MCPOAuthLink) (store.MCPOAuthLink, error) {
+			next := current
+			next.RefreshToken = oauthRefreshTwo
+			return next, nil
+		}); err != nil {
+		t.Fatalf("RotateUnderLock: %v", err)
+	}
+	rotatedVersion, err := repo.Get(ctx, userID, oauthTestServerID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
 
 	relinked := oauthTestLink(userID)
@@ -165,51 +140,25 @@ func TestMCPOAuthUpsertNeverLowersCASVersion(t *testing.T) {
 		t.Fatalf("Upsert(relink): %v", err)
 	}
 
-	// A rotation that was in flight across the relink still holds version 2.
-	// It must lose: its tokens were minted from a grant the user replaced.
-	stale := oauthTestLink(userID)
-	stale.RefreshToken = "refresh-stale"
-	stale.CASVersion = 2
-	if err := repo.RotateCAS(ctx, stale); !errors.Is(err, store.ErrCASConflict) {
-		t.Fatalf("stale RotateCAS after relink: %v, want ErrCASConflict", err)
-	}
-	got, err := repo.Get(ctx, userID, oauthTestServerID)
+	after, err := repo.Get(ctx, userID, oauthTestServerID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.RefreshToken != "refresh-fresh" {
-		t.Fatalf("stale rotation overwrote the relink: refresh=%q", got.RefreshToken)
-	}
-}
-
-func TestMCPOAuthSetStatusBeatsAnInFlightRotation(t *testing.T) {
-	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
-	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
-		t.Fatalf("Upsert: %v", err)
-	}
-	observed, err := repo.Get(ctx, userID, oauthTestServerID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	if after.CASVersion <= rotatedVersion.CASVersion {
+		t.Fatalf("relink lowered the version from %d to %d; a stale writer could match it again",
+			rotatedVersion.CASVersion, after.CASVersion)
 	}
 
-	// The user disconnects while a rotation is in flight.
-	if err := repo.SetStatus(ctx, userID, oauthTestServerID, store.LinkStatusDisconnectPending); err != nil {
-		t.Fatalf("SetStatus: %v", err)
+	// A failure report that was in flight across the relink still holds the old
+	// version. It must lose, or it would condemn a link the user just made.
+	if err := repo.SetStatusIfVersion(ctx, userID, oauthTestServerID,
+		store.LinkStatusReauthRequired, rotatedVersion.CASVersion); !errors.Is(err, store.ErrCASConflict) {
+		t.Fatalf("stale condemnation after relink: %v, want ErrCASConflict", err)
 	}
-
-	late := oauthTestLink(userID)
-	late.RefreshToken = oauthRefreshTwo
-	late.CASVersion = observed.CASVersion
-	if err := repo.RotateCAS(ctx, late); !errors.Is(err, store.ErrCASConflict) {
-		t.Fatalf("late RotateCAS: %v, want ErrCASConflict", err)
-	}
-	got, err := repo.Get(ctx, userID, oauthTestServerID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if got.Status != store.LinkStatusDisconnectPending {
-		t.Fatalf("status = %q, want disconnect_pending (the rotation resurrected the link)", got.Status)
+	if got, gErr := repo.Get(ctx, userID, oauthTestServerID); gErr != nil {
+		t.Fatalf("Get: %v", gErr)
+	} else if got.RefreshToken != "refresh-fresh" || got.Status != store.LinkStatusLinked {
+		t.Fatalf("the relink did not survive: refresh=%q status=%q", got.RefreshToken, got.Status)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/tamcore/kadence/internal/store"
@@ -39,6 +40,9 @@ const (
 	// maxOpenTransactions bounds how many authorizations one user may have in
 	// flight. An abandoned attempt is a row nobody else collects.
 	maxOpenTransactions = 5
+	// condemnTimeout bounds the write that records a dead grant. It runs after
+	// the caller's own context may already be gone.
+	condemnTimeout = 5 * time.Second
 )
 
 // LinkStore is the persistence the service needs.
@@ -65,14 +69,22 @@ type LinkState struct {
 	AccessExpiresAt time.Time
 }
 
+// Discoverer builds a client for a server whose metadata is not known yet. It
+// exists so an integration whose server was unreachable at boot recovers on its
+// own rather than staying dead until the next restart.
+type Discoverer func(ctx context.Context, serverID string) (*Client, error)
+
 // Service drives the browser authorization flow and keeps each user's grant
 // usable afterwards.
 type Service struct {
 	store       LinkStore
-	clients     map[string]*Client
 	scopes      map[string][]string
 	redirectURI string
 	now         func() time.Time
+
+	mu         sync.Mutex
+	clients    map[string]*Client
+	discoverer Discoverer
 }
 
 // NewService wires the service. clients and scopes are keyed by the server's
@@ -84,14 +96,56 @@ func NewService(
 	if now == nil {
 		now = time.Now
 	}
+	if clients == nil {
+		clients = map[string]*Client{}
+	}
 	return &Service{store: st, clients: clients, scopes: scopes, redirectURI: redirectURI, now: now}
+}
+
+// SetDiscoverer installs the retry path for an integration whose metadata could
+// not be read yet.
+func (s *Service) SetDiscoverer(d Discoverer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.discoverer = d
+}
+
+// clientFor returns the client for serverID, discovering it if boot could not.
+// A server that is configured but undiscoverable is reported as unknown: from a
+// caller's point of view an integration that cannot be reached is one that
+// cannot be used.
+func (s *Service) clientFor(ctx context.Context, serverID string) (*Client, error) {
+	s.mu.Lock()
+	client, ok := s.clients[serverID]
+	discoverer := s.discoverer
+	s.mu.Unlock()
+	if ok {
+		return client, nil
+	}
+	if discoverer == nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownServer, serverID)
+	}
+
+	discovered, err := discoverer(ctx, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrUnknownServer, serverID, err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// A peer may have discovered it first; keep one client per server.
+	if existing, raced := s.clients[serverID]; raced {
+		return existing, nil
+	}
+	s.clients[serverID] = discovered
+	return discovered, nil
 }
 
 // Servers lists the configured integration ids, sorted so the UI order is
 // stable.
 func (s *Service) Servers() []string {
-	out := make([]string, 0, len(s.clients))
-	for id := range s.clients {
+	out := make([]string, 0, len(s.scopes))
+	for id := range s.scopes {
 		out = append(out, id)
 	}
 	sort.Strings(out)
@@ -106,9 +160,9 @@ func digest(v string) []byte {
 // Start opens an authorization: it returns the URL the browser must visit, the
 // state it carries, and the browser token that must come back in a cookie.
 func (s *Service) Start(ctx context.Context, userID int64, serverID string) (authorizeURL, state, browserToken string, err error) {
-	client, ok := s.clients[serverID]
-	if !ok {
-		return "", "", "", fmt.Errorf("%w: %s", ErrUnknownServer, serverID)
+	client, err := s.clientFor(ctx, serverID)
+	if err != nil {
+		return "", "", "", err
 	}
 
 	now := s.now()
@@ -165,9 +219,9 @@ func (s *Service) Complete(ctx context.Context, userID int64, code, state, brows
 		return "", err
 	}
 
-	client, ok := s.clients[tx.ServerID]
-	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrUnknownServer, tx.ServerID)
+	client, err := s.clientFor(ctx, tx.ServerID)
+	if err != nil {
+		return "", err
 	}
 
 	tokens, err := client.Exchange(ctx, code, tx.PKCEVerifier, tx.RedirectURI)
@@ -207,9 +261,9 @@ func (s *Service) TokenFor(ctx context.Context, userID int64, serverID string) (
 		return link.AccessToken, nil
 	}
 
-	client, ok := s.clients[serverID]
-	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrUnknownServer, serverID)
+	client, err := s.clientFor(ctx, serverID)
+	if err != nil {
+		return "", err
 	}
 
 	rotated, err := s.store.RotateUnderLock(ctx, userID, serverID,
@@ -233,25 +287,62 @@ func (s *Service) TokenFor(ctx context.Context, userID int64, serverID string) (
 		})
 
 	switch {
-	case errors.Is(err, ErrInvalidGrant), errors.Is(err, store.ErrRotationUncertain):
-		// The presented refresh token is spent either way, and replaying it
-		// would revoke the family. Condemn the link — but only while it is
-		// still the one this caller read, so a user who re-authorized in the
-		// meantime keeps a healthy link.
-		if setErr := s.store.SetStatusIfVersion(ctx, userID, serverID,
-			store.LinkStatusReauthRequired, link.CASVersion); setErr != nil &&
-			!errors.Is(setErr, store.ErrCASConflict) {
-			return "", fmt.Errorf("oauth: mark reauth required: %w", setErr)
-		}
-		return "", ErrReauthRequired
 	case errors.Is(err, store.ErrLinkNotUsable):
 		return "", ErrReauthRequired
 	case errors.Is(err, store.ErrLinkNotFound):
 		return "", ErrNotLinked
+	case err != nil && refreshTokenIsSpent(err):
+		// The token reached the server, or may have: it is spent either way,
+		// and replaying it would revoke the family. Condemn the link.
+		s.condemn(ctx, userID, serverID, link.CASVersion)
+		return "", ErrReauthRequired
 	case err != nil:
+		// The request never left, so the stored token is untouched and the
+		// caller may try again later.
 		return "", err
 	}
 	return rotated.AccessToken, nil
+}
+
+// refreshTokenIsSpent reports whether a failed refresh may already have
+// consumed the presented token.
+//
+// invalid_grant is certain. So is an uncertain persist. Everything else that is
+// not a clean, named refusal from the server — a truncated body, a cancelled
+// request, a read timeout — is treated as spent too, because the request may
+// have arrived and the alternative is presenting a consumed token again, which
+// destroys a family that might still be alive. The cost of being wrong here is
+// one re-authorization; the cost of the other mistake is silent breakage.
+func refreshTokenIsSpent(err error) bool {
+	switch {
+	case errors.Is(err, ErrInvalidGrant), errors.Is(err, store.ErrRotationUncertain):
+		return true
+	case errors.Is(err, ErrServerFault):
+		// A named 5xx: the server answered, so it rejected the request rather
+		// than processing it.
+		return false
+	default:
+		return true
+	}
+}
+
+// condemn marks the link as needing a fresh authorization, on a context the
+// caller's own cancellation cannot abort: the token is already spent, and
+// losing this write would leave the link looking healthy while every later
+// refresh replays a dead token.
+func (s *Service) condemn(ctx context.Context, userID int64, serverID string, casVersion int64) {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), condemnTimeout)
+	defer cancel()
+
+	err := s.store.SetStatusIfVersion(writeCtx, userID, serverID, store.LinkStatusReauthRequired, casVersion)
+	switch {
+	case err == nil, errors.Is(err, store.ErrCASConflict):
+		// A conflict means the user re-authorized meanwhile: the new link is
+		// healthy and must not be condemned by this stale failure.
+	default:
+		slog.Error("mcp oauth: could not mark the link as needing reauthorization",
+			"server", serverID, "err", err)
+	}
 }
 
 // Unlink revokes the grant upstream and then removes the local copy.
@@ -269,14 +360,14 @@ func (s *Service) Unlink(ctx context.Context, userID int64, serverID string) err
 		return err
 	}
 
-	if client, ok := s.clients[serverID]; ok {
+	if client, cErr := s.clientFor(ctx, serverID); cErr == nil {
 		if revokeErr := client.Revoke(ctx, link.RefreshToken); revokeErr != nil {
+			// The local link goes either way: the user asked to disconnect, and
+			// keeping their tokens because a remote call failed serves nobody.
+			// The grant may stay alive upstream until it expires, which is why
+			// the UI says "removed" rather than "revoked".
 			slog.Warn("mcp oauth: upstream revocation failed; removing the local link anyway",
 				"server", serverID, "error", revokeErr)
-			if statusErr := s.store.SetStatus(ctx, userID, serverID,
-				store.LinkStatusDisconnectPending); statusErr != nil {
-				slog.Warn("mcp oauth: recording disconnect_pending failed", "error", statusErr)
-			}
 		}
 	}
 	return s.store.Delete(ctx, userID, serverID)

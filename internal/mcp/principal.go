@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -122,6 +124,12 @@ func (s Server) validateOAuth() error {
 	if s.OAuthResource != s.URL {
 		return fmt.Errorf("mcp: server %s/%s: oauth resource must equal the server URL", s.Name, s.Scope)
 	}
+	// Every request to this server carries a user's bearer token, so cleartext
+	// would publish one user's credential per call. Basic-auth servers may stay
+	// plaintext in-cluster; this one may not.
+	if !strings.HasPrefix(s.URL, "https://") {
+		return fmt.Errorf("mcp: server %s/%s: an oauth server must be https, it carries per-user bearer tokens", s.Name, s.Scope)
+	}
 	if len(s.OAuthScopes) == 0 {
 		return fmt.Errorf("mcp: server %s/%s: oauth needs at least one scope", s.Name, s.Scope)
 	}
@@ -147,12 +155,23 @@ var grantableScopes = map[string]bool{ScopeGarminRead: true}
 func (s Server) IntegrationID() string { return strings.ToLower(s.Name) }
 
 // clientCacheKey is a client's cache identity. A per-principal server keys on
-// the principal as well, because its credential is that one user's: sharing
-// the entry would share the credential.
-func clientCacheKey(s Server, principal string) string {
+// the principal as well, because its credential is that one user's: sharing the
+// entry would share the credential.
+//
+// It also keys on the credential itself, through a digest. The transport fixes
+// the Authorization header when it is dialed, so a client cached before a
+// refresh would keep presenting the token it was built with — every call
+// failing with 401 until the entry happened to be evicted. Keying on the
+// credential retires that client the moment the token rotates.
+func clientCacheKey(s Server, auth principalAuth) string {
 	key := s.Name + "/" + s.Scope
-	if s.PerPrincipal() {
-		key += "/" + principal
+	if !s.PerPrincipal() {
+		return key
+	}
+	key += "/" + auth.principal
+	if auth.bearer != "" {
+		sum := sha256.Sum256([]byte(auth.bearer))
+		key += "/" + hex.EncodeToString(sum[:8])
 	}
 	return key
 }

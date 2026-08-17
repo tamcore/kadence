@@ -723,7 +723,7 @@ func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing
 
 	// Evict while the dial is still in flight: nothing is cached yet for
 	// this key, so this must be a no-op — not a panic.
-	reg.evictClient(s, "")
+	reg.evictClient(s, principalAuth{})
 	if got := len(reg.clients); got != 0 {
 		t.Fatalf("clients cached = %d, want 0 while the dial is still in flight", got)
 	}
@@ -884,7 +884,7 @@ func TestEvictClientClosesTheDroppedClient(t *testing.T) {
 	reg.clients[testEnvServerName+"/"+scopeGlobal] = &leasedClient{client: c}
 	reg.mu.Unlock()
 
-	reg.evictClient(s, "")
+	reg.evictClient(s, principalAuth{})
 
 	if got := c.closes.Load(); got != 1 {
 		t.Fatalf("evicted client closed %d times, want 1", got)
@@ -982,7 +982,7 @@ func TestEvictClientDoesNotCloseALeasedClient(t *testing.T) {
 	reg.clients[key] = &leasedClient{client: c, leases: 1}
 	reg.mu.Unlock()
 
-	reg.evictClient(s, "")
+	reg.evictClient(s, principalAuth{})
 
 	if got := c.closes.Load(); got != 0 {
 		t.Fatalf("leased client closed %d times during eviction, want 0", got)
@@ -1019,7 +1019,7 @@ func TestReleaseAfterEvictionClosesExactlyOnce(t *testing.T) {
 	reg.clients[key] = lc
 	reg.mu.Unlock()
 
-	reg.evictClient(s, "")
+	reg.evictClient(s, principalAuth{})
 	if got := c.closes.Load(); got != 0 {
 		t.Fatalf("client closed %d times immediately after eviction, want 0 (still leased)", got)
 	}
@@ -1083,7 +1083,7 @@ func TestTwoLeasesOnSameClientOnlyLastReleaseCloses(t *testing.T) {
 		t.Fatal("expected a cache hit for the second lease")
 	}
 
-	reg.evictClient(s, "") // mark evicted while both leases are still outstanding
+	reg.evictClient(s, principalAuth{}) // mark evicted while both leases are still outstanding
 
 	release1()
 	if got := c.closes.Load(); got != 0 {
@@ -1243,7 +1243,7 @@ func runFanOutEvictionRounds(t *testing.T, assert func(round int, r fanOutEvicti
 		go func() {
 			c, release, err := reg.clientFor(context.Background(), s, principalAuth{})
 			if err == nil {
-				reg.evictClient(s, "")
+				reg.evictClient(s, principalAuth{})
 				release()
 			}
 			leaderFinished.Store(true)

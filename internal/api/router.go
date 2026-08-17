@@ -133,14 +133,19 @@ func mountAuth(r chi.Router, deps Deps) error {
 	// abuse case, so these get a stricter cap than the global one.
 	authLimit := middleware.RateLimit(deps.Config.RateLimitAuth)
 
-	// Login: reachable without a prior CSRF token (no session yet), but behind LoadUser.
-	r.With(loadUser, authLimit).Post("/api/session", authH.Login)
+	// Login: reachable without a prior CSRF token (no session yet), but behind
+	// LoadUser and an origin guard. A token cannot protect the request that
+	// creates the session, so the guard stands in: a cross-site form cannot log
+	// a victim's browser into an attacker's account and collect whatever the
+	// victim connects to it afterwards.
+	loginOrigin := middleware.RequireLoginOrigin(deps.Config.TrustedOrigins, deps.Config.IsProd())
+	r.With(loadUser, authLimit, loginOrigin).Post("/api/session", authH.Login)
 
 	if deps.WebAuthn != nil {
 		// Passkey login: no prior session/CSRF token; the origin-bound WebAuthn
 		// assertion is the CSRF defense, mirroring password Login.
-		r.With(loadUser, authLimit).Post("/api/webauthn/login/begin", deps.WebAuthn.LoginBegin)
-		r.With(loadUser, authLimit).Post("/api/webauthn/login/finish", deps.WebAuthn.LoginFinish)
+		r.With(loadUser, authLimit, loginOrigin).Post("/api/webauthn/login/begin", deps.WebAuthn.LoginBegin)
+		r.With(loadUser, authLimit, loginOrigin).Post("/api/webauthn/login/finish", deps.WebAuthn.LoginFinish)
 		r.Get("/api/webauthn/enabled", deps.WebAuthn.Enabled)
 	}
 

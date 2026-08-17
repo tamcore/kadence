@@ -12,6 +12,17 @@ import (
 	"github.com/tamcore/kadence/internal/crypto"
 )
 
+const (
+	// rotationTimeout bounds a whole refresh: the row lock, the outbound token
+	// request, and the write. It is deliberately shorter than any client-facing
+	// deadline so a stuck authorization server surfaces as one failed refresh
+	// rather than an exhausted connection pool.
+	rotationTimeout = 20 * time.Second
+	// lockTimeoutMillis is how long a rotation waits for the row before giving
+	// up. A queued waiter holds a pooled connection while it waits.
+	lockTimeoutMillis = "3000ms"
+)
+
 // Link statuses. A link is either usable, needs a fresh browser authorization,
 // or still holds tokens an unlink failed to revoke upstream.
 const (
@@ -162,28 +173,6 @@ func (r *MCPOAuthRepo) Get(ctx context.Context, userID int64, serverID string) (
 	return link, nil
 }
 
-// RotateCAS writes rotated tokens only if nobody else rotated first.
-func (r *MCPOAuthRepo) RotateCAS(ctx context.Context, link MCPOAuthLink) error {
-	access, refresh, err := r.sealTokens(link)
-	if err != nil {
-		return err
-	}
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE mcp_oauth_tokens
-		   SET access_token = $1, access_expires_at = $2, refresh_token = $3,
-		       status = $4, cas_version = cas_version + 1, updated_at = NOW()
-		 WHERE user_id = $5 AND server_id = $6 AND cas_version = $7`,
-		access, link.AccessExpiresAt, refresh, LinkStatusLinked,
-		link.UserID, link.ServerID, link.CASVersion)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrRotationUncertain, err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrCASConflict
-	}
-	return nil
-}
-
 // RefreshFunc performs the remote rotation for the link as currently stored
 // and returns the rotated link to persist. It runs while the row is locked, so
 // it must not start another database operation on the same row.
@@ -207,11 +196,24 @@ type RefreshFunc func(ctx context.Context, current MCPOAuthLink) (MCPOAuthLink, 
 func (r *MCPOAuthRepo) RotateUnderLock(
 	ctx context.Context, userID int64, serverID string, refresh RefreshFunc,
 ) (MCPOAuthLink, error) {
+	// The whole rotation, including the outbound refresh, is bounded: it holds a
+	// pooled connection and a row lock, so a hung authorization server must not
+	// be able to park connections until the pool is empty.
+	ctx, cancel := context.WithTimeout(ctx, rotationTimeout)
+	defer cancel()
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return MCPOAuthLink{}, fmt.Errorf("store: begin rotation: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	// A waiter that cannot get the row quickly gives up instead of queueing:
+	// under a burst, queued waiters are what exhausts the pool, and the peer
+	// holding the lock is already refreshing the token they would have fetched.
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+lockTimeoutMillis+"'"); err != nil {
+		return MCPOAuthLink{}, fmt.Errorf("store: bound the rotation lock: %w", err)
+	}
 
 	current := MCPOAuthLink{UserID: userID, ServerID: serverID}
 	var access, refreshBlob []byte

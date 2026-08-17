@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -21,6 +22,34 @@ import (
 // appended to the configured public origin and must match the registered
 // redirect URI byte for byte.
 const callbackPath = "/api/mcp/oauth/callback"
+
+// discoveryTimeout bounds one metadata fetch. A server that accepts the
+// connection and then goes quiet must not stall start-up or a request.
+const discoveryTimeout = 10 * time.Second
+
+// discovererFor returns the retry path for an integration whose metadata could
+// not be read yet: the service calls it the next time that integration is
+// needed, so a server that was down at boot recovers without a restart.
+func discovererFor(servers []mcp.Server, httpClient *http.Client) oauth.Discoverer {
+	byID := make(map[string]mcp.Server, len(servers))
+	for _, s := range servers {
+		byID[s.IntegrationID()] = s
+	}
+	return func(ctx context.Context, serverID string) (*oauth.Client, error) {
+		s, ok := byID[serverID]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", oauth.ErrUnknownServer, serverID)
+		}
+		dctx, cancel := context.WithTimeout(ctx, discoveryTimeout)
+		defer cancel()
+		md, err := oauth.Discover(dctx, httpClient, s.OAuthResource)
+		if err != nil {
+			return nil, err
+		}
+		slog.Info("mcp oauth: integration discovered on demand", "server", serverID, "issuer", md.Issuer)
+		return oauth.NewClient(httpClient, md, s.OAuthClientID, s.OAuthClientSecret), nil
+	}
+}
 
 // mcpHandlerDeps is what the MCP handlers need from Run's scope. It exists to
 // keep Run's own branching bounded, not as an abstraction.
@@ -100,22 +129,27 @@ func setupMCPOAuth(
 	scopes := make(map[string][]string, len(oauthServers))
 	for _, s := range oauthServers {
 		id := s.IntegrationID()
-		md, dErr := oauth.Discover(ctx, httpClient, s.OAuthResource)
+		scopes[id] = s.OAuthScopes
+
+		// Bounded: a server that accepts the connection and then never answers
+		// must not hold up the whole process's start-up.
+		dctx, cancel := context.WithTimeout(ctx, discoveryTimeout)
+		md, dErr := oauth.Discover(dctx, httpClient, s.OAuthResource)
+		cancel()
 		if dErr != nil {
-			slog.Warn("mcp oauth: discovery failed; the integration stays unavailable until it succeeds",
+			slog.Warn("mcp oauth: discovery failed at boot; it will be retried on first use",
 				"server", id, "err", dErr)
 			continue
 		}
 		clients[id] = oauth.NewClient(httpClient, md, s.OAuthClientID, s.OAuthClientSecret)
-		scopes[id] = s.OAuthScopes
 		slog.Info("mcp oauth: integration ready", "server", id, "issuer", md.Issuer)
-	}
-	if len(clients) == 0 {
-		slog.Warn("mcp oauth: no integration could be discovered at boot")
 	}
 
 	svc := oauth.NewService(store.NewMCPOAuthRepo(pool, cipher), clients,
 		cfg.PublicURL+callbackPath, scopes, nil)
+	// Discovery is retried on demand, so a server that was down at boot becomes
+	// usable without a restart.
+	svc.SetDiscoverer(discovererFor(oauthServers, httpClient))
 	registry.SetPrincipalSource(userPrincipals{users: users})
 	registry.SetTokenSource(svc)
 	return svc, nil

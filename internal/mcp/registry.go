@@ -201,7 +201,7 @@ func (r *Registry) toolsFor(ctx context.Context, username string, servers []Serv
 			tools, err := client.ListTools(ctx)
 			if err != nil {
 				slog.Warn("mcp: skipping server (list tools failed)", "server", s.Name, "scope", s.Scope, "error", err)
-				r.evictClient(s, auth.principal)
+				r.evictClient(s, auth)
 				return
 			}
 
@@ -275,7 +275,7 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 
 	out, err := client.CallTool(ctx, realTool, argsJSON)
 	if err != nil {
-		r.evictClient(s, auth.principal)
+		r.evictClient(s, auth)
 		return "", err
 	}
 	return out, nil
@@ -310,7 +310,7 @@ func (r *Registry) Probe(ctx context.Context, s Server) ([]ToolInfo, error) {
 	defer release()
 	tools, err := client.ListTools(ctx)
 	if err != nil {
-		r.evictClient(s, "")
+		r.evictClient(s, principalAuth{})
 		return nil, fmt.Errorf("mcp: probe list tools %s/%s: %w", s.Name, s.Scope, err)
 	}
 	allowed := make([]ToolInfo, 0, len(tools))
@@ -440,7 +440,7 @@ func (r *Registry) clientFor(ctx context.Context, s Server, auth principalAuth) 
 		return c, func() { _ = c.Close() }, nil
 	}
 
-	key := clientCacheKey(s, auth.principal)
+	key := clientCacheKey(s, auth)
 	s.bearer = auth.bearer
 
 	if c, release, ok := r.leaseCached(key); ok {
@@ -556,11 +556,11 @@ func (r *Registry) release(lc *leasedClient) {
 // fresh client on every call. If the evicted client is still leased by
 // another in-flight call, closing it is deferred to that caller's release —
 // otherwise we would close a transport out from under it.
-func (r *Registry) evictClient(s Server, principal string) {
+func (r *Registry) evictClient(s Server, auth principalAuth) {
 	if !r.isEnvServer(s) {
 		return
 	}
-	key := clientCacheKey(s, principal)
+	key := clientCacheKey(s, auth)
 	r.mu.Lock()
 	lc, ok := r.clients[key]
 	var shouldClose bool
