@@ -369,6 +369,7 @@ func Run() error {
 		// (request_credentials tool + substitution/redaction) and, in a later
 		// phase, the credentials submit endpoint. Do not construct a second one.
 		broker := secret.NewBroker()
+		confirms := newConfirmBroker(registry)
 		scheduledSvc, scheduledTasks := newScheduledService(
 			cfg.ScheduledEnabled, pool, cfg, convs, msgs, prov, unattendedTools,
 		)
@@ -428,6 +429,7 @@ func Run() error {
 			deps.Chat = newChatHandler(cfg, chatSvc, convs, msgs, nil, nil)
 		}
 		deps.Credentials = handlers.NewCredentials(broker)
+		deps.Confirmations = handlers.NewConfirmations(confirms)
 		slog.Info("chat enabled", "model", cfg.LLMModel, "base_url", cfg.LLMBaseURL)
 	} else {
 		slog.Info("chat disabled (KADENCE_LLM_API_KEY not set)")

@@ -396,7 +396,10 @@ func (s *Service) runToolCall(
 	var out string
 	var cErr error
 	if mcpSnap != nil {
-		out, cErr = mcpSnap.CallWithTransform(ctx, tc.Name, tc.Arguments, transform)
+		// A tool may ask this user to confirm mid-call. The sink rides the
+		// call's own context so the question can only ever surface in the turn
+		// that raised it.
+		out, cErr = mcpSnap.CallWithTransform(WithConfirmSink(ctx, sink), tc.Name, tc.Arguments, transform)
 	} else {
 		cErr = fmt.Errorf("mcp: no MCP servers available for tool %q", tc.Name)
 	}

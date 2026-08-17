@@ -11,7 +11,9 @@ import (
 
 	"github.com/tamcore/kadence/internal/api"
 	"github.com/tamcore/kadence/internal/api/handlers"
+	"github.com/tamcore/kadence/internal/chat"
 	"github.com/tamcore/kadence/internal/config"
+	"github.com/tamcore/kadence/internal/confirm"
 	"github.com/tamcore/kadence/internal/crypto"
 	"github.com/tamcore/kadence/internal/mcp"
 	"github.com/tamcore/kadence/internal/mcp/oauth"
@@ -153,4 +155,18 @@ func setupMCPOAuth(
 	registry.SetPrincipalSource(userPrincipals{users: users})
 	registry.SetTokenSource(svc)
 	return svc, nil
+}
+
+// newConfirmBroker returns the one confirmation broker for the process, shared
+// by the chat bridge that asks and the endpoint that answers.
+//
+// The bridge reads the turn's event sink off the call context, so a scheduled
+// run — which has no sink — refuses instead of waiting for a person who is not
+// there.
+func newConfirmBroker(registry *mcp.Registry) *confirm.Broker {
+	b := confirm.NewBroker()
+	if registry != nil {
+		registry.SetConfirmSource(chat.NewConfirmBridge(b))
+	}
+	return b
 }

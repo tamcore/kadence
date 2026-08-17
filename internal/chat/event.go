@@ -41,6 +41,7 @@ const (
 	EventTool              = "tool"
 	EventCredentials       = "credentials_request"
 	EventScheduledArtifact = "scheduled_artifact"
+	EventConfirm           = "confirm_request"
 )
 
 const (

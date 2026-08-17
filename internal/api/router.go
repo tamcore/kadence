@@ -35,21 +35,22 @@ const contentTypeJSON = "application/json"
 
 // Deps carries the dependencies the router needs.
 type Deps struct {
-	Users       *store.UserRepository
-	Sessions    *store.SessionRepository
-	Config      config.Config
-	Chat        *handlers.Chat
-	Documents   *handlers.Documents
-	Context     *handlers.Context
-	Credentials *handlers.Credentials
-	MCP         *handlers.MCP
-	MCPOAuth    *handlers.MCPOAuth
-	Profile     *handlers.Profile
-	SessionsAPI *handlers.Sessions
-	WebAuthn    *handlers.WebAuthn
-	Scheduled   *handlers.Scheduled
-	MCPAudit    *handlers.MCPAudit
-	Push        *handlers.Push
+	Users         *store.UserRepository
+	Sessions      *store.SessionRepository
+	Config        config.Config
+	Chat          *handlers.Chat
+	Documents     *handlers.Documents
+	Context       *handlers.Context
+	Credentials   *handlers.Credentials
+	Confirmations *handlers.Confirmations
+	MCP           *handlers.MCP
+	MCPOAuth      *handlers.MCPOAuth
+	Profile       *handlers.Profile
+	SessionsAPI   *handlers.Sessions
+	WebAuthn      *handlers.WebAuthn
+	Scheduled     *handlers.Scheduled
+	MCPAudit      *handlers.MCPAudit
+	Push          *handlers.Push
 }
 
 // NewRouter returns the public HTTP handler. API routes live under /api; the
@@ -244,6 +245,12 @@ func mountAuth(r chi.Router, deps Deps) error {
 
 		if deps.Credentials != nil {
 			r.With(authLimit).Post("/api/credentials/{requestId}", deps.Credentials.Submit)
+		}
+
+		if deps.Confirmations != nil {
+			// Rate limited like credential submission: the id is the only
+			// thing guarding a pending answer, so guessing must be expensive.
+			r.With(authLimit).Post("/api/confirmations/{id}", deps.Confirmations.Submit)
 		}
 
 		if deps.Profile != nil {
