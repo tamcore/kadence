@@ -33,6 +33,10 @@ const (
 	fieldAlias
 	fieldHint
 	fieldAuthMode
+	fieldOAuthClientID
+	fieldOAuthClientSecret
+	fieldOAuthScopes
+	fieldOAuthResource
 )
 
 // authModeOAuth is the AuthMode value selecting a per-user OAuth bearer token
@@ -50,6 +54,10 @@ var knownFieldSuffixes = []struct {
 	{"_AUTH_USER", fieldAuthUser},
 	{"_AUTH_PASS", fieldAuthPass},
 	{"_AUTH_MODE", fieldAuthMode},
+	{"_OAUTH_CLIENT_ID", fieldOAuthClientID},
+	{"_OAUTH_CLIENT_SECRET", fieldOAuthClientSecret},
+	{"_OAUTH_RESOURCE", fieldOAuthResource},
+	{"_OAUTH_SCOPES", fieldOAuthScopes},
 	{"_TRANSPORT", fieldTransport},
 	{"_URL", fieldURL},
 	{"_TOOLS", fieldTools},
@@ -67,8 +75,15 @@ type Server struct {
 	// AuthMode selects how Kadence authenticates to this server: empty or
 	// "basic" uses AuthUser/AuthPass, "oauth" uses a bearer token held per
 	// user. An oauth server is dialed once per principal (see PerPrincipal).
-	AuthMode  string
-	Transport string // "streamable-http" | "sse"
+	AuthMode string
+	// OAuth* configure the client identity used when AuthMode is oauth. The
+	// resource is the RFC 8707 indicator the authorization server mints tokens
+	// for; it must be exactly the deployment's own, so it is required.
+	OAuthClientID     string
+	OAuthClientSecret string
+	OAuthScopes       []string
+	OAuthResource     string
+	Transport         string // "streamable-http" | "sse"
 	// Tools is an app-side allowlist of glob patterns (path.Match syntax)
 	// matched against the unprefixed tool name. Empty/nil means no
 	// filtering — all tools the server exposes are allowed.
@@ -113,6 +128,10 @@ type serverBuilder struct {
 	authUser       string
 	authPass       string
 	authMode       string
+	oauthClientID  string
+	oauthSecret    string
+	oauthScopes    string
+	oauthResource  string
 	tools          string
 	alias          string
 	hint           string
@@ -151,18 +170,27 @@ func ServersFromEnv(environ []string) ([]Server, error) {
 			slog.Warn("mcp: skipping server with no URL", "server", groupKey)
 			continue
 		}
-		servers = append(servers, Server{
-			Name:      b.name,
-			Scope:     b.scope,
-			URL:       b.url,
-			AuthUser:  b.authUser,
-			AuthPass:  b.authPass,
-			AuthMode:  b.authMode,
-			Transport: b.transport,
-			Tools:     splitTools(b.tools),
-			Alias:     validatedAlias(b.name, b.scope, b.alias),
-			Hint:      b.hint,
-		})
+		server := Server{
+			Name:              b.name,
+			Scope:             b.scope,
+			URL:               b.url,
+			AuthUser:          b.authUser,
+			AuthPass:          b.authPass,
+			AuthMode:          b.authMode,
+			OAuthClientID:     strings.TrimSpace(b.oauthClientID),
+			OAuthClientSecret: b.oauthSecret,
+			OAuthScopes:       splitScopes(b.oauthScopes),
+			OAuthResource:     strings.TrimSpace(b.oauthResource),
+			Transport:         b.transport,
+			Tools:             splitTools(b.tools),
+			Alias:             validatedAlias(b.name, b.scope, b.alias),
+			Hint:              b.hint,
+		}
+		if err := server.validateOAuth(); err != nil {
+			slog.Warn("mcp: skipping misconfigured oauth server", "server", groupKey, "error", err)
+			continue
+		}
+		servers = append(servers, server)
 	}
 	return servers, nil
 }
@@ -201,6 +229,14 @@ func applyField(b *serverBuilder, matchedField field, value string) {
 		b.authPass = value
 	case fieldAuthMode:
 		b.authMode = strings.ToLower(strings.TrimSpace(value))
+	case fieldOAuthClientID:
+		b.oauthClientID = value
+	case fieldOAuthClientSecret:
+		b.oauthSecret = value
+	case fieldOAuthScopes:
+		b.oauthScopes = value
+	case fieldOAuthResource:
+		b.oauthResource = value
 	case fieldTools:
 		b.tools = value
 	case fieldAlias:
@@ -238,6 +274,22 @@ func splitTools(raw string) []string {
 		if t := strings.TrimSpace(p); t != "" {
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+// splitScopes parses a comma-separated scope list, dropping duplicates: the
+// authorization server rejects an authorization request whose scope set is not
+// a subset of the client's registration, and a repeat adds nothing.
+func splitScopes(raw string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, scope := range splitTools(raw) {
+		if seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		out = append(out, scope)
 	}
 	return out
 }

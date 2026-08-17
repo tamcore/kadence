@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // errNoPrincipalSource is returned when a server needs a per-user credential
@@ -60,6 +61,22 @@ func (r *Registry) principalFor(ctx context.Context, s Server, username string) 
 		return "", fmt.Errorf("mcp: resolve principal for %s/%s: %w", s.Name, s.Scope, err)
 	}
 	return strconv.FormatInt(id, 10), nil
+}
+
+// validateOAuth reports whether an oauth server carries the client identity it
+// needs. The resource is required because the authorization server refuses an
+// authorization request whose resource indicator is not exactly its own.
+func (s Server) validateOAuth() error {
+	if !s.PerPrincipal() {
+		return nil
+	}
+	if strings.TrimSpace(s.OAuthClientID) == "" {
+		return fmt.Errorf("mcp: server %s/%s: oauth needs a client id", s.Name, s.Scope)
+	}
+	if strings.TrimSpace(s.OAuthResource) == "" {
+		return fmt.Errorf("mcp: server %s/%s: oauth needs a resource", s.Name, s.Scope)
+	}
+	return nil
 }
 
 // clientCacheKey is a client's cache identity. A per-principal server keys on

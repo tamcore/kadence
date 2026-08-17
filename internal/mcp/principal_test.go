@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+const (
+	testOAuthClientID  = "kadence"
+	testOAuthResource  = "https://garmin.example.invalid/mcp"
+	envGarminURL       = "MCP_GARMIN_GLOBAL_URL=" + testOAuthResource
+	envGarminTransport = "MCP_GARMIN_GLOBAL_TRANSPORT=streamable-http"
+	envGarminClientID  = "MCP_GARMIN_GLOBAL_OAUTH_CLIENT_ID=" + testOAuthClientID
+	envGarminResource  = "MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=" + testOAuthResource
+)
+
 // stubPrincipals resolves usernames to fixed ids.
 type stubPrincipals map[string]int64
 
@@ -21,9 +30,11 @@ func (s stubPrincipals) UserIDFor(_ context.Context, username string) (int64, er
 
 func TestServersFromEnvParsesAuthMode(t *testing.T) {
 	env := []string{
-		"MCP_GARMIN_GLOBAL_URL=https://garmin.example.invalid/mcp",
-		"MCP_GARMIN_GLOBAL_TRANSPORT=streamable-http",
+		envGarminURL,
+		envGarminTransport,
 		"MCP_GARMIN_GLOBAL_AUTH_MODE=OAuth",
+		envGarminClientID,
+		envGarminResource,
 	}
 	got, err := ServersFromEnv(env)
 	if err != nil {
@@ -37,6 +48,56 @@ func TestServersFromEnvParsesAuthMode(t *testing.T) {
 	}
 	if !got[0].PerPrincipal() {
 		t.Fatal("PerPrincipal = false for an oauth server, want true")
+	}
+}
+
+func TestServersFromEnvParsesOAuthClient(t *testing.T) {
+	env := []string{
+		envGarminURL,
+		envGarminTransport,
+		"MCP_GARMIN_GLOBAL_AUTH_MODE=oauth",
+		envGarminClientID,
+		"MCP_GARMIN_GLOBAL_OAUTH_CLIENT_SECRET=s3cret",
+		"MCP_GARMIN_GLOBAL_OAUTH_SCOPES=garmin:read, garmin:read ,",
+		envGarminResource,
+	}
+	got, err := ServersFromEnv(env)
+	if err != nil {
+		t.Fatalf("ServersFromEnv: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 server, got %d", len(got))
+	}
+	s := got[0]
+	if s.OAuthClientID != testOAuthClientID || s.OAuthClientSecret != "s3cret" {
+		t.Fatalf("client identity parsed wrong: id=%q secret set=%v", s.OAuthClientID, s.OAuthClientSecret != "")
+	}
+	if s.OAuthResource != testOAuthResource {
+		t.Fatalf("resource = %q", s.OAuthResource)
+	}
+	if len(s.OAuthScopes) != 1 || s.OAuthScopes[0] != "garmin:read" {
+		t.Fatalf("scopes = %v, want one deduplicated garmin:read", s.OAuthScopes)
+	}
+}
+
+func TestServersFromEnvDropsOAuthServerMissingClientOrResource(t *testing.T) {
+	base := []string{
+		envGarminURL,
+		envGarminTransport,
+		"MCP_GARMIN_GLOBAL_AUTH_MODE=oauth",
+	}
+	for name, extra := range map[string][]string{
+		"no client id": {envGarminResource},
+		"no resource":  {envGarminClientID},
+		"neither":      {},
+	} {
+		got, err := ServersFromEnv(append(append([]string{}, base...), extra...))
+		if err != nil {
+			t.Fatalf("%s: ServersFromEnv: %v", name, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("%s: server survived validation: %+v", name, got)
+		}
 	}
 }
 
