@@ -116,8 +116,12 @@ func compatRequest(model string, tools []provider.ToolDefinition, user string) p
 		Temperature: compatTemperature(),
 		MaxTokens:   1024,
 		Tools:       tools,
+		// Chat assembles its prompt from several system messages, so the
+		// harness does too: an endpoint that accepts one and rejects two must
+		// fail here rather than in production.
 		Messages: []provider.Message{
-			{Role: "system", Content: "You are a running coach. Use tools only when the question depends on the athlete's own data."},
+			{Role: "system", Content: "You are a running coach."},
+			{Role: "system", Content: "Use tools only when the question depends on the athlete's own data."},
 			{Role: "user", Content: user},
 		},
 	}

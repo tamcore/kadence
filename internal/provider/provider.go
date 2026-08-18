@@ -49,6 +49,14 @@ type StreamResult struct {
 	FinishReason string
 }
 
+// Chat roles, as the OpenAI schema names them.
+const (
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+	RoleTool      = "tool"
+)
+
 // Message is one chat message in a provider request.
 type Message struct {
 	Role       string // "system" | "user" | "assistant" | "tool"

@@ -164,26 +164,53 @@ func isVisionUnsupportedError(err error) bool {
 // buildMessages converts provider messages into openai-go message params,
 // including tool-call requests (assistant) and tool results (role="tool").
 func buildMessages(reqMessages []Message) []openai.ChatCompletionMessageParamUnion {
+	reqMessages = mergeSystemMessages(reqMessages)
+
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(reqMessages))
 	for _, m := range reqMessages {
 		switch m.Role {
-		case "system":
+		case RoleSystem:
 			msgs = append(msgs, openai.SystemMessage(m.Content))
-		case "tool":
+		case RoleTool:
 			msgs = append(msgs, openai.ToolMessage(m.Content, m.ToolCallID))
-		case "assistant":
+		case RoleAssistant:
 			if len(m.ToolCalls) == 0 {
 				msgs = append(msgs, openai.AssistantMessage(m.Content))
 				continue
 			}
 			msgs = append(msgs, buildAssistantToolCallMessage(m))
-		case "user":
+		case RoleUser:
 			msgs = append(msgs, buildUserMessage(m))
 		default:
 			msgs = append(msgs, openai.UserMessage(m.Content))
 		}
 	}
 	return msgs
+}
+
+// mergeSystemMessages joins runs of consecutive system messages into one.
+//
+// Callers assemble a prompt from several system messages, which is legal in
+// the OpenAI schema and accepted by most endpoints. Some are stricter: a model
+// whose chat template allows exactly one system turn rejects the request
+// outright, and the gateway in front of it reports only an opaque 400 that
+// names nothing. Merging costs nothing where several are allowed and is the
+// difference between working and not where they are not.
+//
+// Only consecutive ones are merged: a system message that follows a user or
+// assistant turn belongs where it is, and moving it would reorder the
+// conversation.
+func mergeSystemMessages(in []Message) []Message {
+	out := make([]Message, 0, len(in))
+	for _, m := range in {
+		last := len(out) - 1
+		if m.Role == RoleSystem && last >= 0 && out[last].Role == RoleSystem {
+			out[last].Content += "\n\n" + m.Content
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func buildUserMessage(m Message) openai.ChatCompletionMessageParamUnion {

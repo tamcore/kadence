@@ -17,6 +17,14 @@ spec:
       maxSurge: 1
   template:
     metadata:
+      annotations:
+        # Config and secrets reach the container as environment variables,
+        # which are read once at start. Without this the pod keeps serving the
+        # old values after a chart upgrade changes them — the rollout reports
+        # success and nothing restarts, so a changed model, endpoint or key
+        # silently does not take effect.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "kadence.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: app

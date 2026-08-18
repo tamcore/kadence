@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/openai/openai-go/v3"
 )
 
 const (
@@ -428,4 +430,63 @@ func TestOpenAICompatStreamChatWithTools_ToolCall(t *testing.T) {
 	if tc.Arguments != `{"limit":5}` {
 		t.Fatalf("tool call arguments = %q, want %q", tc.Arguments, `{"limit":5}`)
 	}
+}
+
+func TestConsecutiveSystemMessagesAreMerged(t *testing.T) {
+	// Some endpoints accept exactly one system message and reject a request
+	// carrying two with an opaque 400. Chat assembles its prompt from several
+	// system messages, so merging them here keeps that working everywhere
+	// without every caller having to know.
+	got := buildMessages([]Message{
+		{Role: RoleSystem, Content: "You are a coach."},
+		{Role: RoleSystem, Content: "Be brief."},
+		{Role: RoleSystem, Content: "Today is Tuesday."},
+		{Role: RoleUser, Content: "hi"},
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want the three system messages merged into one plus the user", len(got))
+	}
+	text := systemTextOf(t, got[0])
+	for _, want := range []string{"You are a coach.", "Be brief.", "Today is Tuesday."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("merged system message lost %q: %q", want, text)
+		}
+	}
+}
+
+func TestSystemMessagesAfterAnotherRoleAreNotMergedBackwards(t *testing.T) {
+	// Merging across a turn boundary would reorder the conversation.
+	got := buildMessages([]Message{
+		{Role: RoleSystem, Content: "first"},
+		{Role: RoleUser, Content: "hi"},
+		{Role: RoleSystem, Content: "second"},
+		{Role: RoleUser, Content: "again"},
+	})
+
+	if len(got) != 4 {
+		t.Fatalf("got %d messages, want 4: merging must not cross a non-system message", len(got))
+	}
+}
+
+func TestASingleSystemMessageIsUnchanged(t *testing.T) {
+	got := buildMessages([]Message{
+		{Role: RoleSystem, Content: "only one"},
+		{Role: RoleUser, Content: "hi"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2", len(got))
+	}
+	if text := systemTextOf(t, got[0]); text != "only one" {
+		t.Fatalf("system content = %q, want it untouched", text)
+	}
+}
+
+// systemTextOf extracts the text of a system message param.
+func systemTextOf(t *testing.T, m openai.ChatCompletionMessageParamUnion) string {
+	t.Helper()
+	if m.OfSystem == nil {
+		t.Fatalf("message is not a system message: %#v", m)
+	}
+	return m.OfSystem.Content.OfString.Value
 }
