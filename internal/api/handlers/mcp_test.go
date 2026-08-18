@@ -29,6 +29,17 @@ type fakeMcpHealth struct {
 	tools  map[string][]mcp.ToolInfo
 }
 
+func (f *fakeMcpHealth) StatusForPrincipal(_ context.Context, username string) []mcp.ServerHealth {
+	return f.StatusFor(username)
+}
+
+func (f *fakeMcpHealth) ToolsForPrincipal(
+	_ context.Context, username, serverName string,
+) ([]mcp.ToolInfo, bool, error) {
+	tools, ok := f.ToolsFor(username, serverName)
+	return tools, ok, nil
+}
+
 func (f *fakeMcpHealth) StatusFor(_ string) []mcp.ServerHealth {
 	return f.status
 }

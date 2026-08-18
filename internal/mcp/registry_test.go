@@ -19,6 +19,7 @@ import (
 
 const (
 	testGarminName       = "GARMIN"
+	testGetActivities    = "get_activities"
 	testUsername         = "alice"
 	testGarminAlias      = "garmin"
 	testUserPhilippScope = userScopePrefix + "philipp"
@@ -47,7 +48,7 @@ func newFakeGarminServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
-	tool := mcpgo.NewTool("get_activities",
+	tool := mcpgo.NewTool(testGetActivities,
 		mcpgo.WithDescription("Get activities with pagination support."),
 		mcpgo.WithNumber("start", mcpgo.Description("start offset"), mcpgo.DefaultNumber(0)),
 		mcpgo.WithNumber("limit", mcpgo.Description("page size"), mcpgo.DefaultNumber(20)),
@@ -69,7 +70,7 @@ func newFakeGarminServerWithWorkouts(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
-	tool := mcpgo.NewTool("get_activities",
+	tool := mcpgo.NewTool(testGetActivities,
 		mcpgo.WithDescription("Get activities with pagination support."),
 		mcpgo.WithNumber("start", mcpgo.Description("start offset"), mcpgo.DefaultNumber(0)),
 		mcpgo.WithNumber("limit", mcpgo.Description("page size"), mcpgo.DefaultNumber(20)),
@@ -262,7 +263,7 @@ func TestRegistry_ProbeFiltersByTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "get_activities" {
+	if len(tools) != 1 || tools[0].Name != testGetActivities {
 		t.Fatalf("Probe() = %+v, want only get_activities", tools)
 	}
 }
@@ -315,7 +316,7 @@ func newFakeGarminServerToggleable(t *testing.T) (*httptest.Server, *atomic.Bool
 	t.Helper()
 
 	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
-	tool := mcpgo.NewTool("get_activities", mcpgo.WithDescription("Get activities."))
+	tool := mcpgo.NewTool(testGetActivities, mcpgo.WithDescription("Get activities."))
 	srv.AddTool(tool, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		return mcpgo.NewToolResultText(anonymizedActivitiesFixture), nil
 	})
@@ -553,7 +554,7 @@ func newHangingThenWorkingServer(t *testing.T) (ts *httptest.Server, started, re
 	t.Helper()
 
 	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
-	tool := mcpgo.NewTool("get_activities", mcpgo.WithDescription("Get activities."))
+	tool := mcpgo.NewTool(testGetActivities, mcpgo.WithDescription("Get activities."))
 	srv.AddTool(tool, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		return mcpgo.NewToolResultText(anonymizedActivitiesFixture), nil
 	})
@@ -589,7 +590,7 @@ func newFakeGarminServerCountingInitializes(t *testing.T) (*httptest.Server, *at
 	t.Helper()
 
 	srv := mcpserver.NewMCPServer("fake-garmin", "0.0.1")
-	tool := mcpgo.NewTool("get_activities", mcpgo.WithDescription("Get activities."))
+	tool := mcpgo.NewTool(testGetActivities, mcpgo.WithDescription("Get activities."))
 	srv.AddTool(tool, func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		return mcpgo.NewToolResultText(anonymizedActivitiesFixture), nil
 	})

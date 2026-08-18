@@ -20,8 +20,11 @@ import (
 // mcpHealth reports cached health and tool listings for configured MCP
 // servers. Satisfied by *mcp.HealthPoller.
 type mcpHealth interface {
-	StatusFor(username string) []mcp.ServerHealth
-	ToolsFor(username, serverName string) ([]mcp.ToolInfo, bool)
+	// The principal variants resolve a per-principal server on one user's
+	// behalf. The cached, deployment-wide probe cannot see such a server at
+	// all, so serving it would report zero tools to a linked user.
+	StatusForPrincipal(ctx context.Context, username string) []mcp.ServerHealth
+	ToolsForPrincipal(ctx context.Context, username, serverName string) ([]mcp.ToolInfo, bool, error)
 }
 
 // mcpUserStore manages per-owner user-defined MCP server definitions.
@@ -114,7 +117,7 @@ func validateAliasAndHint(alias, hint string) error {
 func (h *MCP) List(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	admin := u.IsAdmin()
-	statuses := h.health.StatusFor(u.Username)
+	statuses := h.health.StatusForPrincipal(r.Context(), u.Username)
 
 	ownedIDs := map[string]int64{}
 	if h.store != nil {
@@ -163,9 +166,17 @@ func (h *MCP) List(w http.ResponseWriter, r *http.Request) {
 func (h *MCP) Tools(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	name := chi.URLParam(r, "name")
-	tools, ok := h.health.ToolsFor(u.Username, name)
+	tools, ok, err := h.health.ToolsForPrincipal(r.Context(), u.Username, name)
 	if !ok {
 		RespondError(w, http.StatusNotFound, "mcp server not found")
+		return
+	}
+	if err != nil {
+		// An empty list and an unreachable server look identical to the page
+		// otherwise, and "no tools" is the more alarming of the two to show
+		// someone whose integration is merely momentarily unavailable.
+		slog.Warn("mcp: per-user tool listing failed", "server", name, "err", err)
+		RespondError(w, http.StatusBadGateway, "could not reach this server right now")
 		return
 	}
 	dtos := make([]mcpToolDTO, 0, len(tools))

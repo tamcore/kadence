@@ -336,6 +336,45 @@ func (r *Registry) Probe(ctx context.Context, s Server) ([]ToolInfo, error) {
 	return allowed, nil
 }
 
+// ProbeFor lists the tools username can actually call on s, returning only
+// those allowed by the server's TOOLS filter.
+//
+// It exists because Probe cannot see a per-principal server at all: that
+// server's credential belongs to one user, so there is nothing deployment-wide
+// to probe with. Reporting its tools therefore has to be done on someone's
+// behalf, and the answer differs per user — an unlinked user genuinely has
+// none. A server on a shared credential has no principal to resolve, so it
+// falls through to the ordinary shared probe.
+func (r *Registry) ProbeFor(ctx context.Context, s Server, username string) ([]ToolInfo, error) {
+	if !s.PerPrincipal() {
+		return r.Probe(ctx, s)
+	}
+
+	auth, err := r.authFor(ctx, s, username)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: probe %s/%s: %w", s.Name, s.Scope, err)
+	}
+
+	client, release, err := r.clientFor(ctx, s, auth)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: probe connect %s/%s: %w", s.Name, s.Scope, err)
+	}
+	defer release()
+
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		r.evictClient(s, auth)
+		return nil, fmt.Errorf("mcp: probe list tools %s/%s: %w", s.Name, s.Scope, err)
+	}
+	allowed := make([]ToolInfo, 0, len(tools))
+	for _, t := range tools {
+		if s.allowsTool(t.Name) {
+			allowed = append(allowed, t)
+		}
+	}
+	return allowed, nil
+}
+
 // allowsTool reports whether toolName (unprefixed) passes this server's TOOLS
 // filter. No patterns configured → all tools allowed. A malformed pattern is
 // skipped (never panics).

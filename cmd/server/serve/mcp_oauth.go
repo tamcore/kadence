@@ -84,7 +84,14 @@ func attachMCPHandlers(ctx context.Context, deps *api.Deps, d mcpHandlerDeps) er
 		return err
 	}
 	if oauthSvc != nil {
-		deps.MCPOAuth = handlers.NewMCPOAuth(oauthSvc, cfg.IsProd())
+		h := handlers.NewMCPOAuth(oauthSvc, cfg.IsProd())
+		if d.poller != nil {
+			// A link or unlink changes what this user can call, and the status
+			// page must show that on the next read rather than after the
+			// per-user cache expires.
+			h.OnLinkChanged(d.poller.InvalidatePrincipal)
+		}
+		deps.MCPOAuth = h
 	}
 	return nil
 }

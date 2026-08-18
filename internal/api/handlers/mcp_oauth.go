@@ -45,12 +45,29 @@ func MCPOAuthCookieName(secure bool) string {
 type MCPOAuth struct {
 	svc    linkService
 	secure bool
+	// invalidate drops this user's cached view of a server after their link
+	// changes, so the integrations page reflects it on the next read rather
+	// than after a cache TTL. Optional; nil disables the notification.
+	invalidate func(username, serverID string)
 }
 
 // NewMCPOAuth constructs the handler. secure selects the cookie shape and must
 // be true wherever the app is served over https.
 func NewMCPOAuth(svc linkService, secure bool) *MCPOAuth {
 	return &MCPOAuth{svc: svc, secure: secure}
+}
+
+// OnLinkChanged registers a callback invoked after a link is established or
+// removed.
+func (h *MCPOAuth) OnLinkChanged(fn func(username, serverID string)) {
+	h.invalidate = fn
+}
+
+// linkChanged notifies the registered callback, if any.
+func (h *MCPOAuth) linkChanged(username, serverID string) {
+	if h.invalidate != nil {
+		h.invalidate(username, serverID)
+	}
 }
 
 // Start handles POST /api/mcp/oauth/{server}/start. It returns the URL the
@@ -123,6 +140,7 @@ func (h *MCPOAuth) Callback(w http.ResponseWriter, r *http.Request) {
 		h.redirect(w, r, server, false)
 		return
 	}
+	h.linkChanged(u.Username, server)
 	h.redirect(w, r, server, true)
 }
 
@@ -160,6 +178,7 @@ func (h *MCPOAuth) Unlink(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "could not disconnect the integration")
 		return
 	}
+	h.linkChanged(u.Username, server)
 	w.WriteHeader(http.StatusNoContent)
 }
 

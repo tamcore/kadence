@@ -546,3 +546,74 @@ func TestAnUnknownScopeIsStillRefused(t *testing.T) {
 		t.Fatalf("an unknown scope survived validation: %+v", got)
 	}
 }
+
+func TestProbeForListsThatUsersOwnTools(t *testing.T) {
+	// A per-principal server has no deployment-wide credential, so the health
+	// poller can never see its tools. Asked on behalf of a linked user, it
+	// must report exactly what that user can call.
+	ts, _ := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
+	t.Cleanup(func() { _ = reg.Close() })
+
+	tools, err := reg.ProbeFor(context.Background(), s, testUsername)
+	if err != nil {
+		t.Fatalf("ProbeFor: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("a linked user's probe returned no tools")
+	}
+}
+
+func TestProbeForReportsAnUnlinkedUser(t *testing.T) {
+	ts, _ := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{}) // nobody linked
+	t.Cleanup(func() { _ = reg.Close() })
+
+	if _, err := reg.ProbeFor(context.Background(), s, testUsername); err == nil {
+		t.Fatal("an unlinked user's probe succeeded")
+	}
+}
+
+func TestProbeForHonoursTheToolAllowlist(t *testing.T) {
+	ts, _ := oauthTestServer(t)
+	s := oauthServerAt(ts.URL)
+	s.Tools = []string{"nothing_matches_this"}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	reg.SetPrincipalSource(stubPrincipals{testUsername: 42})
+	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
+	t.Cleanup(func() { _ = reg.Close() })
+
+	tools, err := reg.ProbeFor(context.Background(), s, testUsername)
+	if err != nil {
+		t.Fatalf("ProbeFor: %v", err)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("the allowlist was ignored: %d tools", len(tools))
+	}
+}
+
+func TestProbeForOnASharedServerFallsBackToTheSharedProbe(t *testing.T) {
+	// A basic-auth server has no principal to resolve; asking on a user's
+	// behalf must still work rather than demanding a link that cannot exist.
+	ts, _ := oauthTestServer(t)
+	s := Server{
+		Name: testGarminName, Scope: scopeGlobal, URL: ts.URL,
+		Transport: transportStreamableHTTP, FromEnv: true,
+	}
+	reg := NewRegistry([]Server{s}, nil, nil)
+	t.Cleanup(func() { _ = reg.Close() })
+
+	tools, err := reg.ProbeFor(context.Background(), s, testUsername)
+	if err != nil {
+		t.Fatalf("ProbeFor: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("a shared server reported no tools")
+	}
+}

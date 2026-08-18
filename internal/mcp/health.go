@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 )
 
 // DefaultHealthInterval is how often the poller probes each configured server.
@@ -41,6 +42,7 @@ type ServerHealth struct {
 type healthSource interface {
 	Servers() []Server
 	Probe(ctx context.Context, s Server) ([]ToolInfo, error)
+	ProbeFor(ctx context.Context, s Server, username string) ([]ToolInfo, error)
 }
 
 // HealthPoller periodically probes every configured MCP server and caches the
@@ -51,6 +53,10 @@ type HealthPoller struct {
 	probeTimeout time.Duration
 	mu           sync.RWMutex
 	cache        map[string]ServerHealth // keyed Name+"/"+Scope
+	// principals holds per-user probes of per-principal servers, which the
+	// shared cache above cannot represent. Keyed Name+"/"+Scope+NUL+username.
+	principals      map[string]ServerHealth
+	principalFlight singleflight.Group
 }
 
 // NewHealthPoller builds a poller over src.
@@ -60,7 +66,7 @@ func NewHealthPoller(src healthSource, interval time.Duration) *HealthPoller {
 	}
 	return &HealthPoller{
 		src: src, interval: interval, probeTimeout: defaultProbeTimeout,
-		cache: make(map[string]ServerHealth),
+		cache: make(map[string]ServerHealth), principals: make(map[string]ServerHealth),
 	}
 }
 
@@ -177,4 +183,143 @@ func (p *HealthPoller) ToolsFor(username, serverName string) ([]ToolInfo, bool) 
 		return nil, true // applicable but not yet probed
 	}
 	return nil, false
+}
+
+// principalProbeTimeout bounds a per-user probe made while serving a request.
+// It is shorter than the background probe timeout because a person is waiting
+// on the page, and a slow server should degrade to "unavailable" rather than
+// hold the whole response.
+const principalProbeTimeout = 5 * time.Second
+
+// principalCacheTTL is how long one user's probe result is reused.
+//
+// It exists because the app shell polls the status endpoint every ten seconds
+// in every open tab. Probing live on each of those would dial the remote
+// server permanently, for every signed-in user, to answer a question whose
+// answer almost never changes. The one moment it does change — linking or
+// unlinking — invalidates the entry explicitly, so the page still reflects a
+// new link immediately rather than up to a TTL later.
+const principalCacheTTL = 30 * time.Second
+
+// StatusForPrincipal is StatusFor with per-principal servers resolved on
+// username's behalf.
+//
+// A per-principal server is absent from the background cache by construction:
+// its credential belongs to one user, so the poller has nothing to probe with
+// and records it as unhealthy with zero tools for everyone. Serving that would
+// tell a freshly linked user their integration is empty.
+func (p *HealthPoller) StatusForPrincipal(ctx context.Context, username string) []ServerHealth {
+	out := p.StatusFor(username)
+	servers := p.src.Servers()
+	for i, h := range out {
+		s, ok := findServer(servers, h.Name, h.Scope)
+		if !ok || !s.PerPrincipal() {
+			continue
+		}
+		out[i], _ = p.probeAsPrincipal(ctx, s, username)
+	}
+	return out
+}
+
+// ToolsForPrincipal is ToolsFor with a per-principal server resolved on
+// username's behalf. The error is non-nil only when the probe itself failed,
+// which the caller must distinguish from a server that legitimately exposes
+// nothing.
+func (p *HealthPoller) ToolsForPrincipal(
+	ctx context.Context, username, serverName string,
+) ([]ToolInfo, bool, error) {
+	for _, s := range p.src.Servers() {
+		if !strings.EqualFold(s.Name, serverName) || !s.AppliesTo(username) {
+			continue
+		}
+		if !s.PerPrincipal() {
+			tools, ok := p.ToolsFor(username, serverName)
+			return tools, ok, nil
+		}
+		h, err := p.probeAsPrincipal(ctx, s, username)
+		return h.Tools, true, err
+	}
+	return nil, false, nil
+}
+
+// InvalidatePrincipal drops one user's cached probe for serverID, so the next
+// read reflects a link or unlink that just happened instead of waiting out the
+// TTL. serverID is matched case-insensitively against the server name.
+func (p *HealthPoller) InvalidatePrincipal(username, serverID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.principals {
+		name, user, ok := splitPrincipalKey(key)
+		if ok && user == username && strings.EqualFold(name, serverID) {
+			delete(p.principals, key)
+		}
+	}
+}
+
+// probeAsPrincipal returns username's view of s, from cache when fresh.
+//
+// A failure is returned as an unhealthy status AND an error: the page renders
+// "not linked" from the status, while a caller that must tell an outage from
+// an empty server reads the error.
+func (p *HealthPoller) probeAsPrincipal(ctx context.Context, s Server, username string) (ServerHealth, error) {
+	key := principalKey(s, username)
+
+	p.mu.RLock()
+	cached, ok := p.principals[key]
+	p.mu.RUnlock()
+	if ok && time.Since(cached.CheckedAt) < principalCacheTTL {
+		return cached, nil
+	}
+
+	// Deduplicated: several tabs polling at once produce one dial, and all of
+	// them get its result.
+	v, err, _ := p.principalFlight.Do(key, func() (any, error) {
+		probeCtx, cancel := context.WithTimeout(ctx, principalProbeTimeout)
+		defer cancel()
+
+		h := ServerHealth{
+			Name: s.Name, Scope: s.Scope, Transport: s.Transport, URL: s.URL,
+			Alias: s.Alias, Hint: s.Hint, CheckedAt: time.Now(),
+		}
+		tools, probeErr := p.src.ProbeFor(probeCtx, s, username)
+		if probeErr != nil {
+			h.Err = probeErr.Error()
+		} else {
+			h.OK, h.Tools, h.ToolCount = true, tools, len(tools)
+		}
+
+		p.mu.Lock()
+		p.principals[key] = h
+		p.mu.Unlock()
+		return h, probeErr
+	})
+	h, _ := v.(ServerHealth)
+	return h, err
+}
+
+// principalKey and splitPrincipalKey bracket the cache key encoding. The
+// username goes last because a server name cannot contain the separator but a
+// username might.
+func principalKey(s Server, username string) string {
+	return s.Name + "/" + s.Scope + "\x00" + username
+}
+
+func splitPrincipalKey(key string) (nameScope, username string, ok bool) {
+	before, after, ok0 := strings.Cut(key, "\x00")
+	if !ok0 {
+		return "", "", false
+	}
+	name, _, _ := strings.Cut(before, "/")
+	return name, after, true
+}
+
+// findServer locates a server by name and scope in an already-taken snapshot,
+// so one request never re-enumerates every user's servers per entry.
+func findServer(servers []Server, name, scope string) (Server, bool) {
+	for _, s := range servers {
+		if s.Name == name && s.Scope == scope {
+			return s, true
+		}
+	}
+	return Server{}, false
 }
