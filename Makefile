@@ -40,6 +40,9 @@ golangci-lint: ## Run golangci-lint (skipped when not installed; CI uses the pin
 test: ## Run all Go tests with race detector and coverage
 	@go test -race -coverprofile=coverage.out ./...
 
+model-compat: ## Evaluate a model for Kadence compatibility (needs KADENCE_COMPAT_BASE_URL, _API_KEY, _MODEL)
+	@go test ./internal/provider/ -run TestModelCompatibility -v -count=1 -timeout 15m
+
 coverage: test ## Print coverage by func and total
 	@go tool cover -func=coverage.out
 
