@@ -465,6 +465,12 @@ garmin:
   enableWriteTools: false
   # Requires replicaCount: 1. See the confirmation note above.
   enableDestructiveTools: false
+  # Run `repair-permissions` as an init container before the server starts, so
+  # state a platform widened is repaired rather than refused on upgrade. Opt-in
+  # because it requires an image carrying the subcommand (garmin-mcp v0.0.10 or
+  # newer): an older image does not recognise the argument and the init
+  # container would fail, which with strategy Recreate takes the server down.
+  repairPermissions: false
   # The networks a reverse proxy actually terminates in. The forwarded address
   # keys the rate limiter in front of the unauthenticated OAuth endpoints, so a
   # range wider than your proxies lets anything inside it choose its own budget.

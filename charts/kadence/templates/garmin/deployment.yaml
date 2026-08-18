@@ -35,6 +35,37 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.garmin.podSecurityContext | nindent 8 }}
+      {{- if .Values.garmin.repairPermissions }}
+      # Kubernetes re-applies fsGroup across the volume on every mount under
+      # the default policy, which widens the server's key, token records and
+      # database to 0660. The server refuses those rather than loading bytes a
+      # group writer may have altered — correct, but it strands any deployment
+      # whose state predates that check, because the refusal only appears after
+      # the new image is already rolled out.
+      #
+      # This tightens what it owns and reports what it cannot, without ever
+      # reading the contents. It is a no-op on healthy state and idempotent, so
+      # it stays in the path rather than being a one-time migration someone has
+      # to remember. It is not a substitute for fsGroupChangePolicy: that stops
+      # a future walk widening state again, this repairs what a past one did.
+      initContainers:
+      - name: repair-permissions
+        image: {{ .Values.garmin.image }}
+        imagePullPolicy: {{ .Values.garmin.pullPolicy }}
+        args:
+        - repair-permissions
+        - {{ printf "--state-dir=%s/state" .Values.garmin.persistence.mountPath | quote }}
+        - {{ printf "--database-path=%s/state/garmin.db" .Values.garmin.persistence.mountPath | quote }}
+        volumeMounts:
+        - name: state
+          mountPath: {{ .Values.garmin.persistence.mountPath }}
+        securityContext:
+          {{- toYaml .Values.garmin.securityContext | nindent 10 }}
+        {{- with .Values.garmin.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
       containers:
       - name: garmin-mcp
         image: {{ .Values.garmin.image }}
