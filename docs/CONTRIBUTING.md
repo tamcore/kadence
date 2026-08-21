@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Go 1.26+**
+- **Go 1.27+**
 - **Node 20+** (for the SvelteKit frontend)
 - **Docker** — used by the store tests (testcontainers spin up a real Postgres)
 - A Postgres (pgvector) database for running the app locally

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -241,8 +242,7 @@ func selectHistoricalPayloadIDsEligible(
 	}
 	remaining := int64(availableTokens)
 	selected := make(map[int64]struct{}, maxHistoricalAttachmentPayloadTurns)
-	for i := len(history) - 1; i >= 0; i-- {
-		message := history[i]
+	for _, message := range slices.Backward(history) {
 		if message.Role != model.MsgRoleUser || !hasHistoricalPayload(message) {
 			continue
 		}

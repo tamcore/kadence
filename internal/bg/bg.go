@@ -55,8 +55,7 @@ func RunForever(ctx context.Context, log *slog.Logger, name string, fn func(cont
 		if err == nil {
 			return
 		}
-		var pe *PanicError
-		if errors.As(err, &pe) {
+		if pe, ok := errors.AsType[*PanicError](err); ok {
 			log.Error("background subsystem panicked, restarting",
 				"subsystem", name,
 				"panic", fmt.Sprint(pe.Value),

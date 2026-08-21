@@ -138,8 +138,7 @@ func (w *Worker) Run(ctx context.Context) {
 				// dropped just because ctx was cancelled concurrently.
 				// recoverStale is the fallback for hard kills, not the normal
 				// path for a recovered panic.
-				var pe *bg.PanicError
-				if errors.As(err, &pe) {
+				if pe, ok := errors.AsType[*bg.PanicError](err); ok {
 					w.log.Error("scheduled execution panicked",
 						"task_id", claim.Task.ID, "run_id", claim.Run.ID,
 						"panic", fmt.Sprint(pe.Value), "stack", string(pe.Stack))

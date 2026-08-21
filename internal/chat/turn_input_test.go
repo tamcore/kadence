@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/png"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1792,9 +1793,9 @@ func providerText(messages []provider.Message) string {
 
 func lastUserProviderMessage(t *testing.T, messages []provider.Message) provider.Message {
 	t.Helper()
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == model.MsgRoleUser {
-			return messages[i]
+	for _, message := range slices.Backward(messages) {
+		if message.Role == model.MsgRoleUser {
+			return message
 		}
 	}
 	t.Fatal("provider request has no user message")

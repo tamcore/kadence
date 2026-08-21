@@ -44,8 +44,7 @@ func TestMaxBodyBytes_OverLimitYieldsMaxBytesError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("123456"))
 	h.ServeHTTP(rec, req)
 
-	var maxBytesErr *http.MaxBytesError
-	if !errors.As(readErr, &maxBytesErr) {
+	if _, ok := errors.AsType[*http.MaxBytesError](readErr); !ok {
 		t.Fatalf("read error = %v, want *http.MaxBytesError", readErr)
 	}
 }

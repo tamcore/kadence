@@ -247,41 +247,42 @@ func Load() Config {
 		AdminUsername:  os.Getenv("KADENCE_ADMIN_USERNAME"),
 		AdminEmail:     os.Getenv("KADENCE_ADMIN_EMAIL"),
 		AdminPassword:  os.Getenv("KADENCE_ADMIN_PASSWORD"),
+
+		WebAuthnRPID: strings.TrimSpace(os.Getenv("KADENCE_WEBAUTHN_RP_ID")),
+
+		LLMBaseURL: envOr("KADENCE_LLM_BASE_URL", "https://api.openai.com/v1"),
+		LLMAPIKey:  os.Getenv("KADENCE_LLM_API_KEY"),
+		LLMModel:   envOr("KADENCE_LLM_MODEL", "gpt-4o-mini"),
+		// 8192, not 2048: a long answer (a wide table, a multi-week audit) truncates
+		// at the smaller cap and is reassembled through continuation round-trips,
+		// which read as a hung chat. The tool loop's output reserve stays bounded by
+		// contextBudget/toolLoopReserveDivisor, so a roomier cap cannot shed the
+		// conversation away.
+		LLMMaxTokens:           envIntOr("KADENCE_LLM_MAX_TOKENS", 8192),
+		LLMTemperature:         envFloatOr("KADENCE_LLM_TEMPERATURE", 0.3),
+		LLMTimeout:             envDurationOr("KADENCE_LLM_TIMEOUT", 300*time.Second),
+		TitleModel:             os.Getenv("KADENCE_TITLE_MODEL"),
+		TitleBaseURL:           os.Getenv("KADENCE_TITLE_BASE_URL"),
+		TitleAPIKey:            os.Getenv("KADENCE_TITLE_API_KEY"),
+		SystemPrompt:           os.Getenv("KADENCE_SYSTEM_PROMPT"),
+		LLMContextBudgetTokens: envIntOr("KADENCE_LLM_CONTEXT_BUDGET", 32000),
+
+		GuardrailEnabled:       envBoolOr("KADENCE_GUARDRAIL_ENABLED", false),
+		GuardrailModel:         os.Getenv("KADENCE_GUARDRAIL_MODEL"),
+		GuardrailBaseURL:       os.Getenv("KADENCE_GUARDRAIL_BASE_URL"),
+		GuardrailAPIKey:        os.Getenv("KADENCE_GUARDRAIL_API_KEY"),
+		GuardrailHistoryWindow: envIntOr("KADENCE_GUARDRAIL_HISTORY_WINDOW", 6),
+		DomainName:             envOr("KADENCE_DOMAIN_NAME", defaultDomainName),
+		AllowedTopics:          envOr("KADENCE_ALLOWED_TOPICS", defaultAllowedTopics),
+		RefusalMessage:         envOr("KADENCE_REFUSAL_MESSAGE", defaultRefusalMessage),
+		MCPIntentGuardEnabled:  envBoolOr("KADENCE_MCP_INTENT_GUARD_ENABLED", false),
+
+		ScheduledEnabled:         envBoolOr("KADENCE_SCHEDULED_ENABLED", false),
+		ScheduledWorkerModel:     os.Getenv("KADENCE_SCHEDULED_WORKER_MODEL"),
+		ScheduledWorkerBaseURL:   os.Getenv("KADENCE_SCHEDULED_WORKER_BASE_URL"),
+		ScheduledWorkerAPIKey:    os.Getenv("KADENCE_SCHEDULED_WORKER_API_KEY"),
+		ScheduledWorkerMaxTokens: envIntOr("KADENCE_SCHEDULED_WORKER_MAX_TOKENS", 2048),
 	}
-	cfg.WebAuthnRPID = strings.TrimSpace(os.Getenv("KADENCE_WEBAUTHN_RP_ID"))
-
-	cfg.LLMBaseURL = envOr("KADENCE_LLM_BASE_URL", "https://api.openai.com/v1")
-	cfg.LLMAPIKey = os.Getenv("KADENCE_LLM_API_KEY")
-	cfg.LLMModel = envOr("KADENCE_LLM_MODEL", "gpt-4o-mini")
-	// 8192, not 2048: a long answer (a wide table, a multi-week audit) truncates
-	// at the smaller cap and is reassembled through continuation round-trips,
-	// which read as a hung chat. The tool loop's output reserve stays bounded by
-	// contextBudget/toolLoopReserveDivisor, so a roomier cap cannot shed the
-	// conversation away.
-	cfg.LLMMaxTokens = envIntOr("KADENCE_LLM_MAX_TOKENS", 8192)
-	cfg.LLMTemperature = envFloatOr("KADENCE_LLM_TEMPERATURE", 0.3)
-	cfg.LLMTimeout = envDurationOr("KADENCE_LLM_TIMEOUT", 300*time.Second)
-	cfg.TitleModel = os.Getenv("KADENCE_TITLE_MODEL")
-	cfg.TitleBaseURL = os.Getenv("KADENCE_TITLE_BASE_URL")
-	cfg.TitleAPIKey = os.Getenv("KADENCE_TITLE_API_KEY")
-	cfg.SystemPrompt = os.Getenv("KADENCE_SYSTEM_PROMPT")
-	cfg.LLMContextBudgetTokens = envIntOr("KADENCE_LLM_CONTEXT_BUDGET", 32000)
-
-	cfg.GuardrailEnabled = envBoolOr("KADENCE_GUARDRAIL_ENABLED", false)
-	cfg.GuardrailModel = os.Getenv("KADENCE_GUARDRAIL_MODEL")
-	cfg.GuardrailBaseURL = os.Getenv("KADENCE_GUARDRAIL_BASE_URL")
-	cfg.GuardrailAPIKey = os.Getenv("KADENCE_GUARDRAIL_API_KEY")
-	cfg.GuardrailHistoryWindow = envIntOr("KADENCE_GUARDRAIL_HISTORY_WINDOW", 6)
-	cfg.DomainName = envOr("KADENCE_DOMAIN_NAME", defaultDomainName)
-	cfg.AllowedTopics = envOr("KADENCE_ALLOWED_TOPICS", defaultAllowedTopics)
-	cfg.RefusalMessage = envOr("KADENCE_REFUSAL_MESSAGE", defaultRefusalMessage)
-	cfg.MCPIntentGuardEnabled = envBoolOr("KADENCE_MCP_INTENT_GUARD_ENABLED", false)
-
-	cfg.ScheduledEnabled = envBoolOr("KADENCE_SCHEDULED_ENABLED", false)
-	cfg.ScheduledWorkerModel = os.Getenv("KADENCE_SCHEDULED_WORKER_MODEL")
-	cfg.ScheduledWorkerBaseURL = os.Getenv("KADENCE_SCHEDULED_WORKER_BASE_URL")
-	cfg.ScheduledWorkerAPIKey = os.Getenv("KADENCE_SCHEDULED_WORKER_API_KEY")
-	cfg.ScheduledWorkerMaxTokens = envIntOr("KADENCE_SCHEDULED_WORKER_MAX_TOKENS", 2048)
 	cfg.ScheduledWorkerTemperature = envFloatOr("KADENCE_SCHEDULED_WORKER_TEMPERATURE", cfg.LLMTemperature)
 	cfg.ScheduledWorkerTimeout = envDurationOr("KADENCE_SCHEDULED_WORKER_TIMEOUT", 300*time.Second)
 	cfg.ScheduledWorkerMaxIterations = envIntOr("KADENCE_SCHEDULED_WORKER_MAX_ITERATIONS", 16)

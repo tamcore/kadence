@@ -106,8 +106,7 @@ func (c *UnattendedCatalog) SnapshotFor(ctx context.Context, username string) (*
 					logger = slog.Default()
 				}
 				category := "invalid"
-				var schemaErr *mcpintent.SchemaError
-				if errors.As(guardErr, &schemaErr) {
+				if schemaErr, ok := errors.AsType[*mcpintent.SchemaError](guardErr); ok {
 					category = schemaErr.Category
 				}
 				logger.Warn("MCP tool omitted from intent guard catalog", "tool", safeLoggedToolName(definition.Name), "category", category)

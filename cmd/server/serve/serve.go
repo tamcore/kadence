@@ -229,10 +229,11 @@ func Run() error {
 		})
 	})
 
-	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg}
-	deps.MCPAudit = handlers.NewMCPAudit(auditRepo, cfg.MCPAuditTTL, time.Now)
-	deps.Profile = handlers.NewProfile(users, sessions, cfg)
-	deps.SessionsAPI = handlers.NewSessions(sessions)
+	deps := api.Deps{Users: users, Sessions: sessions, Config: cfg,
+		MCPAudit:    handlers.NewMCPAudit(auditRepo, cfg.MCPAuditTTL, time.Now),
+		Profile:     handlers.NewProfile(users, sessions, cfg),
+		SessionsAPI: handlers.NewSessions(sessions),
+	}
 
 	webauthnCreds := store.NewWebAuthnCredentialRepository(pool)
 	waSvc, waCipher, err := setupWebAuthn(cfg)

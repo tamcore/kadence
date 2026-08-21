@@ -70,9 +70,10 @@ func (c *elicitingClient) ListTools(context.Context) ([]ToolInfo, error) {
 }
 
 func (c *elicitingClient) CallTool(ctx context.Context, name, _ string) (string, error) {
-	req := mcpgo.ElicitationRequest{}
-	req.Method = string(mcpgo.MethodElicitationCreate)
-	req.Params = c.params
+	req := mcpgo.ElicitationRequest{
+		Method: string(mcpgo.MethodElicitationCreate),
+		Params: c.params,
+	}
 	res, err := elicitHandler{}.Elicit(ctx, req)
 	if err != nil {
 		return "", err
@@ -128,9 +129,10 @@ func confirmingRegistry(t *testing.T, src ConfirmSource) *Registry {
 // handlerWith runs the bare handler against one confirm source, bypassing the
 // transport, so a protocol shape can be asserted without a live call.
 func handlerWith(ctx context.Context, src ConfirmSource, params mcpgo.ElicitationParams) (*mcpgo.ElicitationResult, error) {
-	req := mcpgo.ElicitationRequest{}
-	req.Method = string(mcpgo.MethodElicitationCreate)
-	req.Params = params
+	req := mcpgo.ElicitationRequest{
+		Method: string(mcpgo.MethodElicitationCreate),
+		Params: params,
+	}
 	if src != nil {
 		ctx = withConfirmTarget(ctx, confirmTarget{userID: 42, tool: confirmTestTool, src: src})
 	}

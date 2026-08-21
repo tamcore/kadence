@@ -418,7 +418,7 @@ func (c *countingUserSrc) ServersForUser(ctx context.Context, u string) ([]Serve
 func TestRegistry_SnapshotForResolvesUserServersOnce(t *testing.T) {
 	ts := newFakeGarminServer(t)
 	userSrv := Server{Name: "mine", Scope: userScopePrefix + testUsername, URL: ts.URL, Transport: transportStreamableHTTP}
-	src := &countingUserSrc{fakeUserSrc: fakeUserSrc{perUser: map[string][]Server{testUsername: {userSrv}}}}
+	src := &countingUserSrc{perUser: map[string][]Server{testUsername: {userSrv}}}
 	r := NewRegistry(nil, nil, src)
 
 	snap := r.SnapshotFor(context.Background(), testUsername)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -496,8 +497,7 @@ func (s *Service) streamPersistedTurn(
 		)
 	}
 	if err != nil {
-		var providerFailure *providerStreamFailure
-		if errors.As(err, &providerFailure) {
+		if providerFailure, ok := errors.AsType[*providerStreamFailure](err); ok {
 			if providerFailure.content == "" &&
 				providerMessagesContainImages(req.Messages) &&
 				errors.Is(providerFailure.err, provider.ErrVisionUnsupported) &&
@@ -712,8 +712,8 @@ func (s *Service) boundHistory(
 		reservedTokens
 
 	keptFromEnd := 0
-	for i := len(turns) - 1; i >= 0; i-- {
-		cost := turns[i].tokens()
+	for _, turn := range slices.Backward(turns) {
+		cost := turn.tokens()
 		if used+cost > budget {
 			break
 		}

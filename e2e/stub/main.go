@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -327,8 +328,7 @@ func asksForWeatherForecast(messages []chatCompletionRequestMessage) bool {
 }
 
 func explicitlySchedulesWeatherChecks(messages []chatCompletionRequestMessage) bool {
-	for index := len(messages) - 1; index >= 0; index-- {
-		message := messages[index]
+	for _, message := range slices.Backward(messages) {
 		if message.Role == messageRoleUser {
 			return strings.Contains(strings.ToLower(messageText(message.Content)), "schedule it")
 		}

@@ -64,15 +64,13 @@ func classifyPreparationError(err error) *preparationError {
 	if err == nil {
 		return nil
 	}
-	var existing *preparationError
-	if errors.As(err, &existing) {
+	if existing, ok := errors.AsType[*preparationError](err); ok {
 		return existing
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &preparationError{code: preparationCodeProviderTimeout, cause: err}
 	}
-	var transportError net.Error
-	if errors.As(err, &transportError) {
+	if transportError, ok := errors.AsType[net.Error](err); ok {
 		if transportError.Timeout() {
 			return &preparationError{code: preparationCodeProviderTimeout, cause: err}
 		}

@@ -34,12 +34,12 @@ type refinementProvider struct {
 }
 
 type preparationCoded interface {
+	error
 	Code() string
 }
 
 func preparationErrorCode(err error) string {
-	var coded preparationCoded
-	if errors.As(err, &coded) {
+	if coded, ok := errors.AsType[preparationCoded](err); ok {
 		return coded.Code()
 	}
 	return ""

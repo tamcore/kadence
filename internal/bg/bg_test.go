@@ -37,8 +37,7 @@ func TestGuardPassesNormalErrorThrough(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want the sentinel unchanged", err)
 	}
-	var pe *PanicError
-	if errors.As(err, &pe) {
+	if _, ok := errors.AsType[*PanicError](err); ok {
 		t.Fatal("a normal error must not be wrapped as *PanicError")
 	}
 }

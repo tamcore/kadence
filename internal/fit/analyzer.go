@@ -36,8 +36,7 @@ func failAnalysis(stage string, err error) error {
 // FailureStage returns a bounded, path-free stage name suitable for
 // operational logging. Unknown errors are classified as "unknown".
 func FailureStage(err error) string {
-	var failure *analysisFailure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*analysisFailure](err); ok {
 		return failure.stage
 	}
 	return "unknown"

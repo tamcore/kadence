@@ -107,20 +107,18 @@ func (elicitHandler) Elicit(ctx context.Context, req mcpgo.ElicitationRequest) (
 	}
 	if !allowed {
 		return &mcpgo.ElicitationResult{
-			ElicitationResponse: mcpgo.ElicitationResponse{Action: mcpgo.ElicitationResponseActionDecline},
+			Action: mcpgo.ElicitationResponseActionDecline,
 		}, nil
 	}
 	return &mcpgo.ElicitationResult{
-		ElicitationResponse: mcpgo.ElicitationResponse{
-			Action:  mcpgo.ElicitationResponseActionAccept,
-			Content: map[string]any{confirmField: true},
-		},
+		Action:  mcpgo.ElicitationResponseActionAccept,
+		Content: map[string]any{confirmField: true},
 	}, nil
 }
 
 func cancelled() *mcpgo.ElicitationResult {
 	return &mcpgo.ElicitationResult{
-		ElicitationResponse: mcpgo.ElicitationResponse{Action: mcpgo.ElicitationResponseActionCancel},
+		Action: mcpgo.ElicitationResponseActionCancel,
 	}
 }
 

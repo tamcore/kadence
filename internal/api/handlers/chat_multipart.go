@@ -168,8 +168,7 @@ func readMultipartField(part *multipart.Part, maxBytes int64) (string, error) {
 }
 
 func classifyMultipartReadError(err error) error {
-	var maxBytesErr *http.MaxBytesError
-	if errors.As(err, &maxBytesErr) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		return fmt.Errorf("%w: %w", errMultipartChatTooLarge, err)
 	}
 	return fmt.Errorf("%w: %w", errInvalidMultipartChat, err)
