@@ -70,7 +70,7 @@ test('user can see and revoke another active session from the profile page', asy
 	await otherPage.goto('/documents'); // any authenticated page keeps the session "active"
 
 	await page.goto('/profile');
-	await expect(page.getByText(/this device/i)).toBeVisible();
+	await expect(page.getByText('This device', { exact: true })).toBeVisible();
 
 	// There should be exactly one non-current session row with a Revoke button.
 	const revokeButtons = page.getByRole('button', { name: 'Revoke' });
