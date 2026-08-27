@@ -44,11 +44,11 @@ func (s *turnDocumentStore) ListVisibleByIDs(
 	_ context.Context, _ int64, ids []int64,
 ) ([]model.Document, error) {
 	s.calls++
-	s.ids = append([]int64(nil), ids...)
+	s.ids = slices.Clone(ids)
 	if s.err != nil {
 		return nil, s.err
 	}
-	return append([]model.Document(nil), s.documents...), nil
+	return slices.Clone(s.documents), nil
 }
 
 type turnExtractor struct {
@@ -157,7 +157,7 @@ func TestStreamTurnUsesOneConfiguredDeadlineForGuardrailExtractionAndProvider(t 
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{
 			Text: "review this",
 			Files: []chat.FileInput{{
@@ -208,7 +208,7 @@ func TestStreamTurnPersistsRawTextAndBuildsEscapedUntrustedContextWithImages(t *
 
 	imageBytes := testPNG(t, 3, 2)
 	err := svc.StreamTurn(
-		context.Background(),
+		t.Context(),
 		testUserID,
 		chat.UserContext{Username: testUsername},
 		testConvID,
@@ -312,7 +312,7 @@ func TestStreamTurnFileOnlyGuardrailUsesStableTextBeforeExtractionAndPersistsRaw
 		)
 
 		err := svc.StreamTurn(
-			context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+			t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 			chat.TurnInput{Files: []chat.FileInput{{
 				Filename: filename, MIME: testMimeMarkdown, Data: []byte("raw private bytes"),
 			}}},
@@ -369,7 +369,7 @@ func TestWhitespaceRichTurnGuardrailUsesStableClassifierText(t *testing.T) {
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{
 			Text: " \t\n ",
 			Files: []chat.FileInput{{
@@ -418,7 +418,7 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{{
 			Filename: "deferred.md", MIME: testMimeMarkdown, Data: []byte("raw deferred"),
 		}}},
@@ -434,7 +434,7 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 	}
 
 	if err := svc.Edit(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testNewConvID, 1, "please coach this plan", &capturingSink{},
 	); err != nil {
 		t.Fatalf("allowed Edit: %v", err)
@@ -452,7 +452,7 @@ func TestRefusedDocumentIsLazilyExtractedOnAllowedEditAndReusedByRegenerate(t *t
 	}
 
 	if err := svc.Regenerate(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testNewConvID, msgs.added[1].ID, &capturingSink{},
 	); err != nil {
 		t.Fatalf("allowed Regenerate: %v", err)
@@ -516,7 +516,7 @@ func TestStreamTurnIncludesHistoricalPayloadsWhenTheyFit(t *testing.T) {
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
 		chat.TurnInput{Text: "current"}, &capturingSink{},
 	); err != nil {
 		t.Fatalf("StreamTurn: %v", err)
@@ -590,7 +590,7 @@ func TestStreamTurnOmitsOversizedHistoricalPayloadAtomicallyButKeepsText(t *test
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
 		chat.TurnInput{Text: "current evidence has priority"}, &capturingSink{},
 	); err != nil {
 		t.Fatalf("StreamTurn: %v", err)
@@ -631,7 +631,7 @@ func TestStreamTurnExtractionFailureDoesNotCreateEmptyConversation(t *testing.T)
 	)
 
 	err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{
 			Text: "review",
 			Files: []chat.FileInput{{
@@ -678,7 +678,7 @@ func TestStreamTurnReportsConfiguredAssistantCannotProcessCurrentImages(t *testi
 	sink := &capturingSink{}
 
 	err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{{
 			Filename: "chart.png", MIME: testImagePNGMime, Data: testPNG(t, 2, 2),
 		}}},
@@ -725,7 +725,7 @@ func TestStreamTurnReportsConfiguredAssistantCannotProcessHistoricalImages(t *te
 	)
 
 	err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "current text only", &capturingSink{},
 	)
 	if err == nil ||
@@ -750,7 +750,7 @@ func TestStreamTurnLargeValidScreenshotFitsByDimensions(t *testing.T) {
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{{
 			Filename: "screenshot.png", MIME: testImagePNGMime, Data: image,
 		}}},
@@ -780,7 +780,7 @@ func TestStreamTurnRejectsCombinedCurrentImagesBeforePersistence(t *testing.T) {
 	)
 
 	err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{
 			{Filename: testFirstPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
 			{Filename: testSecondPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
@@ -816,7 +816,7 @@ func TestStreamTurnRejectsOffTopicCurrentImagesBeforePersistence(t *testing.T) {
 	)
 
 	err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{
 			{Filename: testFirstPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
 			{Filename: testSecondPNGFilename, MIME: testImagePNGMime, Data: testPNG(t, 512, 512)},
@@ -842,7 +842,7 @@ func TestStreamTurnEmitsOrderedUploadLifecycleBeforeMeta(t *testing.T) {
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{
 			{Filename: "first.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
 			{Filename: "second.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
@@ -886,7 +886,7 @@ func TestStreamTurnAttachmentFailureEmitsFileErrorAndNoPersistence(t *testing.T)
 	)
 
 	err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{
 			{Filename: "valid.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
 			{Filename: "bad.png", MIME: testImagePNGMime},
@@ -920,7 +920,7 @@ func TestStreamTurnExtractorFailureEmitsFileErrorAndNoPersistence(t *testing.T) 
 	)
 
 	err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{
 			{Filename: "valid.png", MIME: testImagePNGMime, Data: testPNG(t, 1, 1)},
 			{Filename: "notes.md", MIME: testMimeMarkdown, Data: []byte("source")},
@@ -960,7 +960,7 @@ func TestStreamTurnUsesFullExplicitDocumentsWhenTheyFit(t *testing.T) {
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Text: "compare", DocumentIDs: []int64{11, 22}},
 		&capturingSink{},
 	); err != nil {
@@ -1012,7 +1012,7 @@ func TestStreamTurnUsesOrderedRelevantSectionsAndMarksEveryOversizedDocument(t *
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Text: "Which section discusses pacing?", DocumentIDs: []int64{firstID, secondID}},
 		&capturingSink{},
 	); err != nil {
@@ -1060,7 +1060,7 @@ func TestStreamTurnBoundsAttachmentDocumentsWithDeterministicEmptyQueryFallback(
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Files: []chat.FileInput{{
 			Filename: "large.md", MIME: testMimeMarkdown, Data: []byte("raw"),
 		}}},
@@ -1105,7 +1105,7 @@ func TestStreamTurnPrioritizesExplicitContextOverBroadRAG(t *testing.T) {
 	)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{Text: "priority query", DocumentIDs: []int64{documentID}},
 		&capturingSink{},
 	); err != nil {
@@ -1147,7 +1147,7 @@ func TestStreamTurnMetaCarriesSafePersistedPayloadMetadataAsArrays(t *testing.T)
 	rawImage := testPNG(t, 2, 2)
 
 	if err := svc.StreamTurn(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		chat.TurnInput{
 			Files:       []chat.FileInput{{Filename: "safe.png", MIME: testImagePNGMime, Data: rawImage}},
 			DocumentIDs: []int64{93},
@@ -1203,7 +1203,7 @@ func TestStreamTurnMetaCarriesSafePersistedPayloadMetadataAsArrays(t *testing.T)
 		},
 	)
 	if err := textOnly.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"text only", emptyMetaSink,
 	); err != nil {
 		t.Fatalf("text Stream: %v", err)
@@ -1261,12 +1261,12 @@ func TestEditAndRegenerateReuseStoredCurrentPayload(t *testing.T) {
 			var err error
 			if operation == "edit" {
 				err = svc.Edit(
-					context.Background(), testUserID, chat.UserContext{Username: testUsername},
+					t.Context(), testUserID, chat.UserContext{Username: testUsername},
 					testConvID, 1, "edited", &capturingSink{},
 				)
 			} else {
 				err = svc.Regenerate(
-					context.Background(), testUserID, chat.UserContext{Username: testUsername},
+					t.Context(), testUserID, chat.UserContext{Username: testUsername},
 					testConvID, 2, &capturingSink{},
 				)
 			}
@@ -1303,7 +1303,7 @@ func TestEditPreflightFailurePreservesTranscript(t *testing.T) {
 		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: testAssistantAnswer},
 		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: testUserLater},
 	}
-	msgs := &fakeMsgs{added: append([]model.Message(nil), original...)}
+	msgs := &fakeMsgs{added: slices.Clone(original)}
 	provider := &capturingProvider{reply: testProviderMustNotRun}
 	svc := chat.NewService(provider,
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
@@ -1316,7 +1316,7 @@ func TestEditPreflightFailurePreservesTranscript(t *testing.T) {
 	)
 
 	err := svc.Edit(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 1, "edited", &capturingSink{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "selected document is unavailable") {
@@ -1346,7 +1346,7 @@ func TestRegeneratePreflightDocumentStoreFailurePreservesTranscript(t *testing.T
 		{ID: 2, ConversationID: testConvID, Role: model.MsgRoleAssistant, Content: testAssistantAnswer},
 		{ID: 3, ConversationID: testConvID, Role: model.MsgRoleUser, Content: testUserLater},
 	}
-	msgs := &fakeMsgs{added: append([]model.Message(nil), original...)}
+	msgs := &fakeMsgs{added: slices.Clone(original)}
 	documents := &turnDocumentStore{err: errors.New("document database unavailable")}
 	provider := &capturingProvider{reply: testProviderMustNotRun}
 	svc := chat.NewService(provider,
@@ -1360,7 +1360,7 @@ func TestRegeneratePreflightDocumentStoreFailurePreservesTranscript(t *testing.T
 	)
 
 	err := svc.Regenerate(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 2, &capturingSink{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "selected document is unavailable") {
@@ -1398,7 +1398,7 @@ func TestEditPreflightsHistoricalPayloadsBeforeRewind(t *testing.T) {
 		},
 		payloadErr: errors.New("attachment database unavailable"),
 	}
-	original := append([]model.Message(nil), msgs.added...)
+	original := slices.Clone(msgs.added)
 	provider := &capturingProvider{reply: testProviderMustNotRun}
 	svc := chat.NewService(provider,
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
@@ -1411,7 +1411,7 @@ func TestEditPreflightsHistoricalPayloadsBeforeRewind(t *testing.T) {
 	)
 
 	err := svc.Edit(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 3, "edited", &capturingSink{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "attachment payload") {
@@ -1443,7 +1443,7 @@ func TestRegeneratePreflightsHistoricalPayloadsBeforeRewind(t *testing.T) {
 		},
 		payloadErr: errors.New("attachment database unavailable"),
 	}
-	original := append([]model.Message(nil), msgs.added...)
+	original := slices.Clone(msgs.added)
 	provider := &capturingProvider{reply: testProviderMustNotRun}
 	svc := chat.NewService(provider,
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
@@ -1456,7 +1456,7 @@ func TestRegeneratePreflightsHistoricalPayloadsBeforeRewind(t *testing.T) {
 	)
 
 	err := svc.Regenerate(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 4, &capturingSink{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "attachment payload") {
@@ -1515,7 +1515,7 @@ func TestStreamTurnLoadsPayloadsOnlyForRetainedHistory(t *testing.T) {
 	)
 
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "current", &capturingSink{},
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -1553,7 +1553,7 @@ func TestStreamTurnOmitsAttachmentTurnsOutsideHydrationCap(t *testing.T) {
 	)
 
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "current", &capturingSink{},
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -1602,7 +1602,7 @@ func TestStreamTurnPayloadLoaderFailureStopsBeforeProvider(t *testing.T) {
 	)
 
 	err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "current", &capturingSink{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "historical attachment context") {
@@ -1639,7 +1639,7 @@ func TestRegenerateRejectsCurrentImageThatExceedsContextBudget(t *testing.T) {
 	)
 
 	err := svc.Regenerate(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 2, &capturingSink{},
 	)
 	if err == nil ||
@@ -1666,7 +1666,7 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 			},
 		)
 		if err := svc.StreamTurn(
-			context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+			t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 			chat.TurnInput{
 				Text: " \t\n ",
 				Files: []chat.FileInput{{
@@ -1693,7 +1693,7 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 			},
 		)
 		if err := svc.StreamTurn(
-			context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+			t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 			chat.TurnInput{Files: []chat.FileInput{{
 				Filename: "\x01\x02", MIME: testImagePNGMime, Data: testPNG(t, 1, 1),
 			}}},
@@ -1716,7 +1716,7 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 		)
 		longFilename := "../../" + strings.Repeat("🏃", 70) + ".png"
 		if err := svc.StreamTurn(
-			context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+			t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 			chat.TurnInput{Files: []chat.FileInput{{
 				Filename: longFilename, MIME: testImagePNGMime, Data: testPNG(t, 1, 1),
 			}}},
@@ -1744,7 +1744,7 @@ func TestStreamTurnDerivesSanitizedRuneSafeTitlesFromFilesAndReferences(t *testi
 			chat.Deps{Convs: convs, Msgs: msgs, Documents: documents},
 		)
 		if err := svc.StreamTurn(
-			context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+			t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 			chat.TurnInput{DocumentIDs: []int64{88}}, &capturingSink{},
 		); err != nil {
 			t.Fatalf("StreamTurn: %v", err)

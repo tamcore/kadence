@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ const (
 func TestMCPAuditRepositoryLifecycleFilteringAndRetention(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewMCPAuditRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	started := time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
 
 	id, err := repo.Start(ctx, model.MCPAuditCall{
@@ -76,7 +75,7 @@ func TestMCPAuditRepositoryLifecycleFilteringAndRetention(t *testing.T) {
 func TestMCPAuditRepositoryStoresAndFiltersGuardDecision(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewMCPAuditRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	finished := now.Add(time.Second)
 

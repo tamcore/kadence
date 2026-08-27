@@ -47,7 +47,7 @@ func TestConversationTitleGeneratorBuildsBoundedRequest(t *testing.T) {
 		AssistantText: strings.Repeat("🎯", 4001),
 	}
 
-	_, err := generator.Generate(context.Background(), input)
+	_, err := generator.Generate(t.Context(), input)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestConversationTitleGeneratorNormalizesOutput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			generator := chat.NewLLMConversationTitleGenerator(&titleProvider{reply: tt.reply}, "title-model")
-			got, err := generator.Generate(context.Background(), chat.ConversationTitleInput{UserText: titleTestUserText})
+			got, err := generator.Generate(t.Context(), chat.ConversationTitleInput{UserText: titleTestUserText})
 			if err != nil {
 				t.Fatalf("Generate() error = %v", err)
 			}
@@ -102,7 +102,7 @@ func TestConversationTitleGeneratorNormalizesOutput(t *testing.T) {
 
 func TestConversationTitleGeneratorRejectsEmptyOutput(t *testing.T) {
 	generator := chat.NewLLMConversationTitleGenerator(&titleProvider{reply: " \n\t "}, "title-model")
-	_, err := generator.Generate(context.Background(), chat.ConversationTitleInput{UserText: titleTestUserText})
+	_, err := generator.Generate(t.Context(), chat.ConversationTitleInput{UserText: titleTestUserText})
 	if err == nil {
 		t.Fatal("Generate() error = nil, want empty response error")
 	}
@@ -115,7 +115,7 @@ func TestConversationTitleGeneratorHidesProviderError(t *testing.T) {
 	providerErr := errors.New("raw provider response: credential-marker")
 	generator := chat.NewLLMConversationTitleGenerator(&titleProvider{err: providerErr}, "title-model")
 
-	_, err := generator.Generate(context.Background(), chat.ConversationTitleInput{UserText: titleTestUserText})
+	_, err := generator.Generate(t.Context(), chat.ConversationTitleInput{UserText: titleTestUserText})
 	if err == nil {
 		t.Fatal("Generate() error = nil, want provider failure")
 	}
@@ -140,7 +140,7 @@ func (p blockingTitleProvider) StreamChatWithTools(ctx context.Context, req prov
 }
 
 func TestConversationTitleGeneratorPropagatesCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	generator := chat.NewLLMConversationTitleGenerator(blockingTitleProvider{}, "title-model")
 

@@ -2,12 +2,14 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -42,7 +44,7 @@ type resolvedFITRoute struct {
 func NewUnattendedCatalog(mcp MCPTools, fitRoutes []FITRoute, audit *mcpaudit.Recorder, intentGuard mcpintent.Evaluator) *UnattendedCatalog {
 	return &UnattendedCatalog{
 		mcp:         mcp,
-		fitRoutes:   append([]FITRoute(nil), fitRoutes...),
+		fitRoutes:   slices.Clone(fitRoutes),
 		audit:       audit,
 		intentGuard: intentGuard,
 		log:         slog.Default(),
@@ -163,7 +165,7 @@ func (s *UnattendedSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinitio
 	if s == nil {
 		return nil, nil
 	}
-	return append([]provider.ToolDefinition(nil), s.tools...), nil
+	return slices.Clone(s.tools), nil
 }
 
 // Call dispatches only a name present in the frozen tool list.
@@ -360,15 +362,11 @@ func (s *UnattendedSnapshot) authorize(
 		if blocked.Kind == mcpintent.BlockKindDenied {
 			verdict = model.MCPAuditGuardDenied
 		}
-		if decision.Reason == "" {
-			decision.Reason = blocked.Error()
-		}
+		decision.Reason = cmp.Or(decision.Reason, blocked.Error())
 		return ctx, s.block(ctx, toolName, arguments, intent, verdict, decision.Reason, blocked)
 	}
 	if decision.Verdict == mcpintent.VerdictDeny {
-		if decision.Reason == "" {
-			decision.Reason = "tool intent could not be approved"
-		}
+		decision.Reason = cmp.Or(decision.Reason, "tool intent could not be approved")
 		blocked := mcpintent.DeniedBlockedError(decision.Reason)
 		return ctx, s.block(ctx, toolName, arguments, intent, model.MCPAuditGuardDenied, decision.Reason, blocked)
 	}
@@ -393,9 +391,7 @@ func (s *UnattendedSnapshot) block(
 	if verdict != model.MCPAuditGuardDenied && verdict != model.MCPAuditGuardError {
 		verdict = model.MCPAuditGuardError
 	}
-	if reason == "" {
-		reason = "tool intent could not be approved"
-	}
+	reason = cmp.Or(reason, "tool intent could not be approved")
 	if blocked == nil {
 		blocked = mcpintent.UnavailableBlockedError()
 	}

@@ -65,7 +65,7 @@ func TestStreamToolLoopStopsGrowingPastContextBudget(t *testing.T) {
 
 	sink := &capturingSink{}
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"call the huge tool", sink,
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -129,7 +129,7 @@ func TestStreamToolLoopShedsContextAndKeepsLooping(t *testing.T) {
 
 	sink := &capturingSink{}
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID,
 		"call the big tool", sink,
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -182,7 +182,7 @@ func TestStreamToolLoopKeepsMaxIterationsWhenWithinBudget(t *testing.T) {
 	)
 
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"loop forever", &capturingSink{},
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -238,7 +238,7 @@ func TestExhaustedToolBudgetExplainsItselfInsteadOfAnsweringBlank(t *testing.T) 
 
 	// Act
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"audit everything", sink,
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -288,7 +288,7 @@ func TestExhaustedToolBudgetPropagatesASendFailure(t *testing.T) {
 
 	// Act
 	err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"audit everything", &failingSink{},
 	)
 

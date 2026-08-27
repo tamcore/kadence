@@ -7,9 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -389,10 +390,13 @@ func loadFITRoutes(environ []string) ([]FITRoute, error) {
 	groups := make(map[int]*fitRouteBuilder)
 	for _, entry := range environ {
 		key, value, ok := strings.Cut(entry, "=")
-		if !ok || !strings.HasPrefix(key, fitRouteEnvPrefix) {
+		if !ok {
 			continue
 		}
-		rest := strings.TrimPrefix(key, fitRouteEnvPrefix)
+		rest, hasPrefix := strings.CutPrefix(key, fitRouteEnvPrefix)
+		if !hasPrefix {
+			continue
+		}
 		for _, field := range fitRouteEnvFields {
 			indexText, matched := strings.CutSuffix(rest, field.suffix)
 			if !matched {
@@ -412,11 +416,7 @@ func loadFITRoutes(environ []string) ([]FITRoute, error) {
 		}
 	}
 
-	indexes := make([]int, 0, len(groups))
-	for index := range groups {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
+	indexes := slices.Sorted(maps.Keys(groups))
 
 	routes := make([]FITRoute, 0, len(indexes))
 	for _, index := range indexes {
@@ -795,9 +795,8 @@ func loadTrustedOrigins(raw string) []string {
 	if raw == "" {
 		return nil
 	}
-	parts := strings.Split(raw, ",")
 	var origins []string
-	for _, part := range parts {
+	for part := range strings.SplitSeq(raw, ",") {
 		trimmed := strings.TrimSpace(part)
 		if trimmed != "" {
 			origins = append(origins, trimmed)

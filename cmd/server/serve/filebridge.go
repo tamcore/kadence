@@ -201,10 +201,10 @@ func (h *fileBridgeHandler) authorized(r *http.Request) bool {
 }
 
 func fileBridgeName(path string) (string, int) {
-	if !strings.HasPrefix(path, fileBridgePathPrefix) {
+	name, hasPrefix := strings.CutPrefix(path, fileBridgePathPrefix)
+	if !hasPrefix {
 		return "", http.StatusBadRequest
 	}
-	name := strings.TrimPrefix(path, fileBridgePathPrefix)
 	if name == "" || filepath.Base(name) != name || strings.ContainsRune(name, filepath.Separator) {
 		return "", http.StatusBadRequest
 	}

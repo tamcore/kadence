@@ -69,7 +69,7 @@ func TestTheTTLStaysUnderTheTransportRequestCap(t *testing.T) {
 func TestAnAllowedRequestUnblocksTheWaiter(t *testing.T) {
 	b := NewBroker()
 	req := newRequest(t, b)
-	got := awaitInBackground(context.Background(), b, req.ID)
+	got := awaitInBackground(t.Context(), b, req.ID)
 
 	if err := b.Submit(testUserID, req.ID, true); err != nil {
 		t.Fatalf("Submit: %v", err)
@@ -83,7 +83,7 @@ func TestAnAllowedRequestUnblocksTheWaiter(t *testing.T) {
 func TestADeclinedRequestReportsTheDecline(t *testing.T) {
 	b := NewBroker()
 	req := newRequest(t, b)
-	got := awaitInBackground(context.Background(), b, req.ID)
+	got := awaitInBackground(t.Context(), b, req.ID)
 
 	if err := b.Submit(testUserID, req.ID, false); err != nil {
 		t.Fatalf("Submit: %v", err)
@@ -97,7 +97,7 @@ func TestADeclinedRequestReportsTheDecline(t *testing.T) {
 func TestAnAnswerIsSingleUse(t *testing.T) {
 	b := NewBroker()
 	req := newRequest(t, b)
-	got := awaitInBackground(context.Background(), b, req.ID)
+	got := awaitInBackground(t.Context(), b, req.ID)
 
 	if err := b.Submit(testUserID, req.ID, true); err != nil {
 		t.Fatalf("first Submit: %v", err)
@@ -111,7 +111,7 @@ func TestAnAnswerIsSingleUse(t *testing.T) {
 func TestAnotherUsersAnswerIsRefusedAndLeavesTheWaiterBlocked(t *testing.T) {
 	b := NewBroker()
 	req := newRequest(t, b)
-	got := awaitInBackground(context.Background(), b, req.ID)
+	got := awaitInBackground(t.Context(), b, req.ID)
 
 	if err := b.Submit(otherUserID, req.ID, true); !errors.Is(err, ErrUnknownRequest) {
 		t.Fatalf("foreign Submit: %v, want ErrUnknownRequest", err)
@@ -137,7 +137,7 @@ func TestAnExpiredRequestTimesOutTheWaiterAndRefusesTheLateAnswer(t *testing.T) 
 	req := newRequest(t, b)
 
 	clock.advance(confirmTTL + time.Second)
-	got := awaitInBackground(context.Background(), b, req.ID)
+	got := awaitInBackground(t.Context(), b, req.ID)
 	r := waitFor(t, got)
 	if r.ok || !errors.Is(r.err, ErrTimedOut) {
 		t.Fatalf("Await = (%v, %v), want (false, ErrTimedOut)", r.ok, r.err)
@@ -150,7 +150,7 @@ func TestAnExpiredRequestTimesOutTheWaiterAndRefusesTheLateAnswer(t *testing.T) 
 func TestACancelledContextReleasesTheWaiter(t *testing.T) {
 	b := NewBroker()
 	req := newRequest(t, b)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	got := awaitInBackground(ctx, b, req.ID)
 
 	cancel()
@@ -165,7 +165,7 @@ func TestAnAnswerAfterACancelledWaitIsRefused(t *testing.T) {
 	// and the browser tells the user their decision was applied.
 	b := NewBroker()
 	req := newRequest(t, b)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	got := awaitInBackground(ctx, b, req.ID)
 
 	cancel()
@@ -181,13 +181,12 @@ func TestSubmitNeverBlocksAgainstACancellation(t *testing.T) {
 	for range 200 {
 		b := NewBroker()
 		req := newRequest(t, b)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		got := awaitInBackground(ctx, b, req.ID)
 
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); cancel() }()
-		go func() { defer wg.Done(); _ = b.Submit(testUserID, req.ID, true) }()
+		wg.Go(cancel)
+		wg.Go(func() { _ = b.Submit(testUserID, req.ID, true) })
 		wg.Wait()
 		waitFor(t, got)
 	}
@@ -195,7 +194,7 @@ func TestSubmitNeverBlocksAgainstACancellation(t *testing.T) {
 
 func TestAwaitingAnUnknownRequestReturnsAtOnce(t *testing.T) {
 	b := NewBroker()
-	got := awaitInBackground(context.Background(), b, "never-issued")
+	got := awaitInBackground(t.Context(), b, "never-issued")
 	r := waitFor(t, got)
 	if r.ok || !errors.Is(r.err, ErrUnknownRequest) {
 		t.Fatalf("Await = (%v, %v), want (false, ErrUnknownRequest)", r.ok, r.err)
@@ -209,8 +208,8 @@ func TestTwoRequestsForOneUserAreIndependent(t *testing.T) {
 	if first.ID == second.ID {
 		t.Fatal("two requests shared an id")
 	}
-	gotFirst := awaitInBackground(context.Background(), b, first.ID)
-	gotSecond := awaitInBackground(context.Background(), b, second.ID)
+	gotFirst := awaitInBackground(t.Context(), b, first.ID)
+	gotSecond := awaitInBackground(t.Context(), b, second.ID)
 
 	if err := b.Submit(testUserID, first.ID, true); err != nil {
 		t.Fatalf("Submit(first): %v", err)
@@ -234,8 +233,8 @@ func TestPurgeUserReleasesThatUsersWaitersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest(other): %v", err)
 	}
-	gotMine := awaitInBackground(context.Background(), b, mine.ID)
-	gotTheirs := awaitInBackground(context.Background(), b, theirs.ID)
+	gotMine := awaitInBackground(t.Context(), b, mine.ID)
+	gotTheirs := awaitInBackground(t.Context(), b, theirs.ID)
 
 	b.PurgeUser(testUserID)
 

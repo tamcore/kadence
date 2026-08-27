@@ -1,12 +1,12 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
 	"path"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -197,7 +197,7 @@ func (r *turnRedactor) snapshot(secrets *secret.Broker, userID int64) []string {
 			r.values = append(r.values, v)
 		}
 	}
-	sort.Slice(r.values, func(i, j int) bool { return len(r.values[i]) > len(r.values[j]) })
+	slices.SortFunc(r.values, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
 	return r.values
 }
 
@@ -306,7 +306,7 @@ func NewService(p provider.Provider, cfg ServiceConfig, deps Deps) *Service {
 		documents:      deps.Documents,
 		scheduled:      deps.Scheduled,
 		titleGenerator: deps.TitleGenerator,
-		fitRoutes:      append([]FITRoute(nil), deps.FITRoutes...),
+		fitRoutes:      slices.Clone(deps.FITRoutes),
 		toolCatalog:    NewUnattendedCatalog(deps.MCP, deps.FITRoutes, deps.Audit, deps.IntentGuard),
 	}
 }
@@ -383,9 +383,7 @@ func turnTitle(
 	if title == "" && len(documents) > 0 {
 		title = sanitizedFilenameTitle(documents[0].Filename)
 	}
-	if title == "" {
-		title = "New conversation"
-	}
+	title = cmp.Or(title, "New conversation")
 	runes := []rune(title)
 	if len(runes) > TitleMaxLen {
 		title = string(runes[:TitleMaxLen])

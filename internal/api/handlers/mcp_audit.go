@@ -9,8 +9,9 @@ import (
 	"strconv"
 	"time"
 
+	"uuid"
+
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/store"

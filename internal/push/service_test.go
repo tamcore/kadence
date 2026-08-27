@@ -114,7 +114,7 @@ func TestSendToUserPrunesGoneEndpoints(t *testing.T) {
 	fake := &fakeStore{subs: []model.PushSubscription{{ID: "s1", Endpoint: gone.URL, P256dh: p256dh, Auth: auth}}}
 	svc := NewService(fake, vapidPub, vapidPriv, "mailto:a@b.c", slog.Default())
 
-	_ = svc.SendToUser(context.Background(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
+	_ = svc.SendToUser(t.Context(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
 	if !fake.deleted["s1"] {
 		t.Fatal("expected 410 Gone endpoint to be deleted")
 	}
@@ -129,7 +129,7 @@ func TestSendToUserPrunesNotFoundEndpoints(t *testing.T) {
 	fake := &fakeStore{subs: []model.PushSubscription{{ID: "s1", Endpoint: notFound.URL, P256dh: p256dh, Auth: auth}}}
 	svc := NewService(fake, vapidPub, vapidPriv, "mailto:a@b.c", slog.Default())
 
-	_ = svc.SendToUser(context.Background(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
+	_ = svc.SendToUser(t.Context(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
 	if !fake.deleted["s1"] {
 		t.Fatal("expected 404 endpoint to be deleted")
 	}
@@ -144,7 +144,7 @@ func TestSendToUserMarksSuccessOn2xx(t *testing.T) {
 	fake := &fakeStore{subs: []model.PushSubscription{{ID: "s1", Endpoint: ok.URL, P256dh: p256dh, Auth: auth}}}
 	svc := NewService(fake, vapidPub, vapidPriv, "mailto:a@b.c", slog.Default())
 
-	if err := svc.SendToUser(context.Background(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL}); err != nil {
+	if err := svc.SendToUser(t.Context(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL}); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 	if !fake.success["s1"] {
@@ -167,7 +167,7 @@ func TestSendToUserPrunesAfterFailureCap(t *testing.T) {
 	}
 	svc := NewService(fake, vapidPub, vapidPriv, "mailto:a@b.c", slog.Default())
 
-	_ = svc.SendToUser(context.Background(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
+	_ = svc.SendToUser(t.Context(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
 	if fake.failed["s1"] != maxPushFailures {
 		t.Fatalf("expected failure count %d, got %d", maxPushFailures, fake.failed["s1"])
 	}
@@ -180,7 +180,7 @@ func TestSendToUserNoSubscriptionsIsNoop(t *testing.T) {
 	fake := &fakeStore{}
 	svc := NewService(fake, "pub", "priv", "mailto:a@b.c", slog.Default())
 
-	if err := svc.SendToUser(context.Background(), 1, Payload{Title: "t"}); err != nil {
+	if err := svc.SendToUser(t.Context(), 1, Payload{Title: "t"}); err != nil {
 		t.Fatalf("expected nil error for no subscriptions, got %v", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestSendToUserReturnsErrorWhenAllSendsFail(t *testing.T) {
 	fake := &fakeStore{subs: []model.PushSubscription{{ID: "s1", Endpoint: failing.URL, P256dh: p256dh, Auth: auth}}}
 	svc := NewService(fake, vapidPub, vapidPriv, "mailto:a@b.c", slog.Default())
 
-	err := svc.SendToUser(context.Background(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
+	err := svc.SendToUser(t.Context(), 1, Payload{Title: "t", Body: "b", URL: testPayloadURL})
 	if err == nil {
 		t.Fatal("expected error when every send fails, got nil")
 	}
@@ -208,7 +208,7 @@ func TestSendToUserPropagatesListError(t *testing.T) {
 	fake := &fakeStore{listErr: sentinel}
 	svc := NewService(fake, "pub", "priv", "mailto:a@b.c", slog.Default())
 
-	err := svc.SendToUser(context.Background(), 1, Payload{Title: "t"})
+	err := svc.SendToUser(t.Context(), 1, Payload{Title: "t"})
 	if err == nil {
 		t.Fatal("expected error propagated from ListByUser, got nil")
 	}
@@ -254,7 +254,7 @@ func TestSendOneTimesOutOnHangingGateway(t *testing.T) {
 	s := NewService(store, pub, priv, "mailto:ops@example.test", slog.Default())
 
 	start := time.Now()
-	err := s.SendToUser(context.Background(), 7, Payload{Title: "t", Body: "b"})
+	err := s.SendToUser(t.Context(), 7, Payload{Title: "t", Body: "b"})
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -277,7 +277,7 @@ func TestSendToUserContainsAPanickingSend(t *testing.T) {
 
 	// Must return an error rather than taking the process down, whatever the
 	// transport does with malformed subscription keys.
-	if err := s.SendToUser(context.Background(), 7, Payload{Title: "t"}); err == nil {
+	if err := s.SendToUser(t.Context(), 7, Payload{Title: "t"}); err == nil {
 		t.Fatal("expected an error for an unusable subscription")
 	}
 }

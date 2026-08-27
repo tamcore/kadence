@@ -4,12 +4,12 @@
 package skill
 
 import (
+	"cmp"
 	"embed"
 	"fmt"
 	"io/fs"
 	"path"
 	"slices"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -71,7 +71,7 @@ func Load() (*Registry, error) {
 		reg.byName[sk.Name] = sk
 		reg.skills = append(reg.skills, sk)
 	}
-	sort.Slice(reg.skills, func(i, j int) bool { return reg.skills[i].Name < reg.skills[j].Name })
+	slices.SortFunc(reg.skills, func(a, b Skill) int { return cmp.Compare(a.Name, b.Name) })
 	return reg, nil
 }
 
@@ -96,7 +96,7 @@ func parse(data []byte) (Skill, error) {
 }
 
 // List returns a copy of all skills, sorted by name.
-func (r *Registry) List() []Skill { return append([]Skill(nil), r.skills...) }
+func (r *Registry) List() []Skill { return slices.Clone(r.skills) }
 
 // Get returns the named skill.
 func (r *Registry) Get(name string) (Skill, bool) {

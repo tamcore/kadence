@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -16,7 +15,7 @@ const txNoopMissingConversation = "11111111-1111-1111-1111-111111111111"
 // changed nothing must never be told the call failed.
 func TestConversationDeleteMissingRowSucceeds(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 
@@ -34,7 +33,7 @@ func TestConversationDeleteMissingRowSucceeds(t *testing.T) {
 
 func TestPauseByConversationWithoutTaskSucceeds(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	tasks := store.NewScheduledTaskRepository(pool, 10)

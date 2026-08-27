@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/store/testutil"
@@ -12,7 +11,7 @@ func TestMigration00027MCPOAuthTables(t *testing.T) {
 		t.Skip("requires docker")
 	}
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, table := range []string{"mcp_oauth_tokens", "mcp_oauth_transactions"} {
 		var exists bool

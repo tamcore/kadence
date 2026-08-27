@@ -63,12 +63,9 @@ func BuildUploadCapabilities(extractors []Extractor, maxBytes int) UploadCapabil
 }
 
 func canAnyHandle(extractors []Extractor, mime string) bool {
-	for _, extractor := range extractors {
-		if extractor.CanHandle(mime) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(extractors, func(extractor Extractor) bool {
+		return extractor.CanHandle(mime)
+	})
 }
 
 // NormalizeUploadMIME maps absent or generic browser MIME values to the MIME

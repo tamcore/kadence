@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -17,7 +16,7 @@ import (
 
 func newUser(t *testing.T, repo *store.UserRepository, name string) model.User {
 	t.Helper()
-	u, err := repo.Create(context.Background(), model.User{
+	u, err := repo.Create(t.Context(), model.User{
 		Username: name, Email: name + "@x.io", PasswordHash: "h", Role: model.RoleUser,
 	})
 	if err != nil {
@@ -30,7 +29,7 @@ func TestSessionCreateGetDelete(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "alice")
 
 	s := model.Session{ID: "sess-abc", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)}
@@ -53,7 +52,7 @@ func TestSessionExpiredIsNotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "bob")
 
 	_ = sessions.Create(ctx, model.Session{ID: "old", UserID: u.ID, ExpiresAt: time.Now().Add(-time.Minute)})
@@ -66,7 +65,7 @@ func TestSessionDeleteAllByUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "carol")
 
 	_ = sessions.Create(ctx, model.Session{ID: "s1", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
@@ -83,7 +82,7 @@ func TestSessionDeleteOthersByUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "dave")
 	other := newUser(t, users, "erin")
 
@@ -114,7 +113,7 @@ func TestSessionDeleteExpired(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "heidi")
 
 	_ = sessions.Create(ctx, model.Session{ID: "live", UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
@@ -143,7 +142,7 @@ func TestSessionRepository_MetadataAndListRevokeTouch(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	repo := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	uid := newUser(t, users, "frank").ID
 	other := newUser(t, users, "grace").ID
 
@@ -198,7 +197,7 @@ func TestSessionCreateGetRoundTripsThroughHash(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "ivan")
 
 	const raw = "raw-session-token-abc123"
@@ -226,7 +225,7 @@ func TestSessionRawTokenNeverStored(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "judy")
 
 	const raw = "another-raw-session-token-xyz789"
@@ -242,7 +241,7 @@ func TestSessionRawTokenNeverStored(t *testing.T) {
 // stored id, while its sha256 hash is.
 func assertRawSessionIDAbsentButHashPresent(t *testing.T, pool *pgxpool.Pool, raw string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id = $1`, raw).Scan(&count); err != nil {
@@ -313,7 +312,7 @@ func TestListByUserReportsOnlyTheHashedID(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	sessions := store.NewSessionRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u := newUser(t, users, "karl")
 
 	const raw = "raw-token-for-list-by-user"

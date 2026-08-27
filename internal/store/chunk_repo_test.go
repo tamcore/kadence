@@ -32,7 +32,7 @@ func TestChunkSearchTopKOrdersByCosine(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 
 	_ = chunks.Insert(ctx, model.Chunk{UserID: &u.ID, Scope: model.ScopePrivate, SourceKind: model.ChunkSourceMessage, Content: "apples"}, vec1024(1, 0, 0))
@@ -52,7 +52,7 @@ func TestChunkScopedToUserPlusPublic(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	owner, _ := users.Create(ctx, model.User{Username: "o", Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 
@@ -70,7 +70,7 @@ func TestChunkCascadeOnConversationDelete(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	c, _ := convs.Create(ctx, u.ID, "chat")
 
@@ -89,7 +89,7 @@ func TestListContentForUserReturnsOwnAndPublicNotOthersPrivate(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	userA, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	userB, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 
@@ -116,7 +116,7 @@ func TestSearchContentForUserFiltersByContent(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	userA, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	userB, _ := users.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
 
@@ -136,7 +136,7 @@ func TestSearchContentForUserFiltersByContent(t *testing.T) {
 func TestChunkRepository_SearchTopK_FiltersByEmbeddingModel(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 
 	repo := store.NewChunkRepository(pool, "m1")
@@ -165,7 +165,7 @@ func TestChunkRepository_SearchTopK_FiltersByEmbeddingModel(t *testing.T) {
 func TestChunkRepository_AdoptAndStatusAndReembed(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	uid := u.ID
 
@@ -236,7 +236,7 @@ func TestChunkEmbeddingColumnPinnedTo1024Dims(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 
 	// A correctly-sized (1024-dim) insert succeeds and is searchable.
@@ -273,7 +273,7 @@ func TestChunkRepository_InsertBatch_WritesSameRowsAsIndividualInserts(t *testin
 	const wantChunkTwo = "chunk two"
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 
 	repo := store.NewChunkRepository(pool, "m1")
@@ -320,7 +320,7 @@ func TestChunkRepository_InsertBatch_WritesSameRowsAsIndividualInserts(t *testin
 func TestChunkRepository_InsertBatch_EmptyIsNoop(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewChunkRepository(pool, "m1")
-	if err := repo.InsertBatch(context.Background(), nil, nil); err != nil {
+	if err := repo.InsertBatch(t.Context(), nil, nil); err != nil {
 		t.Fatalf("InsertBatch with no chunks: %v", err)
 	}
 }
@@ -329,7 +329,7 @@ func TestChunkRepository_InsertBatch_RejectsMismatchedLengths(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewChunkRepository(pool, "m1")
 	chunks := []model.Chunk{{Scope: model.ScopePublic, SourceKind: model.ChunkSourceDocument, Content: "x"}}
-	if err := repo.InsertBatch(context.Background(), chunks, nil); err == nil {
+	if err := repo.InsertBatch(t.Context(), chunks, nil); err == nil {
 		t.Fatal("expected an error for a chunks/embeddings length mismatch")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func (f *handoffMessages) AddDefinition(_ context.Context, conversationID, role,
 	return m, nil
 }
 func (f *handoffMessages) ListRecentDefinitionByConversation(context.Context, string, int) ([]model.Message, error) {
-	return append([]model.Message(nil), f.messages...), nil
+	return slices.Clone(f.messages), nil
 }
 
 type handoffTasks struct {
@@ -187,7 +188,7 @@ func TestHandoffRequestBounds(t *testing.T) {
 			tc.mutate(&req)
 			handoffs, compiler := &handoffStore{fresh: true}, &handoffCompiler{}
 			svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: compiler, ChatHandoffs: handoffs})
-			artifact, err := svc.DraftFromChat(context.Background(), actor, req)
+			artifact, err := svc.DraftFromChat(t.Context(), actor, req)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("DraftFromChat succeeded")
@@ -322,7 +323,7 @@ func TestDraftFromChatReusesExistingAndPersistsSafeFailure(t *testing.T) {
 	t.Run("confirmed existing is reused without compiler", func(t *testing.T) {
 		handoffs, compiler := &handoffStore{row: handoffRow(1, model.ScheduledHandoffStateReady)}, &handoffCompiler{}
 		svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: compiler, ChatHandoffs: handoffs})
-		artifact, err := svc.DraftFromChat(context.Background(), actor, req)
+		artifact, err := svc.DraftFromChat(t.Context(), actor, req)
 		if err != nil || !artifact.Reused || compiler.calls != 0 {
 			t.Fatalf("artifact=%+v compiler=%d err=%v", artifact, compiler.calls, err)
 		}
@@ -344,7 +345,7 @@ func TestDraftFromChatReusesExistingAndPersistsSafeFailure(t *testing.T) {
 			var logs bytes.Buffer
 			handoffs, compiler := &handoffStore{fresh: true}, &handoffCompiler{err: tc.err}
 			svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: compiler, ChatHandoffs: handoffs, Log: slog.New(slog.NewTextHandler(&logs, nil))})
-			artifact, err := svc.DraftFromChat(context.Background(), actor, req)
+			artifact, err := svc.DraftFromChat(t.Context(), actor, req)
 			if err != nil || artifact.ArtifactState != model.ScheduledHandoffStateFailed || artifact.ErrorCode != tc.wantCode || artifact.Retryable != tc.wantRetry || handoffs.failedCalls != 1 || handoffs.failedCode != tc.wantCode || handoffs.failedRetry != tc.wantRetry {
 				t.Fatalf("artifact=%+v handoffs=%+v err=%v", artifact, handoffs, err)
 			}
@@ -366,7 +367,7 @@ func TestRefineUpdatesOnlyLinkedChatHandoffState(t *testing.T) {
 	tasks := &handoffTasks{task: model.ScheduledTask{ID: handoffTestTaskID, ConversationID: handoffDefinitionID, Version: 1, State: model.ScheduledTaskStateDraft, Timezone: handoffTestTimezoneBerlin}}
 	handoffs := &handoffStore{}
 	svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: tasks, Compiler: &handoffCompiler{}, ChatHandoffs: handoffs})
-	if _, err := svc.Refine(context.Background(), actor, handoffTestTaskID, "refine"); err != nil {
+	if _, err := svc.Refine(t.Context(), actor, handoffTestTaskID, "refine"); err != nil {
 		t.Fatal(err)
 	}
 	if handoffs.readyCalls != 1 || handoffs.failedCalls != 0 {
@@ -376,7 +377,7 @@ func TestRefineUpdatesOnlyLinkedChatHandoffState(t *testing.T) {
 	var logs bytes.Buffer
 	failing := &handoffStore{row: handoffRow(1, model.ScheduledHandoffStateCreating)}
 	svc = NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: tasks, Compiler: &handoffCompiler{err: errors.New("compiler detail")}, ChatHandoffs: failing, Log: slog.New(slog.NewTextHandler(&logs, nil))})
-	if _, err := svc.Refine(context.Background(), actor, handoffTestTaskID, "retry"); err == nil {
+	if _, err := svc.Refine(t.Context(), actor, handoffTestTaskID, "retry"); err == nil {
 		t.Fatal("compiler failure succeeded")
 	}
 	if failing.readyCalls != 0 || failing.failedCalls != 1 || failing.failedCode != "internal_error" || !failing.failedRetry {
@@ -395,7 +396,7 @@ func TestHydrateChatArtifactsGroupsAndSorts(t *testing.T) {
 	assistantID := int64(42)
 	first.Handoff.AssistantMessageID, second.Handoff.AssistantMessageID = &assistantID, &assistantID
 	svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: &handoffCompiler{}, ChatHandoffs: &handoffStore{list: []store.HydratedChatHandoff{first, second}}})
-	artifacts, err := svc.HydrateChatArtifacts(context.Background(), 7, handoffTestSourceChat, []int64{assistantID})
+	artifacts, err := svc.HydrateChatArtifacts(t.Context(), 7, handoffTestSourceChat, []int64{assistantID})
 	if err != nil || len(artifacts[assistantID]) != 2 || artifacts[assistantID][0].Ordinal != 1 || artifacts[assistantID][1].Ordinal != 2 {
 		t.Fatalf("artifacts=%+v err=%v", artifacts, err)
 	}
@@ -470,14 +471,14 @@ func TestConfirmSoleChatDraftRequiresExactlyOneReadyDraft(t *testing.T) {
 func TestDiscardChatDraftDelegatesOnlyToHandoffStore(t *testing.T) {
 	handoffs := &handoffStore{}
 	svc := NewService(ServiceDeps{Conversations: handoffConversations{}, Messages: &handoffMessages{}, Tasks: &handoffTasks{}, Compiler: &handoffCompiler{}, ChatHandoffs: handoffs})
-	if err := svc.DiscardChatDraft(context.Background(), 7, handoffTestTaskID); err != nil {
+	if err := svc.DiscardChatDraft(t.Context(), 7, handoffTestTaskID); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.CleanupChatDrafts(context.Background(), 7, []string{"handoff-1"}); err != nil {
+	if err := svc.CleanupChatDrafts(t.Context(), 7, []string{"handoff-1"}); err != nil {
 		t.Fatal(err)
 	}
 	handoffs.discardErr = store.ErrInvalidScheduledTaskState
-	if err := svc.DiscardChatDraft(context.Background(), 7, handoffTestTaskID); !errors.Is(err, ErrInvalidTransition) {
+	if err := svc.DiscardChatDraft(t.Context(), 7, handoffTestTaskID); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("confirmed discard err=%v, want ErrInvalidTransition", err)
 	}
 }

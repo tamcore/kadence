@@ -115,8 +115,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, id int64, username, ema
 		username, email, role, id)
 	u, err := scanUser(row)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 			if pgErr.ConstraintName == "users_username_key" {
 				return model.User{}, ErrUsernameTaken
 			}

@@ -16,7 +16,7 @@ func TestDocumentRepositoryListVisibleByIDsPreservesOrderAndIncludesMarkdown(t *
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	documents := store.NewDocumentRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "visible-doc-owner", Email: "visible-doc-owner@example.com",
@@ -59,7 +59,7 @@ func TestDocumentRepositoryListVisibleByIDsFailsClosedForInvisibleMissingAndDele
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	documents := store.NewDocumentRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "visible-doc-requester", Email: "visible-doc-requester@example.com",
@@ -116,7 +116,7 @@ func TestChunkRepositorySearchTopKByVisibleDocumentsBatchesAndLimitsPerDocument(
 	users := store.NewUserRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "current-model")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "explicit-chunk-owner", Email: "explicit-chunk-owner@example.com",

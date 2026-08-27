@@ -33,7 +33,7 @@ func TestAnalyzerDownloadsBridgeFileAndReturnsSummary(t *testing.T) {
 	defer bridge.Close()
 
 	a := NewAnalyzer("garmin__download_activity_fit", bridge.URL, "u", "p", 32<<20)
-	got, err := a.Analyze(context.Background(), fakeMCPCaller{result: `{"path":"/data/fit/activity.fit"}`}, 42)
+	got, err := a.Analyze(t.Context(), fakeMCPCaller{result: `{"path":"/data/fit/activity.fit"}`}, 42)
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
@@ -49,7 +49,7 @@ func TestAnalyzerClassifiesDecodeFailure(t *testing.T) {
 	defer bridge.Close()
 
 	a := NewAnalyzer("garmin__download_activity_fit", bridge.URL, "u", "p", 32<<20)
-	_, err := a.Analyze(context.Background(), fakeMCPCaller{result: `{"file_path":"/data/fit/activity.fit"}`}, 42)
+	_, err := a.Analyze(t.Context(), fakeMCPCaller{result: `{"file_path":"/data/fit/activity.fit"}`}, 42)
 	if err == nil {
 		t.Fatal("Analyze() error = nil, want decode error")
 	}

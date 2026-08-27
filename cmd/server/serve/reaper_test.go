@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func waitForCalls(t *testing.T, repo *fakeReaperRepo, n int) {
 
 func TestRunSessionReaperRunsImmediatelyThenTicks(t *testing.T) {
 	repo := &fakeReaperRepo{}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		runSessionReaper(ctx, repo, 5*time.Millisecond, slog.Default())
@@ -68,7 +69,7 @@ func TestRunSessionReaperRunsImmediatelyThenTicks(t *testing.T) {
 
 func TestRunSessionReaperLogsErrorAndKeepsRunning(t *testing.T) {
 	repo := &fakeReaperRepo{err: errors.New("boom")}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		runSessionReaper(ctx, repo, 5*time.Millisecond, slog.Default())
@@ -100,12 +101,12 @@ func (f *fakeMCPAuditReaper) DeleteBefore(_ context.Context, cutoff time.Time) (
 func (f *fakeMCPAuditReaper) snapshot() []time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]time.Time(nil), f.cutoffs...)
+	return slices.Clone(f.cutoffs)
 }
 
 func TestRunMCPAuditReaperRunsImmediatelyWithTTLThenTicks(t *testing.T) {
 	repo := &fakeMCPAuditReaper{}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	go func() {

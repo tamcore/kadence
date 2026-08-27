@@ -2,8 +2,8 @@ package store_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -16,7 +16,7 @@ func TestMessageRepositoryUpdateChatAttachmentExtractionsIsOwnedAndScoped(t *tes
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "lazy-extraction-owner", Email: "lazy-extraction-owner@example.com",
@@ -54,7 +54,7 @@ func TestMessageRepositoryUpdateChatAttachmentExtractionsIsOwnedAndScoped(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	extracted := append([]model.MessageAttachment(nil), userMessage.Attachments...)
+	extracted := slices.Clone(userMessage.Attachments)
 	extracted[0].ExtractedMarkdown = "# Lazily extracted"
 
 	_, err = messages.UpdateChatAttachmentExtractions(

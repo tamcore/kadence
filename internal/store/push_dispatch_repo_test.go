@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,7 +22,7 @@ type deliveredRunEnv struct {
 // push_dispatched_at NULL — i.e. exactly one row eligible to be claimed.
 func setupDeliveredScheduledRun(t *testing.T, pool *pgxpool.Pool) deliveredRunEnv {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-dispatch", "push-dispatch@example.com")
@@ -61,7 +60,7 @@ func setupDeliveredScheduledRun(t *testing.T, pool *pgxpool.Pool) deliveredRunEn
 
 func TestClaimUndispatchedDeliveriesIsExactlyOnce(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	setupDeliveredScheduledRun(t, pool)
 	repo := store.NewPushSubscriptionRepository(pool)
 
@@ -101,7 +100,7 @@ func TestClaimUndispatchedDeliveriesIsExactlyOnce(t *testing.T) {
 
 func TestClaimReturnsTaskTitleAndConversation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	env := setupDeliveredScheduledRun(t, pool)
 	repo := store.NewPushSubscriptionRepository(pool)
 

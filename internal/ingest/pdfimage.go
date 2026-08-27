@@ -2,11 +2,12 @@ package ingest
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"image/png"
 	"io"
 	"log/slog"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -251,7 +252,7 @@ func selectLargestPerPage(
 	for _, stub := range best {
 		out = append(out, stub)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].page < out[j].page })
+	slices.SortFunc(out, func(a, b imageStub) int { return cmp.Compare(a.page, b.page) })
 	return out
 }
 

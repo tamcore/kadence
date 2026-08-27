@@ -1,8 +1,10 @@
 package mcpintent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/tamcore/kadence/internal/provider"
 )
@@ -63,8 +65,8 @@ func cloneMessage(in provider.Message) provider.Message {
 	out.Images = make([]provider.ImageContent, len(in.Images))
 	for i, image := range in.Images {
 		out.Images[i] = image
-		out.Images[i].Data = append([]byte(nil), image.Data...)
+		out.Images[i].Data = bytes.Clone(image.Data)
 	}
-	out.ToolCalls = append([]provider.ToolCall(nil), in.ToolCalls...)
+	out.ToolCalls = slices.Clone(in.ToolCalls)
 	return out
 }

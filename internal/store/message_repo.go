@@ -301,8 +301,8 @@ func loadVisibleDocumentSnapshots(
 }
 
 func isDocumentReferenceForeignKeyViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) &&
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok &&
 		pgErr.Code == "23503" &&
 		pgErr.ConstraintName == "message_document_references_document_id_fkey"
 }

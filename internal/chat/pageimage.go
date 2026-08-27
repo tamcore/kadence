@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/tamcore/kadence/internal/ingest"
 	"github.com/tamcore/kadence/internal/model"
@@ -102,7 +103,7 @@ func derivePageImagesForAttachments(
 func stripDerivedImages(
 	messages []provider.Message, assembly turnContextAssembly,
 ) []provider.Message {
-	out := append([]provider.Message(nil), messages...)
+	out := slices.Clone(messages)
 	// The request is [system..., history..., current], so locate the current
 	// turn and the history block by walking back from the end.
 	current := len(out) - 1
@@ -126,7 +127,7 @@ func withoutTrailingImages(message provider.Message, count int) provider.Message
 		return message
 	}
 	keep := max(len(message.Images)-count, 0)
-	message.Images = append([]provider.ImageContent(nil), message.Images[:keep]...)
+	message.Images = slices.Clone(message.Images[:keep])
 	return message
 }
 
@@ -134,8 +135,8 @@ func withoutTrailingImages(message provider.Message, count int) provider.Message
 // input for a turn that produced no content and no scheduling handoff, the only
 // case where retrying without derived images is safe.
 func visionUnsupported(err error, turnState toolTurnState) bool {
-	var failure *providerStreamFailure
-	if !errors.As(err, &failure) {
+	failure, ok := errors.AsType[*providerStreamFailure](err)
+	if !ok {
 		return false
 	}
 	return failure.content == "" &&

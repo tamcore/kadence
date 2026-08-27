@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -20,7 +19,7 @@ func TestDocumentCreateListDeleteScoped(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: "a@x.io", PasswordHash: "h", Role: model.RoleUser})
 
 	priv, err := docs.Create(ctx, model.Document{OwnerUserID: &u.ID, Scope: model.ScopePrivate, Filename: testFilenamePriv, Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "private text"})
@@ -68,7 +67,7 @@ func TestDocumentDeleteNotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 	owner, _ := users.Create(ctx, model.User{Username: "docowner", Email: "docowner@x.io", PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: "docother", Email: "docother@x.io", PasswordHash: "h", Role: model.RoleUser})
 
@@ -110,7 +109,7 @@ func TestDocumentDeleteCascadesChunks(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	u, _ := users.Create(ctx, model.User{Username: "a", Email: "a@x.io", PasswordHash: "h", Role: model.RoleUser})
 	d, _ := docs.Create(ctx, model.Document{OwnerUserID: &u.ID, Scope: model.ScopePrivate, Filename: testFilenamePriv, Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "x"})
 
@@ -130,7 +129,7 @@ func TestPublicDocumentChunkOwnerlessRetrievable(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "m1")
-	ctx := context.Background()
+	ctx := t.Context()
 	reader, _ := users.Create(ctx, model.User{Username: "r", Email: "r@x.io", PasswordHash: "h", Role: model.RoleUser})
 	d, _ := docs.Create(ctx, model.Document{OwnerUserID: nil, Scope: model.ScopePublic, Filename: testFilenamePublic, Mime: testMimePDF, SourceType: model.DocSourcePDF, ExtractedMarkdown: "x"})
 

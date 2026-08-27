@@ -40,7 +40,7 @@ func (p *disconnectingProvider) StreamChatWithTools(
 // context, or the turn leaves a user message with no reply and nothing to
 // regenerate from.
 func TestStreamPersistsPartialAnswerAfterClientDisconnect(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	prov := &disconnectingProvider{cancel: cancel, partial: "Here is the first half"}
@@ -89,7 +89,7 @@ func TestScheduledDraftCleanupGetsLiveContextAfterSaveDeadlineExpires(t *testing
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
 		chat.Deps{Convs: convs, Msgs: msgs, Scheduled: handoff})
 
-	_ = svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername},
+	_ = svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "schedule it", &capturingSink{})
 
 	if len(handoff.cleanupContextErrors) == 0 {
@@ -114,7 +114,7 @@ func TestAssistantSaveContextIsBounded(t *testing.T) {
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername},
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, "hello", &capturingSink{}); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func (p *cancellingVerdictProvider) StreamChatWithTools(
 // request context would silently drop the reply.
 func TestAssistantSavesSurviveClientDisconnect(t *testing.T) {
 	t.Run("completed turn", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		// Cancels mid-stream but still returns successfully, so the turn
 		// completes normally and reaches the completed-turn save rather than
@@ -174,7 +174,7 @@ func TestAssistantSavesSurviveClientDisconnect(t *testing.T) {
 	})
 
 	t.Run("guardrail refusal", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		guard := chat.NewGuardrail(
 			&cancellingVerdictProvider{cancel: cancel, verdict: testGuardrailOffTopic},

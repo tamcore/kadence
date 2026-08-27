@@ -1,12 +1,13 @@
 package scheduled
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -60,13 +61,13 @@ type ChatArtifact struct {
 	Ordinal            int           `json:"ordinal"`
 	ArtifactState      string        `json:"artifactState"`
 	TaskState          string        `json:"taskState,omitempty"`
-	Version            int           `json:"version,omitempty"`
+	Version            int           `json:"version,omitzero"`
 	Question           *QuestionCard `json:"question,omitempty"`
 	Proposal           *Proposal     `json:"proposal,omitempty"`
 	NextRunAt          *time.Time    `json:"nextRunAt,omitempty"`
 	ErrorCode          string        `json:"errorCode,omitempty"`
-	Retryable          bool          `json:"retryable,omitempty"`
-	Reused             bool          `json:"reused,omitempty"`
+	Retryable          bool          `json:"retryable,omitzero"`
+	Reused             bool          `json:"reused,omitzero"`
 }
 
 // ChatConfirmationStatus describes deterministic natural-language
@@ -213,7 +214,7 @@ func (s *Service) HydrateChatArtifacts(ctx context.Context, userID int64, conver
 		out[*row.Handoff.AssistantMessageID] = append(out[*row.Handoff.AssistantMessageID], artifact)
 	}
 	for messageID := range out {
-		sort.SliceStable(out[messageID], func(i, j int) bool { return out[messageID][i].Ordinal < out[messageID][j].Ordinal })
+		slices.SortStableFunc(out[messageID], func(a, b ChatArtifact) int { return cmp.Compare(a.Ordinal, b.Ordinal) })
 	}
 	return out, nil
 }
@@ -394,7 +395,7 @@ func boundedToolNames(recent []model.Message, visible []provider.ToolDefinition)
 			names = append(names, call.Name)
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return truncateUTF8(strings.Join(names, "\n"), maxHandoffToolNamesBytes)
 }
 
@@ -403,7 +404,7 @@ func boundedVisibleToolNames(visible []provider.ToolDefinition) string {
 	for _, tool := range visible {
 		names = append(names, tool.Name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return truncateUTF8(strings.Join(names, "\n"), maxHandoffToolNamesBytes)
 }
 

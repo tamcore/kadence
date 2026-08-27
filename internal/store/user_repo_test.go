@@ -16,7 +16,7 @@ import (
 func TestUserRepositoryCreateAndGet(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	created, err := repo.Create(ctx, model.User{
 		Username: testAliceUsername, Email: "alice@example.com",
@@ -47,7 +47,7 @@ func TestUserRepositoryGetByUsernameNotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewUserRepository(pool)
 
-	_, err := repo.GetByUsername(context.Background(), "ghost")
+	_, err := repo.GetByUsername(t.Context(), "ghost")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -56,7 +56,7 @@ func TestUserRepositoryGetByUsernameNotFound(t *testing.T) {
 func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	a, err := repo.Create(ctx, model.User{Username: testAliceUsername, Email: "alice@x.io", PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestUserRepository_UpdateProfileAndPassword(t *testing.T) {
 func TestUserRepository_UpdateUserAndCountAdmins(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	a, err := repo.Create(ctx, model.User{Username: testAliceUsername, Email: "alice@x.io", PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -141,7 +141,7 @@ func TestUserRepository_UpdateUserAndCountAdmins(t *testing.T) {
 func TestUserRepositoryListDeleteCount(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := store.NewUserRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	a, _ := repo.Create(ctx, model.User{Username: "a", Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	_, _ = repo.Create(ctx, model.User{Username: "b", Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -165,7 +165,7 @@ func TestUserRepositoryListDeleteCount(t *testing.T) {
 
 func TestUserRepositoryDeleteCascadesScheduledAudit(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 
@@ -206,7 +206,7 @@ func TestUserRepositoryDeleteCascadesScheduledAudit(t *testing.T) {
 
 func TestScheduledTaskSoftDeleteRetainsAudit(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 

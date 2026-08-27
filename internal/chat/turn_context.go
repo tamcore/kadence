@@ -23,7 +23,7 @@ type TurnInput struct {
 }
 
 type untrustedContextItem struct {
-	ID       int64  `json:"id,omitempty"`
+	ID       int64  `json:"id,omitzero"`
 	Filename string `json:"filename"`
 	Content  string `json:"content"`
 }
@@ -156,7 +156,7 @@ func providerMessagesContainImages(messages []provider.Message) bool {
 }
 
 func minimumHistoricalMessages(history []model.Message) []model.Message {
-	minimum := append([]model.Message(nil), history...)
+	minimum := slices.Clone(history)
 	for i := range minimum {
 		if minimum[i].Role == model.MsgRoleUser && hasHistoricalPayload(minimum[i]) {
 			minimum[i].Content = historicalTextWithOmissionMarker(minimum[i].Content)
@@ -206,7 +206,7 @@ func (s *Service) loadHistoricalPayloads(
 		}
 	}
 
-	hydrated := append([]model.Message(nil), history...)
+	hydrated := slices.Clone(history)
 	for i := range hydrated {
 		if _, selected := cache.selected[hydrated[i].ID]; !selected {
 			continue
@@ -367,9 +367,7 @@ func buildHistoricalProviderMessages(
 	for i, message := range history {
 		out[i] = provider.Message{Role: message.Role, Content: message.Content}
 	}
-	if availableTokens < 0 {
-		availableTokens = 0
-	}
+	availableTokens = max(availableTokens, 0)
 	// Spend remaining history-payload budget from newest to oldest. Current
 	// turn evidence and every kept message's text/omission marker are already
 	// reserved before this function runs.
@@ -435,10 +433,8 @@ func fitCurrentTurnContext(
 	availableTokens int,
 ) (model.Message, []model.Document) {
 	fittedMessage := userMessage
-	fittedMessage.Attachments = append(
-		[]model.MessageAttachment(nil), userMessage.Attachments...,
-	)
-	fittedDocuments := append([]model.Document(nil), documents...)
+	fittedMessage.Attachments = slices.Clone(userMessage.Attachments)
+	fittedDocuments := slices.Clone(documents)
 
 	type fitItem struct {
 		attachment bool

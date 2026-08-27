@@ -31,7 +31,7 @@ func newOAuthRepo(t *testing.T) (*store.MCPOAuthRepo, *pgxpool.Pool, int64) {
 		t.Fatalf("NewCipher: %v", err)
 	}
 	var userID int64
-	if err := pool.QueryRow(context.Background(),
+	if err := pool.QueryRow(t.Context(),
 		`INSERT INTO users (username, email, password_hash)
 		 VALUES ('oauthrepo','oauthrepo@example.invalid','x') RETURNING id`).Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
@@ -55,7 +55,7 @@ func oauthTestLink(userID int64) store.MCPOAuthLink {
 
 func TestMCPOAuthUpsertAndGetRoundTripTokens(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	want := oauthTestLink(userID)
 
 	if err := repo.Upsert(ctx, want); err != nil {
@@ -78,14 +78,14 @@ func TestMCPOAuthUpsertAndGetRoundTripTokens(t *testing.T) {
 
 func TestMCPOAuthGetMissingLinkIsErrLinkNotFound(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	if _, err := repo.Get(context.Background(), userID, oauthTestServerID); !errors.Is(err, store.ErrLinkNotFound) {
+	if _, err := repo.Get(t.Context(), userID, oauthTestServerID); !errors.Is(err, store.ErrLinkNotFound) {
 		t.Fatalf("Get: %v, want ErrLinkNotFound", err)
 	}
 }
 
 func TestMCPOAuthSetStatusAndDelete(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestMCPOAuthSetStatusAndDelete(t *testing.T) {
 
 func TestMCPOAuthUpsertNeverLowersCASVersion(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestMCPOAuthUpsertNeverLowersCASVersion(t *testing.T) {
 
 func TestMCPOAuthRotateUnderLockSerializesTwoWorkers(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestMCPOAuthRotateUnderLockSerializesTwoWorkers(t *testing.T) {
 
 func TestMCPOAuthRotateUnderLockLeavesTokensOnRefreshFailure(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestMCPOAuthRotateUnderLockLeavesTokensOnRefreshFailure(t *testing.T) {
 
 func TestMCPOAuthRotateUnderLockMissingLink(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	if _, err := repo.RotateUnderLock(context.Background(), userID, oauthTestServerID,
+	if _, err := repo.RotateUnderLock(t.Context(), userID, oauthTestServerID,
 		func(context.Context, store.MCPOAuthLink) (store.MCPOAuthLink, error) {
 			t.Fatal("refresh ran for a link that does not exist")
 			return store.MCPOAuthLink{}, nil
@@ -268,7 +268,7 @@ func TestMCPOAuthRotateUnderLockMissingLink(t *testing.T) {
 
 func TestMCPOAuthConsumeTransactionIsSingleUseAndExpires(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	now := time.Now().UTC()
 
 	tx := store.MCPOAuthTransaction{
@@ -311,7 +311,7 @@ func TestMCPOAuthConsumeTransactionIsSingleUseAndExpires(t *testing.T) {
 
 func TestMCPOAuthConsumeTransactionRefusesAWrongBindingWithoutDeleting(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	now := time.Now().UTC()
 
 	tx := store.MCPOAuthTransaction{
@@ -348,7 +348,7 @@ func TestMCPOAuthConsumeTransactionRefusesAWrongBindingWithoutDeleting(t *testin
 
 func TestMCPOAuthSetStatusIfVersionRefusesAStaleCaller(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestMCPOAuthSetStatusIfVersionRefusesAStaleCaller(t *testing.T) {
 
 func TestMCPOAuthRotateUnderLockRefusesAnUnusableLink(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestMCPOAuthRotateUnderLockRefusesAnUnusableLink(t *testing.T) {
 
 func TestMCPOAuthTransactionBounds(t *testing.T) {
 	repo, _, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	now := time.Now().UTC()
 
 	mk := func(state string, expires time.Time) store.MCPOAuthTransaction {
@@ -446,7 +446,7 @@ func TestMCPOAuthTransactionBounds(t *testing.T) {
 
 func TestMCPOAuthStoredTokensAreContextBound(t *testing.T) {
 	repo, pool, userID := newOAuthRepo(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := repo.Upsert(ctx, oauthTestLink(userID)); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}

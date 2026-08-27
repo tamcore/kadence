@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func (f *fakeChatArtifactHydrator) HydrateChatArtifacts(
 ) (map[int64][]scheduled.ChatArtifact, error) {
 	f.calls++
 	f.owner, f.conversationID = owner, conversationID
-	f.messageIDs = append([]int64(nil), messageIDs...)
+	f.messageIDs = slices.Clone(messageIDs)
 	return f.artifacts, f.err
 }
 

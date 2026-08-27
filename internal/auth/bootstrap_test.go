@@ -30,7 +30,7 @@ func (r *bootRepo) Create(_ context.Context, u model.User) (model.User, error) {
 func TestBootstrapCreatesAdminWhenEmpty(t *testing.T) {
 	r := &bootRepo{count: 0}
 	cfg := config.Config{AdminUsername: testAdminUsername, AdminEmail: testAdminEmail, AdminPassword: testAdminPassword}
-	if err := auth.BootstrapAdmin(context.Background(), r, cfg); err != nil {
+	if err := auth.BootstrapAdmin(t.Context(), r, cfg); err != nil {
 		t.Fatalf("BootstrapAdmin: %v", err)
 	}
 	if r.created == nil || r.created.Role != model.RoleAdmin || r.created.Username != testAdminUsername {
@@ -44,7 +44,7 @@ func TestBootstrapCreatesAdminWhenEmpty(t *testing.T) {
 func TestBootstrapNoOpWhenUsersExist(t *testing.T) {
 	r := &bootRepo{count: 3}
 	cfg := config.Config{AdminUsername: testAdminUsername, AdminEmail: testAdminEmail, AdminPassword: testAdminPassword}
-	_ = auth.BootstrapAdmin(context.Background(), r, cfg)
+	_ = auth.BootstrapAdmin(t.Context(), r, cfg)
 	if r.created != nil {
 		t.Fatal("should not create admin when users already exist")
 	}
@@ -52,7 +52,7 @@ func TestBootstrapNoOpWhenUsersExist(t *testing.T) {
 
 func TestBootstrapNoOpWhenUnconfigured(t *testing.T) {
 	r := &bootRepo{count: 0}
-	_ = auth.BootstrapAdmin(context.Background(), r, config.Config{})
+	_ = auth.BootstrapAdmin(t.Context(), r, config.Config{})
 	if r.created != nil {
 		t.Fatal("should not create admin without env config")
 	}
@@ -61,7 +61,7 @@ func TestBootstrapNoOpWhenUnconfigured(t *testing.T) {
 func TestBootstrapFailsOnShortPasswordOnFirstBoot(t *testing.T) {
 	r := &bootRepo{count: 0}
 	cfg := config.Config{AdminUsername: testAdminUsername, AdminEmail: testAdminEmail, AdminPassword: "short7c"}
-	err := auth.BootstrapAdmin(context.Background(), r, cfg)
+	err := auth.BootstrapAdmin(t.Context(), r, cfg)
 	if err == nil {
 		t.Fatal("expected an error for a too-short KADENCE_ADMIN_PASSWORD, got nil")
 	}
@@ -77,7 +77,7 @@ func TestBootstrapFailsOnShortPasswordOnFirstBoot(t *testing.T) {
 func TestBootstrapIgnoresShortPasswordWhenAlreadyBootstrapped(t *testing.T) {
 	r := &bootRepo{count: 1}
 	cfg := config.Config{AdminUsername: testAdminUsername, AdminEmail: testAdminEmail, AdminPassword: "tenchars10"}
-	if err := auth.BootstrapAdmin(context.Background(), r, cfg); err != nil {
+	if err := auth.BootstrapAdmin(t.Context(), r, cfg); err != nil {
 		t.Fatalf("BootstrapAdmin on an already-bootstrapped install: %v", err)
 	}
 	if r.created != nil {

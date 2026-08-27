@@ -20,7 +20,7 @@ func TestStreamNewConversation(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -56,7 +56,7 @@ func TestStreamExistingConversation(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestEditRewindsAndGeneratesFromEditedPromptWithoutDuplicate(t *testing.T) {
 
 	sink := &capturingSink{}
 	if err := svc.Edit(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 3, "edited prompt", sink,
 	); err != nil {
 		t.Fatalf("Edit: %v", err)
@@ -122,7 +122,7 @@ func TestRegenerateRewindsAndReusesPromptWithoutDuplicate(t *testing.T) {
 
 	sink := &capturingSink{}
 	if err := svc.Regenerate(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername},
+		t.Context(), testUserID, chat.UserContext{Username: testUsername},
 		testConvID, 4, sink,
 	); err != nil {
 		t.Fatalf("Regenerate: %v", err)
@@ -177,7 +177,7 @@ func TestStreamConversationNotFound(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "missing-uuid", "hi coach", sink)
+	err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "missing-uuid", "hi coach", sink)
 	if err == nil || err.Error() != "conversation not found" {
 		t.Fatalf("expected 'conversation not found' error, got: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestStreamProviderError(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink)
+	err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink)
 	if err == nil || err.Error() != "the assistant could not complete the response" {
 		t.Fatalf("expected provider error, got: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestStreamProviderErrorCarriesPersistedPartialAssistant(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err == nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err == nil {
 		t.Fatal("Stream should fail after persisting the partial response")
 	}
 	last := sink.events[len(sink.events)-1]
@@ -248,7 +248,7 @@ func TestStreamProviderErrorOmitsAssistantIdentityWhenPartialIsStale(t *testing.
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err == nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err == nil {
 		t.Fatal("Stream should fail when the partial response is stale")
 	}
 	last := sink.events[len(sink.events)-1]
@@ -298,7 +298,7 @@ func TestStreamContinuesTruncatedAnswer(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -335,7 +335,7 @@ func TestStreamStopsContinuingAtCap(t *testing.T) {
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens, Temperature: testTemp, SystemPrompt: testSystemMsg},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	// initial call + maxContinuations (3) = 4, then it gives up.
@@ -382,7 +382,7 @@ func TestStreamAppliesTimeout(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 }
@@ -467,7 +467,7 @@ func TestTurnDeadlineDoesNotReplaceAssistantPersistenceContext(t *testing.T) {
 			)
 
 			err := svc.Stream(
-				context.Background(), testUserID,
+				t.Context(), testUserID,
 				chat.UserContext{Username: testUsername},
 				testConvID, "persist this", &capturingSink{},
 			)

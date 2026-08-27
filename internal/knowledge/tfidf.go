@@ -3,8 +3,9 @@
 package knowledge
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -85,14 +86,14 @@ func TopTerms(chunks []string, n int) []Term {
 		terms = append(terms, Term{Term: term, Weight: float64(count) * idf, Count: count})
 	}
 
-	sort.Slice(terms, func(i, j int) bool {
-		if terms[i].Weight != terms[j].Weight {
-			return terms[i].Weight > terms[j].Weight
+	slices.SortFunc(terms, func(a, b Term) int {
+		if c := cmp.Compare(b.Weight, a.Weight); c != 0 {
+			return c
 		}
-		if terms[i].Count != terms[j].Count {
-			return terms[i].Count > terms[j].Count
+		if c := cmp.Compare(b.Count, a.Count); c != 0 {
+			return c
 		}
-		return terms[i].Term < terms[j].Term
+		return cmp.Compare(a.Term, b.Term)
 	})
 
 	if len(terms) > n {

@@ -24,7 +24,7 @@ func TestStreamGuardrailRefusesOffTopic(t *testing.T) {
 	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 1, chat.UserContext{Username: testUsername}, "", "what's the stock market doing?", sink); err != nil {
+	if err := svc.Stream(t.Context(), 1, chat.UserContext{Username: testUsername}, "", "what's the stock market doing?", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if mainP.called {
@@ -59,7 +59,7 @@ func TestStreamGuardrailFailsOpen(t *testing.T) {
 	})
 	svc := chat.NewService(mainP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard})
 
-	if err := svc.Stream(context.Background(), 1, chat.UserContext{Username: testUsername}, "", "how many rest days?", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), 1, chat.UserContext{Username: testUsername}, "", "how many rest days?", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if !mainP.called {
@@ -86,7 +86,7 @@ func TestStreamGuardrailRefusalSkipsEmbedding(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, Guardrail: guard, RAG: rag})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 1, chat.UserContext{Username: testUsername}, "", "what's the stock market doing?", sink); err != nil {
+	if err := svc.Stream(t.Context(), 1, chat.UserContext{Username: testUsername}, "", "what's the stock market doing?", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if mainP.called {
@@ -123,7 +123,7 @@ func TestStreamSystemPromptIncludesTodaysDate(t *testing.T) {
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, Now: func() time.Time { return fixed }},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
-	if err := svc.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "what's my next workout", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "what's my next workout", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func systemPromptFrom(t *testing.T, uc chat.UserContext) string {
 	captP := &capturingProvider{reply: "ok"}
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs})
-	if err := svc.Stream(context.Background(), 7, uc, "", "hi", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), 7, uc, "", "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	for _, m := range captP.gotMessages {
@@ -216,7 +216,7 @@ func TestStreamSystemPromptOmitsHintLineWhenNoneSet(t *testing.T) {
 	mcpTools := &fakeMCPTools{enabled: true}
 	svcWithMCP := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcpTools})
-	if err := svcWithMCP.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "hi", &capturingSink{}); err != nil {
+	if err := svcWithMCP.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var sysWithMCP string
@@ -232,7 +232,7 @@ func TestStreamSystemPromptOmitsHintLineWhenNoneSet(t *testing.T) {
 	captP2 := &capturingProvider{reply: "ok"}
 	svcNoMCP := chat.NewService(captP2, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: &fakeConvs{byID: map[string]model.Conversation{}}, Msgs: &fakeMsgs{}})
-	if err := svcNoMCP.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "hi", &capturingSink{}); err != nil {
+	if err := svcNoMCP.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "hi", &capturingSink{}); err != nil {
 		t.Fatalf("Stream (no MCP): %v", err)
 	}
 	var sysNoMCP string
@@ -254,7 +254,7 @@ func TestStreamInjectsRAGContextAndStores(t *testing.T) {
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs, RAG: rag})
 
-	if err := svc.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "plan my week", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "plan my week", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var hasNote bool
@@ -298,7 +298,7 @@ func TestStreamBoundsHistoryToContextBudget(t *testing.T) {
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, SystemPrompt: "sp", ContextBudgetTokens: 660},
 		chat.Deps{Convs: convs, Msgs: msgs})
 
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "new question", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "new question", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -335,7 +335,7 @@ func TestStreamSmallHistoryUntouchedByBudget(t *testing.T) {
 	captP := &capturingProvider{reply: "ok"}
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32}, chat.Deps{Convs: convs, Msgs: msgs})
 
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "how are you", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "how are you", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 

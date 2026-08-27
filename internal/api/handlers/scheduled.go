@@ -13,8 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"uuid"
+
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/model"
@@ -258,18 +259,15 @@ func beginScheduledStream(w http.ResponseWriter, cancel context.CancelFunc) (*sc
 			}
 		}
 	}()
-	var once sync.Once
-	return stream, func() {
-		once.Do(func() {
-			close(done)
-			<-stopped
-			stream.mu.Lock()
-			defer stream.mu.Unlock()
-			if stream.err == nil {
-				_ = stream.failLocked(stream.rc.Flush())
-			}
-		})
-	}
+	return stream, sync.OnceFunc(func() {
+		close(done)
+		<-stopped
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		if stream.err == nil {
+			_ = stream.failLocked(stream.rc.Flush())
+		}
+	})
 }
 
 func (s *scheduledSSE) event(event any) error {

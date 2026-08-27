@@ -90,7 +90,7 @@ func (f *fakeStore) FinishExtraction(_ context.Context, id int64, markdown, stat
 // exit via context cancellation.
 func runDrained(t *testing.T, store *fakeStore, describe DescribeFunc, reindex ReindexFunc, opts ingest.PageImageOptions) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	store.drained = cancel
 	Run(ctx, store, describe, reindex, opts, slog.Default())
@@ -197,7 +197,7 @@ func TestRunDrainsUntilNoDocumentsRemain(t *testing.T) {
 
 func TestRunStopsOnCancelledContext(t *testing.T) {
 	// Arrange
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	store := newFakeStore([]model.Document{{ID: 11, RawBytes: fixtureBytes(t)}})
 

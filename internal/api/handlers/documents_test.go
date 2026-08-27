@@ -452,7 +452,7 @@ func TestCapabilitiesReturnsEffectiveUploadProfile(t *testing.T) {
 func TestListReturnsUploadedDoc(t *testing.T) {
 	h, docs := newDocumentsHandler(t, 10<<20)
 	uid := sampleUserID
-	if _, err := docs.Create(context.Background(), model.Document{OwnerUserID: &uid, Scope: model.ScopePrivate, Filename: "a.pdf"}); err != nil {
+	if _, err := docs.Create(t.Context(), model.Document{OwnerUserID: &uid, Scope: model.ScopePrivate, Filename: "a.pdf"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -468,7 +468,7 @@ func TestListReturnsUploadedDoc(t *testing.T) {
 func TestDeleteSuccess(t *testing.T) {
 	h, docs := newDocumentsHandler(t, 10<<20)
 	uid := sampleUserID
-	created, err := docs.Create(context.Background(), model.Document{OwnerUserID: &uid, Scope: model.ScopePrivate, Filename: "a.pdf"})
+	created, err := docs.Create(t.Context(), model.Document{OwnerUserID: &uid, Scope: model.ScopePrivate, Filename: "a.pdf"})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestDeleteNotFoundForNonexistentID(t *testing.T) {
 func TestDeleteNotFoundForAnotherUsersDocument(t *testing.T) {
 	h, docs := newDocumentsHandler(t, 10<<20)
 	otherOwnerID := int64(99)
-	created, err := docs.Create(context.Background(), model.Document{OwnerUserID: &otherOwnerID, Scope: model.ScopePrivate, Filename: "other-owner.pdf"})
+	created, err := docs.Create(t.Context(), model.Document{OwnerUserID: &otherOwnerID, Scope: model.ScopePrivate, Filename: "other-owner.pdf"})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}

@@ -144,7 +144,7 @@ func TestStartThenCompleteLinksTheAccount(t *testing.T) {
 		paramScope: testScope,
 	})
 	svc, st := newTestService(t, ts, fixedNow(now))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	authorizeURL, state, browserToken, err := svc.Start(ctx, testUserID, testServerID)
 	if err != nil {
@@ -174,7 +174,7 @@ func TestStartThenCompleteLinksTheAccount(t *testing.T) {
 
 func TestCompleteRefusesEveryMismatch(t *testing.T) {
 	now := time.Now().UTC()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for name, mangle := range map[string]func(state, token string) (int64, string, string){
 		"unknown state":  func(_, token string) (int64, string, string) { return testUserID, "never-issued", token },
@@ -211,7 +211,7 @@ func TestCompleteIsSingleUse(t *testing.T) {
 		fieldAccessToken: "at", fieldExpiresIn: 900, paramRefreshToken: "rt",
 	})
 	svc, _ := newTestService(t, ts, fixedNow(now))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, state, browserToken, err := svc.Start(ctx, testUserID, testServerID)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestStartBoundsConcurrentTransactions(t *testing.T) {
 	now := time.Now().UTC()
 	ts := newTokenServer(t, http.StatusOK, nil)
 	svc, _ := newTestService(t, ts, fixedNow(now))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for i := range maxOpenTransactions {
 		if _, _, _, err := svc.Start(ctx, testUserID, testServerID); err != nil {
@@ -248,7 +248,7 @@ func TestTokenForUsesAValidTokenWithoutRefreshing(t *testing.T) {
 	st.link = linkedAt(now, 10*time.Minute)
 	st.link.AccessToken = "at-live"
 
-	got, err := svc.TokenFor(context.Background(), testUserID, testServerID)
+	got, err := svc.TokenFor(t.Context(), testUserID, testServerID)
 	if err != nil {
 		t.Fatalf("TokenFor: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestTokenForRefreshesWhenTheTokenIsAboutToExpire(t *testing.T) {
 	svc, st := newTestService(t, ts, fixedNow(now))
 	st.link = linkedAt(now, 30*time.Second)
 
-	got, err := svc.TokenFor(context.Background(), testUserID, testServerID)
+	got, err := svc.TokenFor(t.Context(), testUserID, testServerID)
 	if err != nil {
 		t.Fatalf("TokenFor: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestTokenForCondemnsTheLinkOnADeadFamily(t *testing.T) {
 	svc, st := newTestService(t, ts, fixedNow(now))
 	st.link = linkedAt(now, 10*time.Second)
 
-	if _, err := svc.TokenFor(context.Background(), testUserID, testServerID); !errors.Is(err, ErrReauthRequired) {
+	if _, err := svc.TokenFor(t.Context(), testUserID, testServerID); !errors.Is(err, ErrReauthRequired) {
 		t.Fatalf("TokenFor: %v, want ErrReauthRequired", err)
 	}
 	if st.link.Status != store.LinkStatusReauthRequired {
@@ -294,7 +294,7 @@ func TestTokenForCondemnsTheLinkOnADeadFamily(t *testing.T) {
 	}
 
 	before := ts.calls
-	if _, err := svc.TokenFor(context.Background(), testUserID, testServerID); !errors.Is(err, ErrReauthRequired) {
+	if _, err := svc.TokenFor(t.Context(), testUserID, testServerID); !errors.Is(err, ErrReauthRequired) {
 		t.Fatalf("second TokenFor: %v, want ErrReauthRequired", err)
 	}
 	if ts.calls != before {
@@ -308,7 +308,7 @@ func TestTokenForKeepsTheLinkOnAServerFault(t *testing.T) {
 	svc, st := newTestService(t, ts, fixedNow(now))
 	st.link = linkedAt(now, 10*time.Second)
 
-	_, err := svc.TokenFor(context.Background(), testUserID, testServerID)
+	_, err := svc.TokenFor(t.Context(), testUserID, testServerID)
 	if err == nil {
 		t.Fatal("TokenFor accepted a 500")
 	}
@@ -324,7 +324,7 @@ func TestTokenForReportsAnUnlinkedUser(t *testing.T) {
 	ts := newTokenServer(t, http.StatusOK, nil)
 	svc, _ := newTestService(t, ts, fixedNow(time.Now().UTC()))
 
-	if _, err := svc.TokenFor(context.Background(), testUserID, testServerID); !errors.Is(err, ErrNotLinked) {
+	if _, err := svc.TokenFor(t.Context(), testUserID, testServerID); !errors.Is(err, ErrNotLinked) {
 		t.Fatalf("TokenFor: %v, want ErrNotLinked", err)
 	}
 }
@@ -335,7 +335,7 @@ func TestUnlinkRevokesThenDeletes(t *testing.T) {
 	svc, st := newTestService(t, ts, fixedNow(now))
 	st.link = linkedAt(now, 10*time.Minute)
 
-	if err := svc.Unlink(context.Background(), testUserID, testServerID); err != nil {
+	if err := svc.Unlink(t.Context(), testUserID, testServerID); err != nil {
 		t.Fatalf("Unlink: %v", err)
 	}
 	if ts.calls == 0 {
@@ -352,7 +352,7 @@ func TestUnlinkStillDeletesWhenRevocationFails(t *testing.T) {
 	svc, st := newTestService(t, ts, fixedNow(now))
 	st.link = linkedAt(now, 10*time.Minute)
 
-	if err := svc.Unlink(context.Background(), testUserID, testServerID); err != nil {
+	if err := svc.Unlink(t.Context(), testUserID, testServerID); err != nil {
 		t.Fatalf("Unlink reported an error the user cannot act on: %v", err)
 	}
 	if st.link != nil {
@@ -366,7 +366,7 @@ func TestIntegrationsReportsAScopeShortfall(t *testing.T) {
 	st := newFakeLinkStore()
 	svc := NewService(st, map[string]*Client{testServerID: clientFor(ts, "")},
 		testRedirect, map[string][]string{testServerID: {testScope, testWriteScope}}, fixedNow(now))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// The deployment now asks for the write tier; this grant carries read only.
 	st.link = linkedAt(now, 10*time.Minute)
@@ -396,7 +396,7 @@ func TestIntegrationsReportsNoShortfallForAnUnlinkedServer(t *testing.T) {
 	svc := NewService(st, map[string]*Client{testServerID: clientFor(ts, "")},
 		testRedirect, map[string][]string{testServerID: {testScope, testWriteScope}}, fixedNow(now))
 
-	states, err := svc.Integrations(context.Background(), testUserID)
+	states, err := svc.Integrations(t.Context(), testUserID)
 	if err != nil {
 		t.Fatalf("Integrations: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestIntegrationsReportsEveryConfiguredServer(t *testing.T) {
 	ts := newTokenServer(t, http.StatusOK, nil)
 	svc, st := newTestService(t, ts, fixedNow(now))
 
-	states, err := svc.Integrations(context.Background(), testUserID)
+	states, err := svc.Integrations(t.Context(), testUserID)
 	if err != nil {
 		t.Fatalf("Integrations: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestIntegrationsReportsEveryConfiguredServer(t *testing.T) {
 	}
 
 	st.link = linkedAt(now, 10*time.Minute)
-	states, err = svc.Integrations(context.Background(), testUserID)
+	states, err = svc.Integrations(t.Context(), testUserID)
 	if err != nil {
 		t.Fatalf("Integrations: %v", err)
 	}

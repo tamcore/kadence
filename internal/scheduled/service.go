@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/tamcore/kadence/internal/model"
 	"github.com/tamcore/kadence/internal/provider"
@@ -448,7 +449,7 @@ func (s *Service) RunNow(ctx context.Context, userID int64, taskID string) (mode
 		return model.ScheduledTaskRun{}, err
 	}
 	now := s.deps.Now().UTC()
-	run, err := s.deps.Tasks.RunNow(ctx, userID, taskID, "manual:"+uuid.NewString(), now)
+	run, err := s.deps.Tasks.RunNow(ctx, userID, taskID, "manual:"+uuid.New().String(), now)
 	switch {
 	case errors.Is(err, store.ErrInvalidScheduledTaskState):
 		return model.ScheduledTaskRun{}, ErrInvalidTransition
@@ -502,7 +503,7 @@ func draftTask(actor Actor, conversationID string) model.ScheduledTask {
 func applyProposal(task model.ScheduledTask, proposal Proposal) model.ScheduledTask {
 	task.Version, task.Name, task.Kind, task.CompiledPrompt = proposal.Version, proposal.Name, string(proposal.TaskKind), proposal.CompiledPrompt
 	task.OneOffAt, task.DTStart, task.RRULE, task.Timezone = optionalTime(proposal.Schedule.At), optionalTime(proposal.Schedule.DTStart), proposal.Schedule.RRULE, proposal.Timezone
-	task.ExecutionMode, task.AuthorizedTools = string(proposal.ExecutionMode), append([]string(nil), proposal.AuthorizedTools...)
+	task.ExecutionMode, task.AuthorizedTools = string(proposal.ExecutionMode), slices.Clone(proposal.AuthorizedTools)
 	task.DeliveryPolicy, task.InitialRun, task.StopCondition, task.StaticMessage = string(proposal.DeliveryPolicy), string(proposal.InitialRun), proposal.StopCondition, proposal.StaticMessage
 	return task
 }

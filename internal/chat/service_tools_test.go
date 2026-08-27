@@ -26,7 +26,7 @@ func TestStreamDoneCarriesCanonicalAssistantContentAfterToolLoop(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	last := sink.events[len(sink.events)-1]
@@ -44,7 +44,7 @@ func TestStreamSystemPromptIncludesMCPHintWhenSet(t *testing.T) {
 	svc := chat.NewService(captP, chat.ServiceConfig{Model: "m", MaxTokens: 32},
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcpTools})
 
-	if err := svc.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "what's the weather", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "what's the weather", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var sys string
@@ -68,7 +68,7 @@ func TestStreamPersistsToolCallsOnAssistantMessage(t *testing.T) {
 	mcp := &fakeMCPTools{enabled: true, tools: []provider.ToolDefinition{{Name: testToolName}}, callResult: testToolReply}
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "what's the weather", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "what's the weather", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestStreamAuditsRemoteMCPCallWithChatAndModel(t *testing.T) {
 		Convs: convs, Msgs: msgs, MCP: mcp, Audit: recorder,
 	})
 
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "audit this", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "audit this", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestStreamToolCallUsesExternalDeadlineWithoutShorteningDurableAuditContext(
 	)
 
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"call the tool", &capturingSink{},
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -193,7 +193,7 @@ func TestStreamToolDiscoveryUsesExternalDeadline(t *testing.T) {
 	)
 
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"discover tools", &capturingSink{},
 	); err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -342,7 +342,7 @@ func TestStreamRunsToolCallThenFinishes(t *testing.T) {
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "what's the weather", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "what's the weather", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -414,7 +414,7 @@ func TestStreamToolCallErrorBecomesToolResult(t *testing.T) {
 	svc := chat.NewService(prov, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "what's the weather", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "what's the weather", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -451,7 +451,7 @@ func TestStreamMCPNilBehavesUnchanged(t *testing.T) {
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	for _, e := range sink.events {
@@ -469,7 +469,7 @@ func TestStreamMCPDisabledBehavesUnchanged(t *testing.T) {
 		chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "hi coach", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	for _, e := range sink.events {
@@ -522,7 +522,7 @@ func TestStreamCapsInjectedMCPTools(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "what's my schedule", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "what's my schedule", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -540,7 +540,7 @@ func TestStreamSmallToolSetPassesThroughUncapped(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "what's my schedule", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "what's my schedule", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -570,7 +570,7 @@ func TestStreamMaxIterationsStopsInfiniteToolLoop(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", "loop forever", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", "loop forever", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	// maxIter rounds of tool calls, plus one forced tool-free final call once
@@ -647,7 +647,7 @@ func TestToolLoopForcesFinalAnswerOnCapExhaustion(t *testing.T) {
 		chat.Deps{Convs: convs, Msgs: msgs, MCP: mcp})
 
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), 7, chat.UserContext{Username: testUsername}, "", "do it", sink); err != nil {
+	if err := svc.Stream(t.Context(), 7, chat.UserContext{Username: testUsername}, "", "do it", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	var lastAsst string

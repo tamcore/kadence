@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"context"
 	"errors"
 	"os"
 	"strings"
@@ -67,7 +66,7 @@ func TestPDFExtractorExtractsText(t *testing.T) {
 	if err != nil {
 		t.Skipf("no sample.pdf fixture: %v", err)
 	}
-	res, err := NewPDFExtractor().Extract(context.Background(), data, pdfMimeType)
+	res, err := NewPDFExtractor().Extract(t.Context(), data, pdfMimeType)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}

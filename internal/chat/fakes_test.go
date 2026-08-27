@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -179,7 +180,7 @@ func (f *fakeMsgs) AddChatUserInput(
 	_ context.Context, convID string, _ int64, input model.ChatUserInput,
 ) (model.Message, error) {
 	f.lastInput = input
-	attachments := append([]model.MessageAttachment(nil), input.Attachments...)
+	attachments := slices.Clone(input.Attachments)
 	for i := range attachments {
 		attachments[i].ID = int64(i + 1)
 		attachments[i].MessageID = int64(len(f.added) + 1)
@@ -244,8 +245,8 @@ func (f *fakeMsgs) AddChatAssistantIfLatestUser(
 	}
 	f.assistantSaveDeadlineIn = append(f.assistantSaveDeadlineIn, remaining)
 	f.assistantSaveContextErrors = append(f.assistantSaveContextErrors, ctx.Err())
-	f.assistantHandoffIDs = append([]string(nil), handoffIDs...)
-	f.assistantHandoffTraces = append(f.assistantHandoffTraces, append([]string(nil), handoffIDs...))
+	f.assistantHandoffIDs = slices.Clone(handoffIDs)
+	f.assistantHandoffTraces = append(f.assistantHandoffTraces, slices.Clone(handoffIDs))
 	if f.assistantSaveExhaustsDeadline {
 		if deadline, ok := ctx.Deadline(); ok {
 			<-time.After(time.Until(deadline))
@@ -295,7 +296,7 @@ func (f *fakeScheduledHandoff) DraftFromChat(
 }
 
 func (f *fakeScheduledHandoff) CleanupChatDrafts(ctx context.Context, _ int64, ids []string) error {
-	f.cleanup = append(f.cleanup, append([]string(nil), ids...))
+	f.cleanup = append(f.cleanup, slices.Clone(ids))
 	f.cleanupContextErrors = append(f.cleanupContextErrors, ctx.Err())
 	return nil
 }
@@ -313,18 +314,14 @@ func (f *fakeMsgs) ListChatHistory(_ context.Context, _ string) ([]model.Message
 	if f.historyErr != nil {
 		return nil, f.historyErr
 	}
-	history := append([]model.Message(nil), f.added...)
+	history := slices.Clone(f.added)
 	for i := range history {
-		history[i].Attachments = append(
-			[]model.MessageAttachment(nil), history[i].Attachments...,
-		)
+		history[i].Attachments = slices.Clone(history[i].Attachments)
 		for j := range history[i].Attachments {
 			history[i].Attachments[j].RawBytes = nil
 			history[i].Attachments[j].ExtractedMarkdown = ""
 		}
-		history[i].DocumentReferences = append(
-			[]model.MessageDocumentReference(nil), history[i].DocumentReferences...,
-		)
+		history[i].DocumentReferences = slices.Clone(history[i].DocumentReferences)
 	}
 	return history, nil
 }
@@ -342,7 +339,7 @@ func (f *fakeMsgs) loadChatAttachmentPayloads(
 	messageIDs []int64,
 ) (map[int64][]model.MessageAttachment, error) {
 	f.payloadRequests = append(
-		f.payloadRequests, append([]int64(nil), messageIDs...),
+		f.payloadRequests, slices.Clone(messageIDs),
 	)
 	if f.payloadErr != nil {
 		return nil, f.payloadErr
@@ -356,9 +353,7 @@ func (f *fakeMsgs) loadChatAttachmentPayloads(
 		if !requested[message.ID] {
 			continue
 		}
-		payloads[message.ID] = append(
-			[]model.MessageAttachment(nil), message.Attachments...,
-		)
+		payloads[message.ID] = slices.Clone(message.Attachments)
 	}
 	return payloads, nil
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -275,7 +274,7 @@ func TestChatSchedulingToolScript_OpenAICompat(t *testing.T) {
 	ts := httptest.NewServer(handler())
 	defer ts.Close()
 	p := provider.NewOpenAICompat(ts.URL+"/v1", "stub")
-	res, err := p.StreamChatWithTools(context.Background(), provider.ChatRequest{
+	res, err := p.StreamChatWithTools(t.Context(), provider.ChatRequest{
 		Model:    stubModelName,
 		Messages: []provider.Message{{Role: messageRoleUser, Content: scheduleWeatherPrompt}},
 		Tools:    []provider.ToolDefinition{{Name: "kadence__draft_future_unattended_task"}},
@@ -302,14 +301,14 @@ func TestBrowserMCPFixtureListsAndCallsDeterministicTools(t *testing.T) {
 	reg := mcp.NewRegistry([]mcp.Server{{
 		Name: "BROWSER", Scope: "GLOBAL", URL: ts.URL + "/mcp", Transport: "streamable-http",
 	}}, nil, nil)
-	tools, err := reg.ToolsFor(context.Background(), "admin")
+	tools, err := reg.ToolsFor(t.Context(), "admin")
 	if err != nil {
 		t.Fatalf("ToolsFor: %v", err)
 	}
 	if len(tools) != 2 || tools[0].Name != browserNavigateTool || tools[1].Name != browserSnapshotTool {
 		t.Fatalf("tools = %+v", tools)
 	}
-	result, err := reg.Call(context.Background(), "admin", browserNavigateTool, `{"url":"https://weather.example.test"}`)
+	result, err := reg.Call(t.Context(), "admin", browserNavigateTool, `{"url":"https://weather.example.test"}`)
 	if err != nil || !strings.Contains(result, "race weather fixture") {
 		t.Fatalf("navigate result = %q, err=%v", result, err)
 	}

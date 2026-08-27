@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -103,7 +102,7 @@ func TestOpenAICompatStreamChat(t *testing.T) {
 	p := NewOpenAICompat(srv.URL, "test-key")
 
 	var deltas []string
-	full, err := p.StreamChat(context.Background(), ChatRequest{
+	full, err := p.StreamChat(t.Context(), ChatRequest{
 		Messages:    []Message{{Role: testRole, Content: "hi"}},
 		Model:       testModel,
 		MaxTokens:   64,
@@ -147,7 +146,7 @@ func TestOpenAICompatStreamChat_UserImagesUseOrderedContentParts(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAICompat(srv.URL, "test-key")
-	_, err := p.StreamChat(context.Background(), ChatRequest{
+	_, err := p.StreamChat(t.Context(), ChatRequest{
 		Messages: []Message{{
 			Role:    testRole,
 			Content: "describe these",
@@ -212,7 +211,7 @@ func TestOpenAICompatStreamChat_UserImageWithoutTextOmitsTextPart(t *testing.T) 
 	defer srv.Close()
 
 	p := NewOpenAICompat(srv.URL, "test-key")
-	_, err := p.StreamChat(context.Background(), ChatRequest{
+	_, err := p.StreamChat(t.Context(), ChatRequest{
 		Messages: []Message{{
 			Role:   testRole,
 			Images: []ImageContent{{MIMEType: "image/webp", Data: []byte{1}}},
@@ -270,7 +269,7 @@ func TestOpenAICompatMapsConservativeVisionCapabilityErrors(t *testing.T) {
 			defer server.Close()
 
 			_, err := NewOpenAICompat(server.URL, "test-key").StreamChatWithTools(
-				context.Background(),
+				t.Context(),
 				ChatRequest{
 					Model: testModel,
 					Messages: []Message{{
@@ -320,7 +319,7 @@ func TestOpenAICompatDoesNotMislabelOtherErrorsAsVisionUnsupported(t *testing.T)
 			defer server.Close()
 
 			_, err := NewOpenAICompat(server.URL, "test-key").StreamChatWithTools(
-				context.Background(),
+				t.Context(),
 				ChatRequest{
 					Model: testModel,
 					Messages: []Message{{
@@ -354,7 +353,7 @@ func TestOpenAICompatStreamChatWithTools_ContentOnly(t *testing.T) {
 	p := NewOpenAICompat(srv.URL, "test-key")
 
 	var deltas []string
-	res, err := p.StreamChatWithTools(context.Background(), ChatRequest{
+	res, err := p.StreamChatWithTools(t.Context(), ChatRequest{
 		Messages:    []Message{{Role: testRole, Content: "hi"}},
 		Model:       testModel,
 		MaxTokens:   64,
@@ -398,7 +397,7 @@ func TestOpenAICompatStreamChatWithTools_ToolCall(t *testing.T) {
 	}
 
 	var tokens int
-	res, err := p.StreamChatWithTools(context.Background(), ChatRequest{
+	res, err := p.StreamChatWithTools(t.Context(), ChatRequest{
 		Messages: []Message{{Role: testRole, Content: "show me my activities"}},
 		Model:    testModel,
 		Tools: []ToolDefinition{

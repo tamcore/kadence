@@ -204,7 +204,7 @@ func TestAttachmentProcessorExtractDocumentsUsesFirstEffectiveExtractorOnce(t *t
 		t.Fatalf("prepared document = %+v", prepared)
 	}
 
-	extracted, err := processor.ExtractDocuments(context.Background(), prepared)
+	extracted, err := processor.ExtractDocuments(t.Context(), prepared)
 	if err != nil {
 		t.Fatalf("ExtractDocuments: %v", err)
 	}

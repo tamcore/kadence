@@ -1,7 +1,7 @@
 package store_test
 
 import (
-	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,7 +12,7 @@ import (
 
 func TestWebAuthnRepo_CreateListGet(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
 
@@ -42,7 +42,7 @@ func TestWebAuthnRepo_CreateListGet(t *testing.T) {
 
 func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
 	owner := newUser(t, users, "wa-owner")
@@ -53,7 +53,7 @@ func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 	}
 	pub := mustList(t, repo, owner.ID)[0].PublicID
 
-	if err := repo.Rename(ctx, pub, other.ID, "hijack"); err != store.ErrNotFound {
+	if err := repo.Rename(ctx, pub, other.ID, "hijack"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-user rename must ErrNotFound, got %v", err)
 	}
 	if err := repo.Rename(ctx, pub, owner.ID, "renamed"); err != nil {
@@ -62,7 +62,7 @@ func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 	if mustList(t, repo, owner.ID)[0].Name != "renamed" {
 		t.Fatal("rename did not persist")
 	}
-	if err := repo.DeleteByPublicIDForUser(ctx, pub, other.ID); err != store.ErrNotFound {
+	if err := repo.DeleteByPublicIDForUser(ctx, pub, other.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-user delete must ErrNotFound, got %v", err)
 	}
 	if err := repo.DeleteByPublicIDForUser(ctx, pub, owner.ID); err != nil {
@@ -75,7 +75,7 @@ func TestWebAuthnRepo_RenameDelete_OwnerScoped(t *testing.T) {
 
 func TestWebAuthnRepo_UpdateSignCount(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	repo := store.NewWebAuthnCredentialRepository(pool)
 	u := newUser(t, users, "wa-sc")
@@ -95,7 +95,7 @@ func TestWebAuthnRepo_UpdateSignCount(t *testing.T) {
 
 func TestUserRepo_GetByWebAuthnHandle(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	u := newUser(t, users, "wa-handle")
 	reloaded, err := users.GetByID(ctx, u.ID)
@@ -109,14 +109,14 @@ func TestUserRepo_GetByWebAuthnHandle(t *testing.T) {
 	if err != nil || byHandle.ID != u.ID {
 		t.Fatalf("getByHandle err=%v id=%d", err, byHandle.ID)
 	}
-	if _, err := users.GetByWebAuthnHandle(ctx, "00000000-0000-0000-0000-000000000000"); err != store.ErrNotFound {
+	if _, err := users.GetByWebAuthnHandle(ctx, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 
 func mustList(t *testing.T, r *store.WebAuthnCredentialRepository, uid int64) []model.WebAuthnCredential {
 	t.Helper()
-	l, err := r.ListByUser(context.Background(), uid)
+	l, err := r.ListByUser(t.Context(), uid)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

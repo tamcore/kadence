@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,7 @@ func (s *workerStoreStub) ClaimDue(_ context.Context, _ time.Time, limit int) ([
 	if limit > len(s.claims) {
 		limit = len(s.claims)
 	}
-	claims := append([]model.ClaimedScheduledTask(nil), s.claims[:limit]...)
+	claims := slices.Clone(s.claims[:limit])
 	s.claims = s.claims[limit:]
 	return claims, nil
 }
@@ -60,7 +61,7 @@ func (s *workerStoreStub) ListStaleRunning(_ context.Context, before time.Time, 
 	if limit > len(s.stale) {
 		limit = len(s.stale)
 	}
-	claims := append([]model.ClaimedScheduledTask(nil), s.stale[:limit]...)
+	claims := slices.Clone(s.stale[:limit])
 	s.stale = s.stale[limit:]
 	return claims, nil
 }
@@ -147,7 +148,7 @@ func TestWorkerPollsDueTasksWithBoundedConcurrency(t *testing.T) {
 		Now:    func() time.Time { return now },
 		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -197,7 +198,7 @@ func TestWorkerBootRecoveryAndRetention(t *testing.T) {
 		Now: func() time.Time { return now },
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	worker.Run(ctx)
 
@@ -238,7 +239,7 @@ func TestWorkerRecoveryAppliesFailurePolicyAndToleratesRaces(t *testing.T) {
 		Now:    func() time.Time { return now },
 		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	worker.recoverStale(context.Background(), now)
+	worker.recoverStale(t.Context(), now)
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -267,7 +268,7 @@ func TestWorkerBootRecoveryDrainsEveryStaleBatch(t *testing.T) {
 		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
-	worker.recoverStale(context.Background(), now)
+	worker.recoverStale(t.Context(), now)
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -297,7 +298,7 @@ func TestWorkerRecoveryContinuesAfterPartialCASProgress(t *testing.T) {
 		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
-	worker.recoverStale(context.Background(), now)
+	worker.recoverStale(t.Context(), now)
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -313,7 +314,7 @@ func TestWorkerRecoveryContinuesAfterPartialCASProgress(t *testing.T) {
 		stale: allFailed, finishError: errors.New("database unavailable"),
 	}
 	worker.store = noProgress
-	worker.recoverStale(context.Background(), now)
+	worker.recoverStale(t.Context(), now)
 	noProgress.mu.Lock()
 	defer noProgress.mu.Unlock()
 	if noProgress.staleCalls != 1 {
@@ -333,7 +334,7 @@ func TestWorkerShutdownCancelsAndWaitsForExecutions(t *testing.T) {
 		Config: WorkerConfig{Concurrency: 1, PollInterval: time.Hour},
 		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -367,10 +368,10 @@ func TestNewWorkerDefaultsAndMissingDependencies(t *testing.T) {
 		worker.cfg.StaleAfter != defaultWorkerStaleAfter || worker.now == nil || worker.log == nil {
 		t.Fatalf("worker defaults = %+v", worker.cfg)
 	}
-	(*Worker)(nil).Run(context.Background())
-	worker.Run(context.Background())
+	(*Worker)(nil).Run(t.Context())
+	worker.Run(t.Context())
 	worker.store = &workerStoreStub{}
-	worker.Run(context.Background())
+	worker.Run(t.Context())
 }
 
 func TestWorkerLogsPollingAndExecutionErrors(t *testing.T) {
@@ -390,7 +391,7 @@ func TestWorkerLogsPollingAndExecutionErrors(t *testing.T) {
 		Config: WorkerConfig{Concurrency: 1, PollInterval: time.Hour},
 		Log:    log,
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -409,7 +410,7 @@ func TestWorkerLogsPollingAndExecutionErrors(t *testing.T) {
 		Store: store, Executor: workerExecutorFunc(func(context.Context, Actor, model.ClaimedScheduledTask) error { return nil }),
 		Config: WorkerConfig{PollInterval: time.Hour}, Log: log,
 	})
-	ctx, cancel = context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(t.Context())
 	done = make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -444,7 +445,7 @@ func TestWorkerMaintenanceTicksAndLogsFailures(t *testing.T) {
 		Now: func() time.Time { return now },
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -467,10 +468,10 @@ func TestWorkerMaintenanceTicksAndLogsFailures(t *testing.T) {
 	<-done
 
 	store.staleErr = errors.New("stale failed")
-	worker.recoverStale(context.Background(), now)
+	worker.recoverStale(t.Context(), now)
 	store.staleErr = nil
 	store.cleanupErr = errors.New("cleanup failed")
-	worker.cleanup(context.Background(), now)
+	worker.cleanup(t.Context(), now)
 	if !bytes.Contains(logs.Bytes(), []byte("scheduled stale-run recovery failed")) ||
 		!bytes.Contains(logs.Bytes(), []byte("scheduled no-change retention failed")) {
 		t.Fatalf("missing maintenance error logs: %s", logs.String())
@@ -494,7 +495,7 @@ func TestWorkerSurvivesPanickingExecutionAndMarksRunFailed(t *testing.T) {
 		Log:    log,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -600,7 +601,7 @@ func TestWorkerNonPanicExecutionErrorStillOnlyLogs(t *testing.T) {
 		Now:    func() time.Time { return now },
 		Log:    log,
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)
@@ -640,7 +641,7 @@ func TestWorkerPersistsPanicFailureEvenDuringShutdown(t *testing.T) {
 		Log:    log,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		worker.Run(ctx)

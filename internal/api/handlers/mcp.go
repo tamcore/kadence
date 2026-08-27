@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -358,12 +359,11 @@ func (h *MCP) existingForOwner(ctx context.Context, ownerUserID, id int64) (*sto
 	if err != nil {
 		return nil, err
 	}
-	for _, rec := range recs {
-		if rec.ID == id {
-			return &rec, nil
-		}
+	i := slices.IndexFunc(recs, func(rec store.UserMCPRecord) bool { return rec.ID == id })
+	if i < 0 {
+		return nil, nil
 	}
-	return nil, nil
+	return &recs[i], nil
 }
 
 func scopeLabel(scope string) string {

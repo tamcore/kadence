@@ -2,7 +2,6 @@ package chat_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -361,7 +360,7 @@ func TestStreamTruncatesTitleASCII(t *testing.T) {
 	// ASCII string with 70 characters → should be truncated to 60 runes.
 	longASCII := strings.Repeat("a", 70)
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", longASCII, sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", longASCII, sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -387,7 +386,7 @@ func TestStreamTruncatesTitleMultibyte(t *testing.T) {
 	// Create a string with 70 runes (all emoji) → should be truncated to 60 runes.
 	longMultibyte := strings.Repeat("🎯", 70) // Dart/target emoji, 4 bytes each
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", longMultibyte, sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", longMultibyte, sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 
@@ -422,7 +421,7 @@ func TestStreamKeepsTitleUnchangedWhenShort(t *testing.T) {
 	// Short string with mixed ASCII and emoji.
 	shortTitle := "Hello 👋 World"
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, "", shortTitle, sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, "", shortTitle, sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 

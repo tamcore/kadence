@@ -169,7 +169,7 @@ func TestRunFileBridgeShutsDownGracefullyOnContextCancel(t *testing.T) {
 		return ""
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	errCh := make(chan error, 1)
 	go func() { errCh <- runFileBridgeContext(ctx, nil, getenv) }()
 

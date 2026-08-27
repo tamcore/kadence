@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -183,7 +184,7 @@ func TestOverTheWireAConfirmationReachesTheCallingUser(t *testing.T) {
 	src := &stubConfirm{allow: true}
 	reg := wireRegistry(t, ts.URL, stubPrincipals{testUsername: 42}, stubTokens{testPrincipalKey: testBearer42}, src)
 
-	out, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}")
+	out, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}")
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestOverTheWireADeclineRefusesTheCall(t *testing.T) {
 	src := &stubConfirm{allow: false}
 	reg := wireRegistry(t, ts.URL, stubPrincipals{testUsername: 42}, stubTokens{testPrincipalKey: testBearer42}, src)
 
-	if _, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}"); err == nil {
+	if _, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}"); err == nil {
 		t.Fatal("a declined call succeeded")
 	}
 }
@@ -225,7 +226,7 @@ func (r *routingConfirm) Confirm(_ context.Context, userID int64, _, _ string) (
 func (r *routingConfirm) asked() []int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]int64(nil), r.seen...)
+	return slices.Clone(r.seen)
 }
 
 func TestOverTheWireTwoUsersConfirmationsDoNotCross(t *testing.T) {
@@ -243,7 +244,7 @@ func TestOverTheWireTwoUsersConfirmationsDoNotCross(t *testing.T) {
 	errs := make(chan error, 2)
 	for _, user := range []string{testUsername, testOtherUsername} {
 		wg.Go(func() {
-			if _, err := reg.Call(context.Background(), user, confirmTestTool, "{}"); err != nil {
+			if _, err := reg.Call(t.Context(), user, confirmTestTool, "{}"); err != nil {
 				errs <- fmt.Errorf("Call(%s): %w", user, err)
 			}
 		})
@@ -297,7 +298,7 @@ func TestTheStandaloneStreamIsNeverAskedAnything(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if _, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}"); err != nil {
+	if _, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}"); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 

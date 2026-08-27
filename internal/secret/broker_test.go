@@ -134,12 +134,10 @@ func TestSubmitThenAwaitReturnsNil(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 	var awaitErr error
-	go func() {
-		defer wg.Done()
-		awaitErr = b.Await(context.Background(), reqID)
-	}()
+	wg.Go(func() {
+		awaitErr = b.Await(t.Context(), reqID)
+	})
 
 	// Act
 	time.Sleep(10 * time.Millisecond)
@@ -163,7 +161,7 @@ func TestAwaitContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	// Act
 	go func() {
@@ -199,7 +197,7 @@ func TestAwaitTimeoutPastTTL(t *testing.T) {
 	current = base.Add(200 * time.Second)
 	mu.Unlock()
 
-	awaitErr := b.Await(context.Background(), reqID)
+	awaitErr := b.Await(t.Context(), reqID)
 
 	// Assert
 	if !errors.Is(awaitErr, secret.ErrTimeout) {

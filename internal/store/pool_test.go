@@ -14,7 +14,7 @@ func TestWaitForDB(t *testing.T) {
 		pool := testutil.SetupTestDB(t)
 		dsn := pool.Config().ConnString()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 
 		if err := store.WaitForDB(ctx, dsn); err != nil {
@@ -27,7 +27,7 @@ func TestWaitForDB(t *testing.T) {
 		// keep failing until the context deadline is exceeded.
 		const badDSN = "postgres://user:pass@127.0.0.1:1/nosuchdb?sslmode=disable"
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 
 		err := store.WaitForDB(ctx, badDSN)

@@ -49,7 +49,7 @@ func (f *auditStoreFake) Finish(ctx context.Context, id int64, status, result, e
 func TestRecorderCallStoresAllowedDecisionOnce(t *testing.T) {
 	store := &auditStoreFake{}
 	recorder := NewRecorder(store, nil, fixedAuditNow)
-	ctx := WithMetadata(context.Background(), Metadata{
+	ctx := WithMetadata(t.Context(), Metadata{
 		ActorUserID: 7, RequestedTool: "mcp__read", SafeArguments: `{"id":1}`,
 		Intent: "Read activity", GuardVerdict: model.MCPAuditGuardAllowed,
 		GuardReason: "Matches request",
@@ -70,7 +70,7 @@ func TestRecorderCallStoresAllowedDecisionOnce(t *testing.T) {
 func TestRecorderBlockStoresOneTerminalRow(t *testing.T) {
 	store := &auditStoreFake{}
 	recorder := NewRecorder(store, nil, fixedAuditNow)
-	ctx := WithMetadata(context.Background(), Metadata{
+	ctx := WithMetadata(t.Context(), Metadata{
 		ActorUserID: 7,
 		Sanitize: func(value string) string {
 			if value == "Read secret" || value == "Tool mutates secret data" {
@@ -94,7 +94,7 @@ func TestRecorderBlockStoresOneTerminalRow(t *testing.T) {
 func TestRecorderBlockIgnoresStartFailure(t *testing.T) {
 	store := &auditStoreFake{startErr: errors.New("database unavailable")}
 	recorder := NewRecorder(store, slog.New(slog.NewTextHandler(io.Discard, nil)), fixedAuditNow)
-	ctx := WithMetadata(context.Background(), Metadata{ActorUserID: 7})
+	ctx := WithMetadata(t.Context(), Metadata{ActorUserID: 7})
 
 	recorder.Block(ctx, "mcp__write", `{"id":1}`, "Write activity", model.MCPAuditGuardDenied, "Tool mutates data")
 	if len(store.startedCalls) != 1 || len(store.finishedCalls) != 0 {
@@ -109,7 +109,7 @@ func TestRecorderCallRunsOnceWhenPersistenceFails(t *testing.T) {
 	} {
 		t.Run("persistence failure", func(t *testing.T) {
 			recorder := NewRecorder(store, slog.New(slog.NewTextHandler(io.Discard, nil)), fixedAuditNow)
-			ctx := WithMetadata(context.Background(), Metadata{ActorUserID: 7})
+			ctx := WithMetadata(t.Context(), Metadata{ActorUserID: 7})
 			calls := 0
 			out, err := recorder.Call(ctx, "mcp__read", `{}`, func(context.Context) (string, error) {
 				calls++
@@ -136,7 +136,7 @@ func TestRecorderStoresSafeSuccessfulCall(t *testing.T) {
 		times = times[1:]
 		return next
 	})
-	ctx := WithMetadata(context.Background(), Metadata{
+	ctx := WithMetadata(t.Context(), Metadata{
 		ActorUserID: 5, ActorUsername: testActorUsername, ConversationID: testConversation,
 		Source: model.MCPAuditSourceChat, Model: testModel, ToolCallID: "call-1",
 		RequestedTool: "server__login", SafeArguments: `{"password":"TOKEN"}`,
@@ -170,7 +170,7 @@ func TestRecorderStoresSafeFailureAndFailsOpen(t *testing.T) {
 	t.Run("tool failure", func(t *testing.T) {
 		store := &auditStoreFake{}
 		recorder := NewRecorder(store, slog.Default(), time.Now)
-		ctx := WithMetadata(context.Background(), Metadata{
+		ctx := WithMetadata(t.Context(), Metadata{
 			ActorUserID: 5, ActorUsername: testActorUsername, ConversationID: testConversation,
 			Source: model.MCPAuditSourceChat, Model: testModel,
 			Sanitize: func(string) string { return "credential [REDACTED] rejected" },
@@ -187,7 +187,7 @@ func TestRecorderStoresSafeFailureAndFailsOpen(t *testing.T) {
 	t.Run("cancelled call still records terminal status", func(t *testing.T) {
 		store := &auditStoreFake{}
 		recorder := NewRecorder(store, slog.Default(), time.Now)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		ctx = WithMetadata(ctx, Metadata{
 			ActorUserID: 5, ActorUsername: testActorUsername, ConversationID: testConversation,
@@ -205,7 +205,7 @@ func TestRecorderStoresSafeFailureAndFailsOpen(t *testing.T) {
 	t.Run("start persistence failure", func(t *testing.T) {
 		store := &auditStoreFake{startErr: errors.New("database unavailable")}
 		recorder := NewRecorder(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Now)
-		ctx := WithMetadata(context.Background(), Metadata{
+		ctx := WithMetadata(t.Context(), Metadata{
 			ActorUserID: 5, ActorUsername: testActorUsername, ConversationID: testConversation,
 			Source: model.MCPAuditSourceChat, Model: testModel,
 		})
@@ -225,7 +225,7 @@ func TestRecorderStoresSafeFailureAndFailsOpen(t *testing.T) {
 	t.Run("finish persistence failure", func(t *testing.T) {
 		store := &auditStoreFake{finishErr: errors.New("database unavailable")}
 		recorder := NewRecorder(store, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Now)
-		ctx := WithMetadata(context.Background(), Metadata{
+		ctx := WithMetadata(t.Context(), Metadata{
 			ActorUserID: 5, ActorUsername: testActorUsername, ConversationID: testConversation,
 			Source: model.MCPAuditSourceChat, Model: testModel,
 		})

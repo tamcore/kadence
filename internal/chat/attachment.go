@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 
 	"golang.org/x/image/webp"
@@ -56,7 +57,7 @@ type AttachmentProcessor struct {
 // NewAttachmentProcessor constructs a processor over the effective extractor
 // set available in the running server.
 func NewAttachmentProcessor(extractors []ingest.Extractor) *AttachmentProcessor {
-	return &AttachmentProcessor{extractors: append([]ingest.Extractor(nil), extractors...)}
+	return &AttachmentProcessor{extractors: slices.Clone(extractors)}
 }
 
 // Prepare validates file types and image dimensions without calling an
@@ -92,7 +93,7 @@ func (p *AttachmentProcessor) prepareOne(file FileInput) (model.MessageAttachmen
 		Filename:  file.Filename,
 		MIME:      mediaType,
 		SizeBytes: int64(len(file.Data)),
-		RawBytes:  append([]byte(nil), file.Data...),
+		RawBytes:  bytes.Clone(file.Data),
 	}
 	if isNativeImageMIME(mediaType) {
 		width, height, err := validateNativeImage(mediaType, file.Data)
@@ -122,7 +123,7 @@ func (p *AttachmentProcessor) ExtractDocuments(
 	if len(prepared) == 0 {
 		return nil, nil
 	}
-	out := append([]model.MessageAttachment(nil), prepared...)
+	out := slices.Clone(prepared)
 	for i := range out {
 		if out[i].Kind != model.AttachmentKindDocument ||
 			out[i].ExtractionComplete ||

@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"strings"
@@ -103,10 +104,7 @@ func guardrailMessages(history []model.Message, currentText string) []provider.M
 }
 
 func interactiveIntentContext(history []model.Message, userText string, historyWindow int) mcpintent.TrustedContext {
-	request := strings.TrimSpace(userText)
-	if request == "" {
-		request = fileOnlyClassifierText
-	}
+	request := cmp.Or(strings.TrimSpace(userText), fileOnlyClassifierText)
 	return mcpintent.TrustedContext{
 		Request: request,
 		History: trustedTextHistory(history, historyWindow),

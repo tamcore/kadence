@@ -483,14 +483,14 @@ func TestAssembleToolsOffersFITOnlyForVisibleUserRoute(t *testing.T) {
 		},
 	})
 
-	aliceTools := s.assembleTools(context.Background(), fitToolSnapshot{prefixes: map[string]string{
+	aliceTools := s.assembleTools(t.Context(), fitToolSnapshot{prefixes: map[string]string{
 		testFITServerOne + "\x00" + testFITAliceScope: testFITAlias,
 	}})
 	if !hasToolNamed(aliceTools, analyzeGarminFITToolName) {
 		t.Fatalf("alice tools = %+v, want native FIT tool", aliceTools)
 	}
 
-	otherTools := s.assembleTools(context.Background(), fitToolSnapshot{})
+	otherTools := s.assembleTools(t.Context(), fitToolSnapshot{})
 	if hasToolNamed(otherTools, analyzeGarminFITToolName) {
 		t.Fatalf("unrelated user tools = %+v, FIT route leaked across scope", otherTools)
 	}
@@ -511,7 +511,7 @@ func TestAssembleToolsRequiresSourceWhenMultipleFITRoutesAreVisible(t *testing.T
 			},
 		},
 	})
-	tools := s.assembleTools(context.Background(), fitToolSnapshot{prefixes: map[string]string{
+	tools := s.assembleTools(t.Context(), fitToolSnapshot{prefixes: map[string]string{
 		testFITServerOne + "\x00" + testFITGlobalScope: testFITAlias,
 		testFITServerTwo + "\x00" + testFITAliceScope:  "garmin2",
 	}})
@@ -558,8 +558,8 @@ func TestFITAnalysisUsesSharedSnapshot(t *testing.T) {
 	}
 
 	msg := s.dispatchTool(
-		context.Background(),
-		context.Background(),
+		t.Context(),
+		t.Context(),
 		"chat-id",
 		7,
 		"bob",
@@ -593,12 +593,7 @@ func unfencedToolResult(t *testing.T, content string) string {
 }
 
 func hasToolNamed(tools []provider.ToolDefinition, name string) bool {
-	for _, tool := range tools {
-		if tool.Name == name {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(tools, func(tool provider.ToolDefinition) bool { return tool.Name == name })
 }
 
 func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
@@ -608,7 +603,7 @@ func TestAssembleToolsReservesFITToolWithinCap(t *testing.T) {
 			BridgeURL: "http://bridge", BridgeAuthUser: "u", BridgeAuthPass: "p", MaxBytes: 1024,
 		}},
 	})
-	tools := s.assembleTools(context.Background(), fitToolSnapshot{
+	tools := s.assembleTools(t.Context(), fitToolSnapshot{
 		tools:    []provider.ToolDefinition{{Name: "activity__list"}},
 		prefixes: map[string]string{"ACTIVITY\x00GLOBAL": "activity"},
 	})
@@ -630,7 +625,7 @@ func TestFITAnalysisReturnsSafeToolError(t *testing.T) {
 	})
 	sink := &fitEventSink{}
 	msg := s.handleFITAnalysis(
-		context.Background(),
+		t.Context(),
 		fitToolSnapshot{
 			callErr:  errors.New("sensitive path /data/fit/private.fit"),
 			prefixes: map[string]string{"ACTIVITY\x00GLOBAL": "activity"},

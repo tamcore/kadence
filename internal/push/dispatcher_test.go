@@ -50,7 +50,7 @@ func TestDispatchOnceBuildsPayloadAndSends(t *testing.T) {
 	sender := &fakeSender{}
 	d := NewDispatcher(claimer, sender, DispatcherConfig{BatchLimit: 10, SnippetLen: 120}, slog.Default())
 
-	n, err := d.dispatchOnce(context.Background())
+	n, err := d.dispatchOnce(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestDispatchOnceOmitsAnchorWhenNoMessageID(t *testing.T) {
 	claimer := &fakeClaimer{items: []model.PendingPushDelivery{{RunID: 1, UserID: 7, TaskTitle: "T", ConversationID: "c", MessageID: nil, Result: "r"}}}
 	sender := &fakeSender{}
 	d := NewDispatcher(claimer, sender, DispatcherConfig{BatchLimit: 10, SnippetLen: 120}, slog.Default())
-	if _, err := d.dispatchOnce(context.Background()); err != nil {
+	if _, err := d.dispatchOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if sender.calls[0].payload.URL != "/chat/c" {
@@ -88,7 +88,7 @@ func TestDispatchOnceReturnsZeroWhenNoItemsClaimed(t *testing.T) {
 	claimer := &fakeClaimer{}
 	sender := &fakeSender{}
 	d := NewDispatcher(claimer, sender, DispatcherConfig{}, slog.Default())
-	n, err := d.dispatchOnce(context.Background())
+	n, err := d.dispatchOnce(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -204,10 +204,13 @@ func ServersFromEnv(environ []string) ([]Server, error) {
 // was a recognized MCP_ variable.
 func parseMCPEnvVar(kv string) (groupKey string, matched field, value string, ok bool) {
 	key, val, hasEq := strings.Cut(kv, "=")
-	if !hasEq || !strings.HasPrefix(key, envPrefix) {
+	if !hasEq {
 		return "", 0, "", false
 	}
-	rest := strings.TrimPrefix(key, envPrefix)
+	rest, hasPrefix := strings.CutPrefix(key, envPrefix)
+	if !hasPrefix {
+		return "", 0, "", false
+	}
 
 	matchedField, middle, matchedSuffix := matchFieldSuffix(rest)
 	if !matchedSuffix {

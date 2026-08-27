@@ -59,11 +59,7 @@ func (s *Service) assembleTools(ctx context.Context, mcpSnap MCPUserSnapshot) []
 			if s.scheduled != nil {
 				builtins++
 			}
-			if mcpCap > builtins {
-				mcpCap -= builtins
-			} else {
-				mcpCap = 0
-			}
+			mcpCap = max(mcpCap-builtins, 0)
 			if len(mcpTools) > mcpCap {
 				slog.Warn("mcp tools capped", "have", len(mcpTools), "cap", mcpCap)
 				mcpTools = mcpTools[:mcpCap]

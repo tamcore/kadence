@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -70,7 +69,7 @@ func metadataServer(t *testing.T, tweak func(prm, asm map[string]any)) *httptest
 
 func TestDiscoverReadsBothDocuments(t *testing.T) {
 	srv := metadataServer(t, nil)
-	md, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	md, err := Discover(t.Context(), srv.Client(), srv.URL+"/mcp")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -93,7 +92,7 @@ func TestDiscoverRefusesABadDeployment(t *testing.T) {
 		srv := metadataServer(t, func(prm, _ map[string]any) {
 			prm["authorization_servers"] = []string{"http://insecure.example.invalid"}
 		})
-		if _, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err == nil {
+		if _, err := Discover(t.Context(), srv.Client(), srv.URL+"/mcp"); err == nil {
 			t.Fatal("Discover accepted a cleartext authorization server")
 		}
 	})
@@ -102,7 +101,7 @@ func TestDiscoverRefusesABadDeployment(t *testing.T) {
 		srv := metadataServer(t, func(_, asm map[string]any) {
 			asm["issuer"] = "https://elsewhere.example.invalid"
 		})
-		if _, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err == nil {
+		if _, err := Discover(t.Context(), srv.Client(), srv.URL+"/mcp"); err == nil {
 			t.Fatal("Discover accepted an issuer that is not its own origin")
 		}
 	})
@@ -110,7 +109,7 @@ func TestDiscoverRefusesABadDeployment(t *testing.T) {
 	t.Run("document missing", func(t *testing.T) {
 		srv := httptest.NewTLSServer(http.NotFoundHandler())
 		t.Cleanup(srv.Close)
-		if _, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err == nil {
+		if _, err := Discover(t.Context(), srv.Client(), srv.URL+"/mcp"); err == nil {
 			t.Fatal("Discover accepted a deployment with no metadata")
 		}
 	})
@@ -163,7 +162,7 @@ func TestExchangeSendsThePKCEAndResourceAndParsesTheTokens(t *testing.T) {
 	})
 	c := clientFor(ts, "")
 
-	got, err := c.Exchange(context.Background(), "code-1", "verifier-1", testRedirect)
+	got, err := c.Exchange(t.Context(), "code-1", "verifier-1", testRedirect)
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
@@ -196,7 +195,7 @@ func TestExchangeAuthenticatesAConfidentialClient(t *testing.T) {
 	ts := newTokenServer(t, http.StatusOK, map[string]any{fieldAccessToken: "at", fieldExpiresIn: 900, paramRefreshToken: "rt"})
 	c := clientFor(ts, "s3cret")
 
-	if _, err := c.Exchange(context.Background(), "code", "verifier", testRedirect); err != nil {
+	if _, err := c.Exchange(t.Context(), "code", "verifier", testRedirect); err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
 	if !strings.HasPrefix(ts.lastAuth, "Basic ") {
@@ -208,7 +207,7 @@ func TestRefreshRotatesAndReportsADeadFamily(t *testing.T) {
 	ok := newTokenServer(t, http.StatusOK, map[string]any{
 		fieldAccessToken: testAccessV2, fieldExpiresIn: 900, paramRefreshToken: testRefreshV2, paramScope: testScope,
 	})
-	got, err := clientFor(ok, "").Refresh(context.Background(), testRefreshV1)
+	got, err := clientFor(ok, "").Refresh(t.Context(), testRefreshV1)
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -222,14 +221,14 @@ func TestRefreshRotatesAndReportsADeadFamily(t *testing.T) {
 	dead := newTokenServer(t, http.StatusBadRequest, map[string]any{
 		fieldError: codeBadGrant, "error_description": "The refresh token is no longer valid.",
 	})
-	if _, err := clientFor(dead, "").Refresh(context.Background(), testRefreshV1); !errors.Is(err, ErrInvalidGrant) {
+	if _, err := clientFor(dead, "").Refresh(t.Context(), testRefreshV1); !errors.Is(err, ErrInvalidGrant) {
 		t.Fatalf("Refresh on a dead family: %v, want ErrInvalidGrant", err)
 	}
 }
 
 func TestTokenEndpointFaultIsNotADeadFamily(t *testing.T) {
 	broken := newTokenServer(t, http.StatusInternalServerError, map[string]any{fieldError: codeServerFail})
-	_, err := clientFor(broken, "").Refresh(context.Background(), testRefreshV1)
+	_, err := clientFor(broken, "").Refresh(t.Context(), testRefreshV1)
 	if err == nil {
 		t.Fatal("Refresh accepted a 500")
 	}
@@ -243,7 +242,7 @@ func TestErrorDescriptionIsNeverEchoed(t *testing.T) {
 	ts := newTokenServer(t, http.StatusBadRequest, map[string]any{
 		fieldError: "invalid_request", "error_description": leak,
 	})
-	_, err := clientFor(ts, "").Exchange(context.Background(), "code", "verifier", testRedirect)
+	_, err := clientFor(ts, "").Exchange(t.Context(), "code", "verifier", testRedirect)
 	if err == nil {
 		t.Fatal("Exchange accepted a 400")
 	}
@@ -285,7 +284,7 @@ func TestRevokeTreatsAnAlreadyDeadTokenAsSuccess(t *testing.T) {
 			body["error"] = "invalid_token"
 		}
 		ts := newTokenServer(t, status, body)
-		if err := clientFor(ts, "").Revoke(context.Background(), testRefreshV1); err != nil {
+		if err := clientFor(ts, "").Revoke(t.Context(), testRefreshV1); err != nil {
 			t.Fatalf("%s: Revoke: %v", name, err)
 		}
 	}
@@ -295,7 +294,7 @@ func TestNilHTTPClientIsNormalized(t *testing.T) {
 	ts := newTokenServer(t, http.StatusOK, map[string]any{fieldAccessToken: "at", fieldExpiresIn: 900, paramRefreshToken: "rt"})
 	// clientFor passes nil, which is what mcp.HTTPClientWithCA returns when no
 	// custom CA is configured — the default deployment.
-	if _, err := clientFor(ts, "").Exchange(context.Background(), "code", "verifier", testRedirect); err != nil {
+	if _, err := clientFor(ts, "").Exchange(t.Context(), "code", "verifier", testRedirect); err != nil {
 		t.Fatalf("Exchange with a nil http client: %v", err)
 	}
 }

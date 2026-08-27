@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -272,7 +273,7 @@ func TestModelCompatibility(t *testing.T) {
 	t.Run("streams content incrementally", func(t *testing.T) {
 		// Chat is served over SSE. A provider that only returns the whole
 		// answer at the end leaves the user watching an empty box.
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		var deltas atomic.Int32
@@ -294,7 +295,7 @@ func TestModelCompatibility(t *testing.T) {
 	})
 
 	t.Run("calls a tool when the question needs data", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		req := compatRequest(model, []provider.ToolDefinition{countActivitiesTool(), sleepTool()},
@@ -320,7 +321,7 @@ func TestModelCompatibility(t *testing.T) {
 		// unprompted burns latency on every turn and, with the destructive
 		// tier enabled, puts confirmation prompts in front of a user who
 		// asked for nothing.
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		req := compatRequest(model, []provider.ToolDefinition{countActivitiesTool(), sleepTool()},
@@ -338,7 +339,7 @@ func TestModelCompatibility(t *testing.T) {
 	t.Run("continues after a tool result", func(t *testing.T) {
 		// A tool call is worthless if the model cannot consume the answer.
 		// This is the round trip chat performs on every tool-using turn.
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		// Ask for real, then answer the call the model actually made. A
@@ -366,7 +367,7 @@ func TestModelCompatibility(t *testing.T) {
 		}
 
 		req := first
-		req.Messages = append(append([]provider.Message(nil), first.Messages...),
+		req.Messages = append(slices.Clone(first.Messages),
 			provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{call}},
 			provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Name, Content: "2614"},
 		)
@@ -386,7 +387,7 @@ func TestModelCompatibility(t *testing.T) {
 		// A deployment with a large MCP server puts ~100 schemas in front of
 		// the model on every turn. Selection accuracy at two tools says
 		// nothing about accuracy at a hundred.
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		req := compatRequest(model, paddedTools(compatToolCount),
@@ -403,7 +404,7 @@ func TestModelCompatibility(t *testing.T) {
 		// content (internal/chat/pageimage.go). A text-only model cannot serve
 		// that half of the product, so this reports rather than fails: the
 		// deployment may not use document upload at all.
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		req := compatRequest(model, nil, "Reply with the single word: seen")
@@ -426,7 +427,7 @@ func TestModelCompatibility(t *testing.T) {
 	t.Run("reports a finish reason", func(t *testing.T) {
 		// Chat continues a truncated answer by checking for FinishLength. An
 		// endpoint that never reports one silently drops long replies.
-		ctx, cancel := context.WithTimeout(context.Background(), compatTimeout)
+		ctx, cancel := context.WithTimeout(t.Context(), compatTimeout)
 		defer cancel()
 
 		// Deliberately ask for far more than the cap allows, so the endpoint

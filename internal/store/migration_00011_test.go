@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"database/sql"
 	"math"
 	"testing"
@@ -37,7 +36,7 @@ func TestMigration00011ConvertsWideEmbeddingsAndDropsNarrowOnes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test (needs Docker) in -short mode")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	container, err := postgres.Run(ctx, testutil.PostgresImage,
 		postgres.WithDatabase("kadence_test"),

@@ -58,7 +58,7 @@ type catalogMCPSnapshot struct {
 }
 
 func (s *catalogMCPSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
-	return append([]provider.ToolDefinition(nil), s.definitions...), s.err
+	return slices.Clone(s.definitions), s.err
 }
 
 func (s *catalogMCPSnapshot) Call(_ context.Context, name, arguments string) (string, error) {
@@ -678,10 +678,9 @@ func TestFITDeniedDownloadSkipsRemoteAndBridge(t *testing.T) {
 
 func findTool(t *testing.T, tools []provider.ToolDefinition, name string) provider.ToolDefinition {
 	t.Helper()
-	for _, tool := range tools {
-		if tool.Name == name {
-			return tool
-		}
+	i := slices.IndexFunc(tools, func(tool provider.ToolDefinition) bool { return tool.Name == name })
+	if i >= 0 {
+		return tools[i]
 	}
 	t.Fatalf("tool %q not found in %v", name, toolNames(t, &UnattendedSnapshot{tools: tools}))
 	return provider.ToolDefinition{}

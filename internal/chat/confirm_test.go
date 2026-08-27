@@ -128,7 +128,7 @@ func TestAConfirmationReachesTheLiveTurnAndReturnsTheAnswer(t *testing.T) {
 	broker := newCountingBroker()
 	bridge := NewConfirmBridge(broker)
 	sink := &recordingSink{}
-	ctx := WithConfirmSink(context.Background(), sink)
+	ctx := WithConfirmSink(t.Context(), sink)
 
 	reqID, out := askInBackground(t, bridge, ctx, sink)
 	if err := broker.inner.Submit(confirmTestUserID, reqID, true); err != nil {
@@ -145,7 +145,7 @@ func TestTheConfirmationEventNamesTheToolAndCarriesThePrompt(t *testing.T) {
 	broker := newCountingBroker()
 	bridge := NewConfirmBridge(broker)
 	sink := &recordingSink{}
-	ctx, cancel := context.WithCancel(WithConfirmSink(context.Background(), sink))
+	ctx, cancel := context.WithCancel(WithConfirmSink(t.Context(), sink))
 
 	_, out := askInBackground(t, bridge, ctx, sink)
 	cancel()
@@ -167,7 +167,7 @@ func TestADeclinedConfirmationReportsFalseWithoutAnError(t *testing.T) {
 	broker := newCountingBroker()
 	bridge := NewConfirmBridge(broker)
 	sink := &recordingSink{}
-	ctx := WithConfirmSink(context.Background(), sink)
+	ctx := WithConfirmSink(t.Context(), sink)
 
 	reqID, out := askInBackground(t, bridge, ctx, sink)
 	if err := broker.inner.Submit(confirmTestUserID, reqID, false); err != nil {
@@ -190,7 +190,7 @@ func TestAnUnattendedTurnIsRefusedAtOnceAndAsksNobody(t *testing.T) {
 	broker := newCountingBroker()
 	bridge := NewConfirmBridge(broker)
 
-	allowed, err := bridge.Confirm(context.Background(), confirmTestUserID, confirmTestTool, confirmTestPrompt)
+	allowed, err := bridge.Confirm(t.Context(), confirmTestUserID, confirmTestTool, confirmTestPrompt)
 
 	if allowed {
 		t.Fatal("an unattended turn was allowed to run a tool needing confirmation")
@@ -205,7 +205,7 @@ func TestAnUnattendedTurnIsRefusedAtOnceAndAsksNobody(t *testing.T) {
 
 func TestTheRefusalNamesConfirmationSoTheModelCanRelayIt(t *testing.T) {
 	_, err := NewConfirmBridge(newCountingBroker()).
-		Confirm(context.Background(), confirmTestUserID, confirmTestTool, confirmTestPrompt)
+		Confirm(t.Context(), confirmTestUserID, confirmTestTool, confirmTestPrompt)
 	if err == nil || !strings.Contains(err.Error(), "confirm") {
 		t.Fatalf("err = %v, want it to mention confirmation", err)
 	}
@@ -222,7 +222,7 @@ func TestAQuestionThatCannotBeDeliveredIsAbandonedAtOnce(t *testing.T) {
 	// the whole TTL, and would leave an answerable id behind.
 	broker := newCountingBroker()
 	bridge := NewConfirmBridge(broker)
-	ctx := WithConfirmSink(context.Background(), deadSink{})
+	ctx := WithConfirmSink(t.Context(), deadSink{})
 
 	done := make(chan confirmOutcome, 1)
 	go func() {

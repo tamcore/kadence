@@ -102,7 +102,7 @@ func TestRegistry_ToolsForAndCall(t *testing.T) {
 		t.Fatal("registry with servers must be Enabled")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tools, err := reg.ToolsFor(ctx, "anyuser")
 	if err != nil {
@@ -157,7 +157,7 @@ func TestRegistry_UserScopeIsolation(t *testing.T) {
 		{Name: testGarminName, Scope: testUserPhilippScope, URL: ts.URL, Transport: transportStreamableHTTP},
 	}, nil, nil)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tools, err := reg.ToolsFor(ctx, "philipp")
 	if err != nil {
@@ -192,7 +192,7 @@ func TestRegistry_CallUnknownTool(t *testing.T) {
 	reg := NewRegistry([]Server{
 		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
 	}, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := reg.Call(ctx, "anyuser", "unknownserver__whatever", `{}`); err == nil {
 		t.Fatal("Call with unknown server prefix must error")
@@ -212,7 +212,7 @@ func TestRegistry_ToolsForFiltersByTools(t *testing.T) {
 		},
 	}, nil, nil)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tools, err := reg.ToolsFor(ctx, "anyuser")
 	if err != nil {
 		t.Fatalf("ToolsFor: %v", err)
@@ -281,7 +281,7 @@ func TestRegistry_CallRejectsFilteredOutTool(t *testing.T) {
 		},
 	}, nil, nil)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := reg.Call(ctx, "anyuser", "garmin__create_run_workout", `{}`)
 	if err == nil {
 		t.Fatal("Call for a tool filtered out by Tools must error")
@@ -343,7 +343,7 @@ func TestRegistry_EvictsClientOnProbeFailure(t *testing.T) {
 	ts, fail := newFakeGarminServerToggleable(t)
 	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := reg.Probe(ctx, s); err != nil {
 		t.Fatalf("initial Probe: %v", err)
@@ -380,7 +380,7 @@ func TestRegistry_EvictsClientOnCallFailure(t *testing.T) {
 	ts, fail := newFakeGarminServerToggleable(t)
 	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP}
 	reg := NewRegistry([]Server{s}, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := reg.Call(ctx, "anyuser", "garmin__get_activities", `{}`); err != nil {
 		t.Fatalf("initial Call: %v", err)
@@ -421,16 +421,16 @@ func TestRegistry_SnapshotForResolvesUserServersOnce(t *testing.T) {
 	src := &countingUserSrc{perUser: map[string][]Server{testUsername: {userSrv}}}
 	r := NewRegistry(nil, nil, src)
 
-	snap := r.SnapshotFor(context.Background(), testUsername)
+	snap := r.SnapshotFor(t.Context(), testUsername)
 	if got := src.calls.Load(); got != 1 {
 		t.Fatalf("ServersForUser calls after SnapshotFor = %d, want 1", got)
 	}
 
 	for i := range 3 {
-		if _, err := snap.ToolsFor(context.Background()); err != nil {
+		if _, err := snap.ToolsFor(t.Context()); err != nil {
 			t.Fatalf("ToolsFor iteration %d: %v", i, err)
 		}
-		if _, err := snap.Call(context.Background(), "mine__get_activities", `{}`); err != nil {
+		if _, err := snap.Call(t.Context(), "mine__get_activities", `{}`); err != nil {
 			t.Fatalf("Call iteration %d: %v", i, err)
 		}
 	}
@@ -445,7 +445,7 @@ func TestRegistry_ToolsForUsesAliasAsPrefix(t *testing.T) {
 	reg := NewRegistry([]Server{
 		{Name: testCloakBrowserName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, Alias: testBrowserAlias},
 	}, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tools, err := reg.ToolsFor(ctx, "anyuser")
 	if err != nil {
@@ -470,7 +470,7 @@ func TestRegistry_AliasCollisionFallsBackToName(t *testing.T) {
 		{Name: testCloakBrowserName, Scope: scopeGlobal, URL: ts1.URL, Transport: transportStreamableHTTP, Alias: testBrowserAlias},
 		{Name: "BROWSER", Scope: scopeGlobal, URL: ts2.URL, Transport: transportStreamableHTTP},
 	}, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tools, err := reg.ToolsFor(ctx, "anyuser")
 	if err != nil {
@@ -501,7 +501,7 @@ func TestRegistry_ToolHints(t *testing.T) {
 		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
 	}, nil, nil)
 
-	snap := reg.SnapshotFor(context.Background(), "anyuser")
+	snap := reg.SnapshotFor(t.Context(), "anyuser")
 	hints := snap.ToolHints()
 	if len(hints) != 1 {
 		t.Fatalf("want 1 hint line (only the hinted server), got %v", hints)
@@ -517,7 +517,7 @@ func TestRegistry_ToolHintsEmptyWhenNoServerHasOne(t *testing.T) {
 		{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP},
 	}, nil, nil)
 
-	snap := reg.SnapshotFor(context.Background(), "anyuser")
+	snap := reg.SnapshotFor(t.Context(), "anyuser")
 	if hints := snap.ToolHints(); len(hints) != 0 {
 		t.Fatalf("want no hint lines, got %v", hints)
 	}
@@ -625,7 +625,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 
 	slowDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), slowServer, principalAuth{})
+		_, _, err := reg.clientFor(t.Context(), slowServer, principalAuth{})
 		slowDone <- err
 	}()
 
@@ -639,7 +639,7 @@ func TestRegistry_ClientForDialsOutsideLock_DifferentServersDontBlock(t *testing
 	// DIFFERENT server must complete promptly rather than queueing behind it.
 	fastDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), fastServer, principalAuth{})
+		_, _, err := reg.clientFor(t.Context(), fastServer, principalAuth{})
 		fastDone <- err
 	}()
 
@@ -673,11 +673,9 @@ func TestRegistry_ClientForDedupsConcurrentDialsToSameServer(t *testing.T) {
 	clients := make([]mcpClient, n)
 	errs := make([]error, n)
 	for i := range n {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			clients[i], _, errs[i] = reg.clientFor(context.Background(), s, principalAuth{})
-		}(i)
+		wg.Go(func() {
+			clients[i], _, errs[i] = reg.clientFor(t.Context(), s, principalAuth{})
+		})
 	}
 	wg.Wait()
 
@@ -712,7 +710,7 @@ func TestRegistry_EvictDuringInflightDialDoesNotPanicOrResurrectStale(t *testing
 
 	dialDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), s, principalAuth{})
+		_, _, err := reg.clientFor(t.Context(), s, principalAuth{})
 		dialDone <- err
 	}()
 
@@ -754,7 +752,7 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 	s := Server{Name: testGarminName, Scope: scopeGlobal, URL: ts.URL, Transport: transportStreamableHTTP, FromEnv: true}
 	reg := NewRegistry([]Server{s}, nil, nil)
 
-	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderCtx, cancelLeader := context.WithCancel(t.Context())
 
 	leaderDone := make(chan struct {
 		c   mcpClient
@@ -777,7 +775,7 @@ func TestRegistry_FollowerSurvivesLeaderContextCancellation(t *testing.T) {
 	// A follower racing on the same key joins the in-flight dial.
 	followerDone := make(chan error, 1)
 	go func() {
-		_, _, err := reg.clientFor(context.Background(), s, principalAuth{})
+		_, _, err := reg.clientFor(t.Context(), s, principalAuth{})
 		followerDone <- err
 	}()
 
@@ -839,7 +837,7 @@ func TestRegistryNeverCachesUserDefinedClient(t *testing.T) {
 	// No env servers, so userSrv is a user-defined server.
 	reg := NewRegistry(nil, nil, &fakeUserSrc{perUser: map[string][]Server{"owner": {userSrv}}})
 
-	if _, err := reg.ToolsFor(context.Background(), "owner"); err != nil {
+	if _, err := reg.ToolsFor(t.Context(), "owner"); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(reg.clients); n != 0 {
@@ -903,7 +901,7 @@ func TestClientForReleaseIsNoOpForCachedEnvClient(t *testing.T) {
 	reg.clients[testEnvServerName+"/"+scopeGlobal] = &leasedClient{client: c}
 	reg.mu.Unlock()
 
-	got, release, err := reg.clientFor(context.Background(), s, principalAuth{})
+	got, release, err := reg.clientFor(t.Context(), s, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -943,7 +941,7 @@ func TestToolsForClosesEachUserDefinedClientPerIteration(t *testing.T) {
 		},
 	}})
 
-	defs, err := reg.ToolsFor(context.Background(), "owner")
+	defs, err := reg.ToolsFor(t.Context(), "owner")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -997,7 +995,7 @@ func TestEvictClientDoesNotCloseALeasedClient(t *testing.T) {
 	dialClient = func(context.Context, Server, *http.Client) (mcpClient, error) { return fresh, nil }
 	t.Cleanup(func() { dialClient = restore })
 
-	got, release, err := reg.clientFor(context.Background(), s, principalAuth{})
+	got, release, err := reg.clientFor(t.Context(), s, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1131,7 +1129,7 @@ func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
 		Transport: transportStreamableHTTP,
 	}
 
-	got, release, err := reg.clientFor(context.Background(), userSrv, principalAuth{})
+	got, release, err := reg.clientFor(t.Context(), userSrv, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1146,7 +1144,7 @@ func TestClientForTreatsCollidingUserServerAsUserDefinedNotEnv(t *testing.T) {
 		t.Fatalf("colliding user-defined server entered the cache; size = %d", n)
 	}
 
-	got2, release2, err := reg.clientFor(context.Background(), envSrv, principalAuth{})
+	got2, release2, err := reg.clientFor(t.Context(), envSrv, principalAuth{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1242,7 +1240,7 @@ func runFanOutEvictionRounds(t *testing.T, assert func(round int, r fanOutEvicti
 		}
 		leaderDone := make(chan result, 1)
 		go func() {
-			c, release, err := reg.clientFor(context.Background(), s, principalAuth{})
+			c, release, err := reg.clientFor(t.Context(), s, principalAuth{})
 			if err == nil {
 				reg.evictClient(s, principalAuth{})
 				release()
@@ -1259,7 +1257,7 @@ func runFanOutEvictionRounds(t *testing.T, assert func(round int, r fanOutEvicti
 		}, 1)
 		go func() {
 			followerReady <- struct{}{}
-			c, release, err := reg.clientFor(context.Background(), s, principalAuth{})
+			c, release, err := reg.clientFor(t.Context(), s, principalAuth{})
 			followerDone <- struct {
 				result
 				release func()
@@ -1347,7 +1345,7 @@ func TestRegistry_DialCompletingAfterCloseIsNotCached(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		_, release, err := reg.clientFor(context.Background(), s, principalAuth{})
+		_, release, err := reg.clientFor(t.Context(), s, principalAuth{})
 		done <- result{release, err}
 	}()
 	<-dialStarted

@@ -58,8 +58,8 @@ type ChatEvent struct {
 	Type               string             `json:"type"`
 	Delta              string             `json:"delta,omitempty"`
 	ConversationID     string             `json:"conversationId,omitempty"`
-	UserMessageID      int64              `json:"userMessageId,omitempty"`
-	AssistantMessageID int64              `json:"assistantMessageId,omitempty"`
+	UserMessageID      int64              `json:"userMessageId,omitzero"`
+	AssistantMessageID int64              `json:"assistantMessageId,omitzero"`
 	AssistantContent   *string            `json:"assistantContent,omitempty"`
 	Message            string             `json:"message,omitempty"`
 	FileOrdinal        *int               `json:"fileOrdinal,omitempty"`
@@ -84,7 +84,7 @@ type ChatEvent struct {
 type CredentialField struct {
 	Name   string `json:"name"`
 	Label  string `json:"label,omitempty"`
-	Secret bool   `json:"secret,omitempty"`
+	Secret bool   `json:"secret,omitzero"`
 }
 
 // EventSink receives chat events (implemented by the SSE handler).

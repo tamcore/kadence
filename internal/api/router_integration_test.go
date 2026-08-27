@@ -33,7 +33,7 @@ func TestLoginThenCurrentUser(t *testing.T) {
 	sessions := store.NewSessionRepository(pool)
 
 	hash, _ := auth.HashPassword("pw123")
-	if _, err := users.Create(context.Background(), model.User{
+	if _, err := users.Create(t.Context(), model.User{
 		Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser,
 	}); err != nil {
 		t.Fatalf("seed user: %v", err)
@@ -80,7 +80,7 @@ func TestCSRFRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	sessions := store.NewSessionRepository(pool)
 
 	hash, _ := auth.HashPassword("pw123")
-	if _, err := users.Create(context.Background(), model.User{
+	if _, err := users.Create(t.Context(), model.User{
 		Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser,
 	}); err != nil {
 		t.Fatalf("seed user: %v", err)
@@ -146,7 +146,7 @@ func TestChatEndToEnd(t *testing.T) {
 	msgs := store.NewMessageRepository(pool)
 
 	hash, _ := auth.HashPassword("pw123")
-	u, _ := users.Create(context.Background(), model.User{Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser})
+	u, _ := users.Create(t.Context(), model.User{Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser})
 
 	chatSvc := chat.NewService(chatFakeProvider{reply: "Hi!"},
 		chat.ServiceConfig{Model: "m", MaxTokens: 32, Temperature: 0.2}, chat.Deps{Convs: convs, Msgs: msgs})
@@ -185,11 +185,11 @@ func TestChatEndToEnd(t *testing.T) {
 		t.Fatalf("no done event: %s", buf.String())
 	}
 
-	list, _ := convs.ListByUser(context.Background(), u.ID)
+	list, _ := convs.ListByUser(t.Context(), u.ID)
 	if len(list) != 1 {
 		t.Fatalf("conversations = %d, want 1", len(list))
 	}
-	stored, _ := msgs.ListByConversation(context.Background(), list[0].ID)
+	stored, _ := msgs.ListByConversation(t.Context(), list[0].ID)
 	if len(stored) != 2 {
 		t.Fatalf("messages = %d, want 2", len(stored))
 	}
@@ -207,7 +207,7 @@ func TestBodyLimit_GlobalCapAppliesButUploadOverrides(t *testing.T) {
 	docs := store.NewDocumentRepository(pool)
 
 	hash, _ := auth.HashPassword("pw123")
-	if _, err := users.Create(context.Background(), model.User{
+	if _, err := users.Create(t.Context(), model.User{
 		Username: testUsername, Email: testEmail, PasswordHash: hash, Role: model.RoleUser,
 	}); err != nil {
 		t.Fatalf("seed user: %v", err)

@@ -1,7 +1,6 @@
 package embed
 
 import (
-	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -23,7 +22,7 @@ func TestOpenAICompatEmbed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	vecs, err := NewOpenAICompat(srv.URL, "k", "test-embed", 0).Embed(context.Background(), []string{"a", "b"})
+	vecs, err := NewOpenAICompat(srv.URL, "k", "test-embed", 0).Embed(t.Context(), []string{"a", "b"})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -44,7 +43,7 @@ func TestOpenAICompatEmbed_SendsDimensionsField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewOpenAICompat(srv.URL, "k", "test-embed", 3).Embed(context.Background(), []string{"a", "b"}); err != nil {
+	if _, err := NewOpenAICompat(srv.URL, "k", "test-embed", 3).Embed(t.Context(), []string{"a", "b"}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 	dims, ok := gotBody["dimensions"]
@@ -73,7 +72,7 @@ func TestOpenAICompatEmbed_TruncatesWhenProviderIgnoresDimensions(t *testing.T) 
 	}))
 	defer srv.Close()
 
-	vecs, err := NewOpenAICompat(srv.URL, "k", "test-embed", 3).Embed(context.Background(), []string{"a"})
+	vecs, err := NewOpenAICompat(srv.URL, "k", "test-embed", 3).Embed(t.Context(), []string{"a"})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -112,7 +111,7 @@ func TestOpenAICompatEmbed_ErrorsOnShortVector(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := NewOpenAICompat(srv.URL, "k", "test-embed", 3).Embed(context.Background(), []string{"a"})
+	_, err := NewOpenAICompat(srv.URL, "k", "test-embed", 3).Embed(t.Context(), []string{"a"})
 	if err == nil {
 		t.Fatal("Embed() = nil error, want error for short vector vs configured dimensions")
 	}
@@ -123,11 +122,11 @@ func TestOpenAICompatEmbed_ErrorsOnShortVector(t *testing.T) {
 // full-length (fullDims) embedding per input. It counts total requests
 // received so tests can assert the sticky fallback avoids repeating the
 // doomed with-dimensions attempt on subsequent calls.
-func rejectDimensionsServer(t *testing.T, fullDims int) (*httptest.Server, *int32) {
+func rejectDimensionsServer(t *testing.T, fullDims int) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var requestCount int32
+	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&requestCount, 1)
+		requestCount.Add(1)
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if _, hasDimensions := body["dimensions"]; hasDimensions {
@@ -166,7 +165,7 @@ func TestOpenAICompatEmbed_FallsBackWhenProviderRejectsDimensions(t *testing.T) 
 	defer srv.Close()
 
 	e := NewOpenAICompat(srv.URL, "k", "test-embed", wantDims)
-	vecs, err := e.Embed(context.Background(), []string{"a"})
+	vecs, err := e.Embed(t.Context(), []string{"a"})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -180,16 +179,16 @@ func TestOpenAICompatEmbed_FallsBackWhenProviderRejectsDimensions(t *testing.T) 
 	if math.Abs(math.Sqrt(norm)-1) > 1e-6 {
 		t.Fatalf("‖v‖ = %v, want ≈1", math.Sqrt(norm))
 	}
-	if got := atomic.LoadInt32(requestCount); got != 2 {
+	if got := requestCount.Load(); got != 2 {
 		t.Fatalf("first Embed call made %d requests, want 2 (rejected-with-dimensions + retry-without)", got)
 	}
 
 	// Second call: the sticky fallback should skip the doomed
 	// with-dimensions attempt entirely, issuing exactly one request.
-	if _, err := e.Embed(context.Background(), []string{"b"}); err != nil {
+	if _, err := e.Embed(t.Context(), []string{"b"}); err != nil {
 		t.Fatalf("second Embed: %v", err)
 	}
-	if got := atomic.LoadInt32(requestCount); got != 3 {
+	if got := requestCount.Load(); got != 3 {
 		t.Fatalf("after second Embed call, total requests = %d, want 3 (2 from first call + 1 sticky request)", got)
 	}
 }

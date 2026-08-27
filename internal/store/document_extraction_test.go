@@ -18,7 +18,7 @@ const (
 func newExtractionFixture(t *testing.T) (context.Context, *store.DocumentRepository, int64) {
 	t.Helper()
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	u, err := users.Create(ctx, model.User{
@@ -174,7 +174,7 @@ func TestClaimPendingExtractionRespectsLimit(t *testing.T) {
 func TestReplaceDocumentChunksSwapsContent(t *testing.T) {
 	// Arrange
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	docs := store.NewDocumentRepository(pool)
 	chunks := store.NewChunkRepository(pool, "test-model")
@@ -229,7 +229,7 @@ func TestReplaceDocumentChunksSwapsContent(t *testing.T) {
 func TestReplaceDocumentChunksRejectsMismatchedEmbeddings(t *testing.T) {
 	// Arrange
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	chunks := store.NewChunkRepository(pool, "test-model")
 
 	// Act

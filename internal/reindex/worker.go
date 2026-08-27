@@ -62,12 +62,7 @@ func Run(ctx context.Context, s Store, embed func(context.Context, []string) ([]
 			if !sleepFn(ctx, delay) {
 				return
 			}
-			if delay < maxBackoff {
-				delay *= 2
-				if delay > maxBackoff {
-					delay = maxBackoff
-				}
-			}
+			delay = min(delay*2, maxBackoff)
 			continue
 		}
 		delay = initialBackoff

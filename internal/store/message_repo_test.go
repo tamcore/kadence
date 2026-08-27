@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -14,7 +13,7 @@ func TestListChatHistoryIncludesScheduledDeliveryForChatConversation(t *testing.
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "chat-hist-delivery", Email: "chat-hist-delivery@example.com",
@@ -50,7 +49,7 @@ func TestListChatHistoryExcludesScheduledMessagesForScheduledConversation(t *tes
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "sched-hist-guard", Email: "sched-hist-guard@example.com",

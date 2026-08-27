@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -60,8 +61,8 @@ func (s *multipartStreamer) StreamTurn(
 	s.conversationID = conversationID
 	s.turn = chat.TurnInput{
 		Text:        turn.Text,
-		Files:       append([]chat.FileInput(nil), turn.Files...),
-		DocumentIDs: append([]int64(nil), turn.DocumentIDs...),
+		Files:       slices.Clone(turn.Files),
+		DocumentIDs: slices.Clone(turn.DocumentIDs),
 	}
 	_ = sink.Send(chat.ChatEvent{Type: chat.EventDone})
 	return sink.Flush()

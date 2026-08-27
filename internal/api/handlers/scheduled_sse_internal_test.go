@@ -63,7 +63,7 @@ func TestScheduledSSEWriteAndFlushFailuresCancelAndStop(t *testing.T) {
 		{name: "flush", failFlush: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			writer := &failingScheduledWriter{failWrite: tc.failWrite, failFlush: tc.failFlush}
 			stream, stop := beginScheduledStream(writer, cancel)
 			if err := stream.event(map[string]string{"type": "text"}); err == nil {
@@ -90,7 +90,7 @@ func TestScheduledSSEKeepaliveFailureCancelsAndStops(t *testing.T) {
 	sseKeepaliveInterval = time.Millisecond
 	defer func() { sseKeepaliveInterval = original }()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	writer := &failingScheduledWriter{failWrite: true}
 	_, stop := beginScheduledStream(writer, cancel)
 	select {

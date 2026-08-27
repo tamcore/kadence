@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"testing"
 
@@ -26,7 +25,7 @@ const (
 
 func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	users := store.NewUserRepository(pool)
 	alice, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
@@ -103,7 +102,7 @@ func TestUserServerRepo_CRUDAndEncryption(t *testing.T) {
 // rather than erroring.
 func TestUserServerRepo_AliasAndHintRoundTrip(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	users := store.NewUserRepository(pool)
 	alice, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
@@ -151,7 +150,7 @@ func TestUserServerRepo_AliasAndHintRoundTrip(t *testing.T) {
 // see another owner's MCP server rows.
 func TestUserServerRepo_OwnerIsolation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	users := store.NewUserRepository(pool)
 	alice, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})

@@ -115,7 +115,7 @@ func TestMarkitdownExtractor_ExtractPDF(t *testing.T) {
 	}
 
 	data := []byte("%PDF-1.4 fake pdf bytes")
-	res, err := ex.Extract(context.Background(), data, "application/pdf")
+	res, err := ex.Extract(t.Context(), data, "application/pdf")
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}

@@ -94,9 +94,8 @@ func TestShutdownServerTimeoutReturnsError(t *testing.T) {
 
 // fakeDrainer is a testable stand-in for the background goroutines that run
 // on rootCtx (reindex, health poller, session reaper): it exits once ctx is
-// cancelled and marks the WaitGroup done.
-func fakeDrainer(ctx context.Context, wg *sync.WaitGroup, delay time.Duration) {
-	defer wg.Done()
+// cancelled.
+func fakeDrainer(ctx context.Context, delay time.Duration) {
 	<-ctx.Done()
 	if delay > 0 {
 		time.Sleep(delay)
@@ -104,11 +103,10 @@ func fakeDrainer(ctx context.Context, wg *sync.WaitGroup, delay time.Duration) {
 }
 
 func TestDrainGoroutinesReturnsPromptlyWhenGoroutinesExit(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go fakeDrainer(ctx, &wg, 0)
-	go fakeDrainer(ctx, &wg, 0)
+	wg.Go(func() { fakeDrainer(ctx, 0) })
+	wg.Go(func() { fakeDrainer(ctx, 0) })
 
 	cancel()
 
@@ -125,10 +123,9 @@ func TestDrainGoroutinesReturnsPromptlyWhenGoroutinesExit(t *testing.T) {
 }
 
 func TestDrainGoroutinesLogsAndReturnsOnTimeout(t *testing.T) {
-	ctx := context.Background() // never cancelled: goroutine never exits
+	ctx := t.Context() // never cancelled: goroutine never exits
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go fakeDrainer(ctx, &wg, 0)
+	wg.Go(func() { fakeDrainer(ctx, 0) })
 
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))

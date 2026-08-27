@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -15,7 +14,7 @@ const testHandoffTitle = "Task"
 
 func TestChatScheduledHandoffCreateOrGetDraftIsIdempotent(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -58,7 +57,7 @@ func TestChatScheduledHandoffCreateOrGetDraftIsIdempotent(t *testing.T) {
 
 func TestChatScheduledHandoffRejectsNonUserChatSourceMessages(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -110,7 +109,7 @@ func TestChatScheduledHandoffRejectsNonUserChatSourceMessages(t *testing.T) {
 
 func TestChatScheduledHandoffConcurrentSlotCreationCreatesOneDraft(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -156,7 +155,7 @@ func TestChatScheduledHandoffConcurrentSlotCreationCreatesOneDraft(t *testing.T)
 
 func TestChatScheduledHandoffLifecycleHydrationAndOwnerScope(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -228,7 +227,7 @@ func TestChatScheduledHandoffLifecycleHydrationAndOwnerScope(t *testing.T) {
 
 func TestChatScheduledHandoffGetByTaskIsOwnerScoped(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -276,7 +275,7 @@ func TestChatScheduledHandoffGetByTaskIsOwnerScoped(t *testing.T) {
 
 func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -355,7 +354,7 @@ func TestChatScheduledHandoffDiscardAndCleanupOnlyDrafts(t *testing.T) {
 
 func TestChatScheduledHandoffStateUpdatesRecoverAndIgnoreOrdinaryTasks(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -421,7 +420,7 @@ func TestChatScheduledHandoffStateUpdatesRecoverAndIgnoreOrdinaryTasks(t *testin
 // Task field.
 func TestChatScheduledHandoffCreateOrGetDraftSetsDeliveryToSourceConversation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)

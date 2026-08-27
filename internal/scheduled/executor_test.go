@@ -111,7 +111,7 @@ type executorSnapshot struct {
 }
 
 func (s *executorSnapshot) ToolsFor(context.Context) ([]provider.ToolDefinition, error) {
-	return append([]provider.ToolDefinition(nil), s.tools...), s.listErr
+	return slices.Clone(s.tools), s.listErr
 }
 
 func (s *executorSnapshot) Call(ctx context.Context, name, args string) (string, error) {

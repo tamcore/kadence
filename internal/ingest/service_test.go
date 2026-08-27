@@ -63,7 +63,7 @@ func TestIngestPrivatePDF(t *testing.T) {
 	uid := int64(7)
 	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, emb, &fakeDocs{}, fc, 20, false)
 
-	doc, err := svc.Ingest(context.Background(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."))
+	doc, err := svc.Ingest(t.Context(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestIngestPrivatePDF(t *testing.T) {
 func TestIngestPublicPDFOwnerless(t *testing.T) {
 	fc := &fakeChunks{}
 	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, &fakeDocs{}, fc, 20, false)
-	doc, err := svc.Ingest(context.Background(), nil, model.ScopePublic, "pub.pdf", "application/pdf", []byte("%PDF..."))
+	doc, err := svc.Ingest(t.Context(), nil, model.ScopePublic, "pub.pdf", "application/pdf", []byte("%PDF..."))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestIngestPublicPDFOwnerless(t *testing.T) {
 
 func TestIngestUnsupportedType(t *testing.T) {
 	svc := ingest.NewService([]ingest.Extractor{fakeExtractor{}}, &fakeEmbedder{}, &fakeDocs{}, &fakeChunks{}, 20, false)
-	if _, err := svc.Ingest(context.Background(), nil, model.ScopePublic, "x.png", "image/png", []byte("x")); err == nil {
+	if _, err := svc.Ingest(t.Context(), nil, model.ScopePublic, "x.png", "image/png", []byte("x")); err == nil {
 		t.Fatalf("expected unsupported-type error")
 	}
 }
@@ -116,7 +116,7 @@ func TestIngestQueuesPDFOnlyAfterChunksLand(t *testing.T) {
 
 	// Act
 	doc, err := svc.Ingest(
-		context.Background(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."),
+		t.Context(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."),
 	)
 
 	// Assert
@@ -145,7 +145,7 @@ func TestIngestDoesNotQueueWhenPageImagesDisabled(t *testing.T) {
 
 	// Act
 	if _, err := svc.Ingest(
-		context.Background(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."),
+		t.Context(), &uid, model.ScopePrivate, "p.pdf", "application/pdf", []byte("%PDF..."),
 	); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestIngestDoesNotQueueNonPDF(t *testing.T) {
 
 	// Act
 	if _, err := svc.Ingest(
-		context.Background(), &uid, model.ScopePrivate, "n.txt", "text/plain", []byte("hello"),
+		t.Context(), &uid, model.ScopePrivate, "n.txt", "text/plain", []byte("hello"),
 	); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}

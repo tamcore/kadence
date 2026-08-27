@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/chat"
@@ -40,14 +41,14 @@ func (f *fakeChunks) SearchTopKByVisibleDocuments(
 	_ context.Context, _ int64, _ []int64, embedding []float32, _ int,
 ) (map[int64][]model.Chunk, error) {
 	f.documentCalls++
-	f.documentEmbedding = append([]float32(nil), embedding...)
+	f.documentEmbedding = slices.Clone(embedding)
 	return f.documentSearch, nil
 }
 
 func TestRAGRetrieveTurnReturnsContentsAndEmbedding(t *testing.T) {
 	fc := &fakeChunks{search: []model.Chunk{{Content: "you ran 10k last week"}}}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
-	retrieval, err := rag.RetrieveTurn(context.Background(), 1, "how was my run?", nil)
+	retrieval, err := rag.RetrieveTurn(t.Context(), 1, "how was my run?", nil)
 	if err != nil || len(retrieval.Broad) != 1 || retrieval.Broad[0] != "you ran 10k last week" ||
 		len(retrieval.Embedding) != 3 {
 		t.Fatalf("retrieve turn: %v %+v", err, retrieval)
@@ -58,7 +59,7 @@ func TestRAGStorePrivateMessageChunk(t *testing.T) {
 	fc := &fakeChunks{}
 	rag := chat.NewRAG(&fakeEmbedder{}, fc, 5)
 	const convID = "11111111-1111-1111-1111-111111111111"
-	if err := rag.Store(context.Background(), 7, convID, 9, "hello", []float32{1, 0, 0}); err != nil {
+	if err := rag.Store(t.Context(), 7, convID, 9, "hello", []float32{1, 0, 0}); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	c := fc.inserted[0]
@@ -83,7 +84,7 @@ func TestRAGRetrieveTurnReusesEmbeddingAndExcludesExplicitDocumentsFromBroadResu
 	embedder := &fakeEmbedder{}
 	rag := chat.NewRAG(embedder, chunks, 5)
 
-	got, err := rag.RetrieveTurn(context.Background(), 7, "marathon pacing", []int64{explicitID})
+	got, err := rag.RetrieveTurn(t.Context(), 7, "marathon pacing", []int64{explicitID})
 	if err != nil {
 		t.Fatalf("RetrieveTurn: %v", err)
 	}

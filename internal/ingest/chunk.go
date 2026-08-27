@@ -17,7 +17,6 @@ func ChunkText(text string, maxChars int) []string {
 		return nil
 	}
 
-	paragraphs := strings.Split(trimmed, "\n\n")
 	var chunks []string
 	var buf strings.Builder
 
@@ -29,7 +28,7 @@ func ChunkText(text string, maxChars int) []string {
 		buf.Reset()
 	}
 
-	for _, para := range paragraphs {
+	for para := range strings.SplitSeq(trimmed, "\n\n") {
 		para = strings.TrimSpace(para)
 		if para == "" {
 			continue

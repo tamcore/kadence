@@ -144,7 +144,7 @@ func TestAConfirmedCallProceeds(t *testing.T) {
 	src := &stubConfirm{allow: true}
 	reg := confirmingRegistry(t, src)
 
-	out, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}")
+	out, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}")
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestADeclinedCallIsRefusedAndNamesTheConfirmation(t *testing.T) {
 	src := &stubConfirm{allow: false}
 	reg := confirmingRegistry(t, src)
 
-	_, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}")
+	_, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}")
 	if err == nil {
 		t.Fatal("a declined call succeeded")
 	}
@@ -178,7 +178,7 @@ func TestADeclinedCallDoesNotEvictTheClient(t *testing.T) {
 	reg := confirmingRegistry(t, src)
 
 	for range 2 {
-		if _, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}"); err == nil {
+		if _, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}"); err == nil {
 			t.Fatal("a declined call succeeded")
 		}
 	}
@@ -193,7 +193,7 @@ func TestTheConfirmSourceIsAskedAboutTheDispatchingUserAndTool(t *testing.T) {
 	src := &stubConfirm{allow: true}
 	reg := confirmingRegistry(t, src)
 
-	if _, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}"); err != nil {
+	if _, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}"); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	_, userID, tool, prompt := src.seen()
@@ -212,7 +212,7 @@ func TestWithoutAConfirmSourceTheCallIsRefusedRatherThanHanging(t *testing.T) {
 	serveEliciting(t, defaultElicitParams())
 	reg := confirmingRegistry(t, nil)
 
-	if _, err := reg.Call(context.Background(), testUsername, confirmTestTool, "{}"); err == nil {
+	if _, err := reg.Call(t.Context(), testUsername, confirmTestTool, "{}"); err == nil {
 		t.Fatal("a call with nowhere to ask still succeeded")
 	}
 }
@@ -220,7 +220,7 @@ func TestWithoutAConfirmSourceTheCallIsRefusedRatherThanHanging(t *testing.T) {
 func TestAnElicitationOutsideAToolCallIsCancelled(t *testing.T) {
 	// The standalone listening stream carries the dial's context, not a
 	// caller's, so nothing identifies who is being asked. Fail closed.
-	res, err := handlerWith(context.Background(), nil, defaultElicitParams())
+	res, err := handlerWith(t.Context(), nil, defaultElicitParams())
 	if err != nil {
 		t.Fatalf("Elicit: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAnUnexpectedElicitationShapeIsCancelledWithoutAskingTheUser(t *testing.
 	for name, params := range cases {
 		t.Run(name, func(t *testing.T) {
 			src := &stubConfirm{allow: true}
-			res, err := handlerWith(context.Background(), src, params)
+			res, err := handlerWith(t.Context(), src, params)
 			if err != nil {
 				t.Fatalf("Elicit: %v", err)
 			}
@@ -274,7 +274,7 @@ func TestAConfirmSourceFailureCancelsRatherThanErrors(t *testing.T) {
 	// Returning an error would make the server report a transport fault. A
 	// cancel is what "we could not ask" means in this protocol.
 	src := &stubConfirm{err: errors.New("no live stream")}
-	res, err := handlerWith(context.Background(), src, defaultElicitParams())
+	res, err := handlerWith(t.Context(), src, defaultElicitParams())
 	if err != nil {
 		t.Fatalf("Elicit: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestAConfirmSourceFailureCancelsRatherThanErrors(t *testing.T) {
 
 func TestADeclineIsAnsweredWithDecline(t *testing.T) {
 	src := &stubConfirm{allow: false}
-	res, err := handlerWith(context.Background(), src, defaultElicitParams())
+	res, err := handlerWith(t.Context(), src, defaultElicitParams())
 	if err != nil {
 		t.Fatalf("Elicit: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestADeclineIsAnsweredWithDecline(t *testing.T) {
 
 func TestAnAcceptCarriesTheBooleanUpstreamRequires(t *testing.T) {
 	src := &stubConfirm{allow: true}
-	res, err := handlerWith(context.Background(), src, defaultElicitParams())
+	res, err := handlerWith(t.Context(), src, defaultElicitParams())
 	if err != nil {
 		t.Fatalf("Elicit: %v", err)
 	}

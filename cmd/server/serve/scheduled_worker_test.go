@@ -19,7 +19,7 @@ func (w *scheduledWorkerRunnerStub) Run(ctx context.Context) {
 }
 
 func TestStartScheduledWorkerOnlyWhenEnabled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
 	disabled := &scheduledWorkerRunnerStub{started: make(chan struct{}), stopped: make(chan struct{})}
 	if startScheduledWorker(ctx, &wg, false, disabled) {
@@ -59,7 +59,7 @@ func TestStartScheduledWorkerOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestStartScheduledWorkerRejectsNilRunner(t *testing.T) {
-	if startScheduledWorker(context.Background(), &sync.WaitGroup{}, true, nil) {
+	if startScheduledWorker(t.Context(), &sync.WaitGroup{}, true, nil) {
 		t.Fatal("nil worker reported started")
 	}
 }
@@ -100,7 +100,7 @@ func TestStartScheduledWorkerSurvivesPanickingWorker(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
 	if !startScheduledWorker(ctx, &wg, true, worker) {
 		t.Fatal("startScheduledWorker returned false for an enabled worker")

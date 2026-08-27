@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/tamcore/kadence/internal/mcp"
@@ -73,12 +74,9 @@ func NewMarkitdownExtractor(rawURL, authUser, authPass, transport string, httpCl
 // CanHandle reports whether mime is one markitdown-mcp is expected to
 // convert: PDFs, images, office documents, and text/html.
 func (e *MarkitdownExtractor) CanHandle(mime string) bool {
-	for _, prefix := range markitdownMimePrefixes {
-		if strings.HasPrefix(mime, prefix) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(markitdownMimePrefixes, func(prefix string) bool {
+		return strings.HasPrefix(mime, prefix)
+	})
 }
 
 // Extract base64-encodes data into a data: URI (tagged with mime) and asks

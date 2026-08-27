@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -151,12 +152,7 @@ func (s *Service) clientFor(ctx context.Context, serverID string) (*Client, erro
 // Servers lists the configured integration ids, sorted so the UI order is
 // stable.
 func (s *Service) Servers() []string {
-	out := make([]string, 0, len(s.scopes))
-	for id := range s.scopes {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(s.scopes))
 }
 
 // scopeShortfall returns the configured scopes a granted scope string does not

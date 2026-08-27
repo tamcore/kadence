@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -92,9 +93,6 @@ func recentTextMessages(msgs []provider.Message, n int) []provider.Message {
 		}
 		recent = append(recent, m)
 	}
-	out := make([]provider.Message, len(recent))
-	for i, m := range recent {
-		out[len(recent)-1-i] = m
-	}
-	return out
+	slices.Reverse(recent)
+	return recent
 }

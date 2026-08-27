@@ -1,20 +1,22 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"uuid"
+
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 
 	"github.com/tamcore/kadence/internal/auth"
 	"github.com/tamcore/kadence/internal/chat"
@@ -302,8 +304,8 @@ func (h *Chat) Messages(w http.ResponseWriter, r *http.Request) {
 		if m.Role == model.MsgRoleSystem {
 			continue
 		}
-		artifacts := append([]scheduled.ChatArtifact(nil), artifactsByMessage[m.ID]...)
-		sort.SliceStable(artifacts, func(i, j int) bool { return artifacts[i].Ordinal < artifacts[j].Ordinal })
+		artifacts := slices.Clone(artifactsByMessage[m.ID])
+		slices.SortStableFunc(artifacts, func(a, b scheduled.ChatArtifact) int { return cmp.Compare(a.Ordinal, b.Ordinal) })
 		dto := toMessageDTO(m)
 		if m.Purpose == model.MessagePurposeScheduledDefinition {
 			dto.Content = scheduled.VisibleContent(m.Content)

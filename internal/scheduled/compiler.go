@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -76,8 +77,7 @@ func classifyPreparationError(err error) *preparationError {
 		}
 		return &preparationError{code: preparationCodeProviderUnavailable, cause: err}
 	}
-	var providerError *openai.Error
-	if errors.As(err, &providerError) && (providerError.StatusCode == http.StatusTooManyRequests || providerError.StatusCode >= http.StatusInternalServerError) {
+	if providerError, ok := errors.AsType[*openai.Error](err); ok && (providerError.StatusCode == http.StatusTooManyRequests || providerError.StatusCode >= http.StatusInternalServerError) {
 		return &preparationError{code: preparationCodeProviderUnavailable, cause: err}
 	}
 	if errors.Is(err, errCompilerResponseTooLarge) {
@@ -328,11 +328,7 @@ func compilerToolMetadata(tools map[string]provider.ToolDefinition) ([]byte, err
 	if len(tools) > maxCompilerToolCount {
 		return nil, fmt.Errorf("scheduled: available tool count exceeds %d", maxCompilerToolCount)
 	}
-	names := make([]string, 0, len(tools))
-	for name := range tools {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(tools))
 	metadata := make([]toolMetadata, 0, len(names))
 	for _, name := range names {
 		metadata = append(metadata, toolMetadata{Name: name, Description: tools[name].Description})
@@ -473,7 +469,7 @@ func validateAuthorizedTools(authorized *[]string, available map[string]provider
 		seen[name] = struct{}{}
 		(*authorized)[i] = name
 	}
-	sort.Strings(*authorized)
+	slices.Sort(*authorized)
 	return nil
 }
 

@@ -184,8 +184,8 @@ func (r *ConversationRepository) Delete(ctx context.Context, id string, userID i
 // foreign-key violation (23503) caused by scheduled_tasks.delivery_conversation_id
 // still referencing this conversation (ON DELETE RESTRICT).
 func isDeliveryConversationForeignKeyViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) &&
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok &&
 		pgErr.Code == "23503" &&
 		pgErr.ConstraintName == "scheduled_tasks_delivery_conversation_id_fkey"
 }

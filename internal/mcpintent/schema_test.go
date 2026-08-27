@@ -145,8 +145,8 @@ func TestAugmentToolRejectsUnsafeSchemas(t *testing.T) {
 func assertSchemaCategory(t *testing.T, raw, want string) {
 	t.Helper()
 	_, err := AugmentTool(provider.ToolDefinition{Name: "bad__tool", Parameters: json.RawMessage(raw)})
-	var schemaErr *SchemaError
-	if !errors.As(err, &schemaErr) {
+	schemaErr, ok := errors.AsType[*SchemaError](err)
+	if !ok {
 		t.Fatalf("err=%v is not a SchemaError", err)
 	}
 	if schemaErr.Category != want {

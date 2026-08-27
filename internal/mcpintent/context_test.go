@@ -1,7 +1,6 @@
 package mcpintent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/provider"
@@ -18,7 +17,7 @@ func TestTrustedContextCopiesValues(t *testing.T) {
 		History:   []provider.Message{{Role: classifierUserRole, Content: testRunHere}},
 		Scheduled: &ScheduledContext{MonitoringState: []byte(`{"status":"active"}`)},
 	}
-	ctx := WithTrustedContext(context.Background(), in)
+	ctx := WithTrustedContext(t.Context(), in)
 	in.History[0].Content = "mutated"
 	in.Scheduled.MonitoringState[0] = 'x'
 
@@ -36,7 +35,7 @@ func TestTrustedContextCopiesValues(t *testing.T) {
 }
 
 func TestInheritedIntentDoesNotBecomeAuthority(t *testing.T) {
-	ctx := WithInheritedIntent(context.Background(), "Analyze activity")
+	ctx := WithInheritedIntent(t.Context(), "Analyze activity")
 	if got, ok := InheritedIntentFrom(ctx); !ok || got != "Analyze activity" {
 		t.Fatalf("got=%q", got)
 	}

@@ -105,9 +105,7 @@ func (r *MCPAuditRepository) List(ctx context.Context, f MCPAuditFilter) ([]mode
 	if limit <= 0 {
 		limit = defaultMCPAuditLimit
 	}
-	if limit > maxMCPAuditLimit {
-		limit = maxMCPAuditLimit
-	}
+	limit = min(limit, maxMCPAuditLimit)
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, actor_user_id, actor_username, conversation_id::text, source,
 		       scheduled_task_id::text, scheduled_run_id, model, tool_call_id,

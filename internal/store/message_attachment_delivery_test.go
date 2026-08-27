@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"testing"
 
@@ -16,7 +15,7 @@ func TestMessageRepositoryGetAttachmentForUserScopesWholePath(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "delivery-owner", Email: "delivery-owner@example.com",

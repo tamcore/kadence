@@ -118,7 +118,7 @@ func (s *Service) runToolLoop(
 	keepFrom := len(req.Messages) - 1
 
 	gated := make(map[string]bool)
-	for i := 0; i < maxIter; i++ {
+	for i := range maxIter {
 		result, streamErr := s.provider.StreamChatWithTools(streamCtx, req, onToken)
 		if streamErr != nil {
 			slog.Error("chat stream failed", "err", streamErr, "conversation", conversationID)

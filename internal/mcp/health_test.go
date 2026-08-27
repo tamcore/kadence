@@ -36,7 +36,7 @@ func TestHealthPoller_ProbeAllAndStatusFor(t *testing.T) {
 		fail: map[string]bool{"down": true},
 	}
 	p := NewHealthPoller(src, DefaultHealthInterval)
-	p.probeAll(context.Background()) // one cycle, synchronous
+	p.probeAll(t.Context()) // one cycle, synchronous
 
 	// alice sees GLOBAL garmin + GLOBAL down + her USER_alice priv = 3
 	st := p.StatusFor(testUsername)
@@ -73,7 +73,7 @@ func TestHealthPoller_ProbeAllAndStatusFor(t *testing.T) {
 func TestHealthPoller_RunStopsOnCancel(t *testing.T) {
 	src := &fakeSource{servers: []Server{{Name: "g", Scope: scopeGlobal}}}
 	p := NewHealthPoller(src, DefaultHealthInterval)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	p.Run(ctx) // must return promptly (one immediate probe then ctx done)
 }
@@ -119,7 +119,7 @@ func TestHealthPoller_HangingServerDoesNotBlockCycle(t *testing.T) {
 	p.probeTimeout = 50 * time.Millisecond // avoid a real 10s wait in this test
 
 	start := time.Now()
-	p.probeAll(context.Background())
+	p.probeAll(t.Context())
 	elapsed := time.Since(start)
 
 	// The whole cycle must complete close to the (short) per-probe timeout,
@@ -203,7 +203,7 @@ func TestStatusForAPrincipalReportsThatUsersToolCount(t *testing.T) {
 	}
 	p := NewHealthPoller(src, time.Minute)
 
-	got := p.StatusForPrincipal(context.Background(), "alice")
+	got := p.StatusForPrincipal(t.Context(), "alice")
 
 	if len(got) != 1 {
 		t.Fatalf("got %d statuses, want 1", len(got))
@@ -226,7 +226,7 @@ func TestStatusForAPrincipalReportsAnUnlinkedUserAsNotOK(t *testing.T) {
 	}
 	p := NewHealthPoller(src, time.Minute)
 
-	got := p.StatusForPrincipal(context.Background(), "alice")
+	got := p.StatusForPrincipal(t.Context(), "alice")
 
 	if len(got) != 1 {
 		t.Fatalf("got %d statuses, want 1", len(got))
@@ -246,8 +246,8 @@ func TestTwoUsersSeeTheirOwnToolCounts(t *testing.T) {
 	}
 	p := NewHealthPoller(src, time.Minute)
 
-	_ = p.StatusForPrincipal(context.Background(), "alice")
-	_ = p.StatusForPrincipal(context.Background(), "bob")
+	_ = p.StatusForPrincipal(t.Context(), "alice")
+	_ = p.StatusForPrincipal(t.Context(), "bob")
 
 	if src.hits("alice") != 1 || src.hits("bob") != 1 {
 		t.Fatalf("probes were not per user: alice=%d bob=%d", src.hits("alice"), src.hits("bob"))
@@ -271,7 +271,7 @@ func TestOneUsersToolsAreNeverServedToAnother(t *testing.T) {
 	var mu sync.Mutex
 	for _, user := range []string{"alice", "bob"} {
 		wg.Go(func() {
-			tools, _, err := p.ToolsForPrincipal(context.Background(), user, "garmin")
+			tools, _, err := p.ToolsForPrincipal(t.Context(), user, "garmin")
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -301,7 +301,7 @@ func TestAFreshProbeIsReusedWithinTheTTL(t *testing.T) {
 	p := NewHealthPoller(src, time.Minute)
 
 	for range 5 {
-		_ = p.StatusForPrincipal(context.Background(), "alice")
+		_ = p.StatusForPrincipal(t.Context(), "alice")
 	}
 
 	if n := src.hits("alice"); n != 1 {
@@ -318,7 +318,7 @@ func TestLinkingInvalidatesThatUsersCachedProbe(t *testing.T) {
 	}
 	p := NewHealthPoller(src, time.Minute)
 
-	if got := p.StatusForPrincipal(context.Background(), "alice"); got[0].OK {
+	if got := p.StatusForPrincipal(t.Context(), "alice"); got[0].OK {
 		t.Fatal("an unlinked user reported healthy")
 	}
 
@@ -328,7 +328,7 @@ func TestLinkingInvalidatesThatUsersCachedProbe(t *testing.T) {
 	src.mu.Unlock()
 	p.InvalidatePrincipal("alice", "garmin")
 
-	got := p.StatusForPrincipal(context.Background(), "alice")
+	got := p.StatusForPrincipal(t.Context(), "alice")
 	if !got[0].OK || got[0].ToolCount != 1 {
 		t.Fatalf("after linking: OK=%v tools=%d, want healthy with 1", got[0].OK, got[0].ToolCount)
 	}
@@ -340,12 +340,12 @@ func TestInvalidatingOneUserLeavesAnothersCacheAlone(t *testing.T) {
 		tools:   []ToolInfo{{Name: testGetActivities}},
 	}
 	p := NewHealthPoller(src, time.Minute)
-	_ = p.StatusForPrincipal(context.Background(), "alice")
-	_ = p.StatusForPrincipal(context.Background(), "bob")
+	_ = p.StatusForPrincipal(t.Context(), "alice")
+	_ = p.StatusForPrincipal(t.Context(), "bob")
 
 	p.InvalidatePrincipal("alice", "garmin")
-	_ = p.StatusForPrincipal(context.Background(), "alice")
-	_ = p.StatusForPrincipal(context.Background(), "bob")
+	_ = p.StatusForPrincipal(t.Context(), "alice")
+	_ = p.StatusForPrincipal(t.Context(), "bob")
 
 	if src.hits("alice") != 2 {
 		t.Fatalf("alice probed %d times, want 2", src.hits("alice"))
@@ -362,7 +362,7 @@ func TestToolsForAPrincipalReturnsThatUsersTools(t *testing.T) {
 	}
 	p := NewHealthPoller(src, time.Minute)
 
-	tools, ok, err := p.ToolsForPrincipal(context.Background(), "alice", "garmin")
+	tools, ok, err := p.ToolsForPrincipal(t.Context(), "alice", "garmin")
 	if err != nil {
 		t.Fatalf("ToolsForPrincipal: %v", err)
 	}

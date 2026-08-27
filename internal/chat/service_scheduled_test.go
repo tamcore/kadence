@@ -1,7 +1,6 @@
 package chat_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -77,7 +76,7 @@ func TestServiceDraftsScheduledTasksAsArtifactsWithoutGenericToolEvents(t *testi
 		Convs: convs, Msgs: msgs, Scheduled: handoff,
 	})
 	sink := &capturingSink{}
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername, Timezone: testTimezoneBerlin}, testConvID, "schedule both", sink); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername, Timezone: testTimezoneBerlin}, testConvID, "schedule both", sink); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if got, want := msgs.assistantHandoffIDs, []string{testHandoffOne, "handoff-two"}; !slices.Equal(got, want) {
@@ -398,7 +397,7 @@ func TestServiceCleansScheduledDraftsWhenTurnCannotComplete(t *testing.T) {
 				chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens},
 				chat.Deps{Convs: convs, Msgs: msgs, Scheduled: handoff})
 
-			if err := svc.Stream(context.Background(), testUserID,
+			if err := svc.Stream(t.Context(), testUserID,
 				chat.UserContext{Username: testUsername}, testConvID, "schedule it",
 				&capturingSink{}); err == nil {
 				t.Fatalf("Stream succeeded, want %s", test.wantFail)
@@ -423,7 +422,7 @@ func TestServiceBindsScheduledHandoffsWhenProviderFailsAfterToolCalls(t *testing
 	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
 		Convs: convs, Msgs: msgs, Scheduled: handoff,
 	})
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
 		t.Fatal("Stream succeeded, want provider failure")
 	}
 	if got, want := msgs.assistantHandoffIDs, []string{"partial-handoff"}; !slices.Equal(got, want) {
@@ -447,7 +446,7 @@ func TestServiceBindsScheduledHandoffsWhenProviderFailsWithoutContent(t *testing
 	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
 		Convs: convs, Msgs: msgs, Scheduled: handoff,
 	})
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule it", &capturingSink{}); err == nil {
 		t.Fatal("Stream succeeded, want provider failure")
 	}
 	if got, want := msgs.assistantHandoffIDs, []string{"empty-partial-handoff"}; !slices.Equal(got, want) {
@@ -473,7 +472,7 @@ func TestServiceLimitsScheduledDraftCallsPerTurn(t *testing.T) {
 	svc := chat.NewService(provider, chat.ServiceConfig{Model: testModel, MaxTokens: testMaxTokens}, chat.Deps{
 		Convs: convs, Msgs: msgs, Scheduled: handoff,
 	})
-	if err := svc.Stream(context.Background(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule tasks", &capturingSink{}); err != nil {
+	if err := svc.Stream(t.Context(), testUserID, chat.UserContext{Username: testUsername}, testConvID, "schedule tasks", &capturingSink{}); err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	if len(handoff.requests) != 5 {

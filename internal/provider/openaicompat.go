@@ -132,8 +132,8 @@ func accumulatedStreamResult(acc openai.ChatCompletionAccumulator) StreamResult 
 }
 
 func isVisionUnsupportedError(err error) bool {
-	var apiErr *openai.Error
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[*openai.Error](err)
+	if !ok {
 		return false
 	}
 	switch apiErr.StatusCode {

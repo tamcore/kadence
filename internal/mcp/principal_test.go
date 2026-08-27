@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,7 +59,7 @@ func oauthTestServer(t *testing.T) (*httptest.Server, func() []string) {
 	return ts, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
-		return append([]string(nil), seen...)
+		return slices.Clone(seen)
 	}
 }
 
@@ -78,7 +79,7 @@ func TestPerPrincipalServerSendsThatUsersBearerToken(t *testing.T) {
 	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
 	t.Cleanup(func() { _ = reg.Close() })
 
-	defs, err := reg.ToolsFor(context.Background(), testUsername)
+	defs, err := reg.ToolsFor(t.Context(), testUsername)
 	if err != nil {
 		t.Fatalf("ToolsFor: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestTwoUsersEachSendTheirOwnBearerToken(t *testing.T) {
 	t.Cleanup(func() { _ = reg.Close() })
 
 	for _, user := range []string{testUsername, testOtherUsername} {
-		if _, err := reg.ToolsFor(context.Background(), user); err != nil {
+		if _, err := reg.ToolsFor(t.Context(), user); err != nil {
 			t.Fatalf("ToolsFor(%s): %v", user, err)
 		}
 	}
@@ -130,13 +131,13 @@ func TestARotatedTokenRetiresTheCachedClient(t *testing.T) {
 	reg.SetTokenSource(tokens)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	if _, err := reg.ToolsFor(context.Background(), testUsername); err != nil {
+	if _, err := reg.ToolsFor(t.Context(), testUsername); err != nil {
 		t.Fatalf("ToolsFor(before rotation): %v", err)
 	}
 
 	// The user's access token rotates, as it does every fifteen minutes.
 	tokens[testPrincipalKey] = "tok-42-rotated"
-	if _, err := reg.ToolsFor(context.Background(), testUsername); err != nil {
+	if _, err := reg.ToolsFor(t.Context(), testUsername); err != nil {
 		t.Fatalf("ToolsFor(after rotation): %v", err)
 	}
 
@@ -157,7 +158,7 @@ func TestUnlinkedUserGetsNoToolsAndNoDial(t *testing.T) {
 	reg.SetTokenSource(stubTokens{}) // nobody is linked
 	t.Cleanup(func() { _ = reg.Close() })
 
-	defs, err := reg.ToolsFor(context.Background(), testUsername)
+	defs, err := reg.ToolsFor(t.Context(), testUsername)
 	if err != nil {
 		t.Fatalf("ToolsFor: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestCallReportsThatTheServerNeedsLinking(t *testing.T) {
 	reg.SetTokenSource(stubTokens{})
 	t.Cleanup(func() { _ = reg.Close() })
 
-	if _, err := reg.Call(context.Background(), testUsername, "garmin__get_activities", "{}"); err == nil {
+	if _, err := reg.Call(t.Context(), testUsername, "garmin__get_activities", "{}"); err == nil {
 		t.Fatal("Call succeeded for an unlinked user")
 	}
 }
@@ -191,7 +192,7 @@ func TestBasicAuthServerStillSendsBasicAuth(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	if _, err := reg.ToolsFor(context.Background(), testUsername); err != nil {
+	if _, err := reg.ToolsFor(t.Context(), testUsername); err != nil {
 		t.Fatalf("ToolsFor: %v", err)
 	}
 	for _, got := range headers() {
@@ -316,7 +317,7 @@ func TestServersFromEnvDropsOAuthServerMissingClientOrResource(t *testing.T) {
 			"MCP_GARMIN_GLOBAL_OAUTH_RESOURCE=https://other.example.invalid/mcp"},
 		"neither": {},
 	} {
-		got, err := ServersFromEnv(append(append([]string{}, base...), extra...))
+		got, err := ServersFromEnv(append(slices.Clone(base), extra...))
 		if err != nil {
 			t.Fatalf("%s: ServersFromEnv: %v", name, err)
 		}
@@ -364,13 +365,13 @@ func TestClientForIsolatesPrincipalsOnOAuthServer(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	a, releaseA, err := reg.clientFor(context.Background(), s, principalAuth{principal: "7"})
+	a, releaseA, err := reg.clientFor(t.Context(), s, principalAuth{principal: "7"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 7): %v", err)
 	}
 	defer releaseA()
 
-	b, releaseB, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
+	b, releaseB, err := reg.clientFor(t.Context(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8): %v", err)
 	}
@@ -393,13 +394,13 @@ func TestClientForSharesOneClientOnBasicServer(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	a, releaseA, err := reg.clientFor(context.Background(), s, principalAuth{principal: "7"})
+	a, releaseA, err := reg.clientFor(t.Context(), s, principalAuth{principal: "7"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 7): %v", err)
 	}
 	defer releaseA()
 
-	b, releaseB, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
+	b, releaseB, err := reg.clientFor(t.Context(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8): %v", err)
 	}
@@ -419,12 +420,12 @@ func TestEvictClientEvictsOnlyThatPrincipal(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	_, releaseA, err := reg.clientFor(context.Background(), s, principalAuth{principal: "7"})
+	_, releaseA, err := reg.clientFor(t.Context(), s, principalAuth{principal: "7"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 7): %v", err)
 	}
 	releaseA()
-	b, releaseB, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
+	b, releaseB, err := reg.clientFor(t.Context(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8): %v", err)
 	}
@@ -435,7 +436,7 @@ func TestEvictClientEvictsOnlyThatPrincipal(t *testing.T) {
 	if _, ok := reg.clients[clientCacheKey(s, principalAuth{principal: "7"})]; ok {
 		t.Fatal("principal 7's client survived its own eviction")
 	}
-	again, release, err := reg.clientFor(context.Background(), s, principalAuth{principal: "8"})
+	again, release, err := reg.clientFor(t.Context(), s, principalAuth{principal: "8"})
 	if err != nil {
 		t.Fatalf("clientFor(principal 8, after evict): %v", err)
 	}
@@ -459,17 +460,15 @@ func TestConcurrentPrincipalsNeverShareAClient(t *testing.T) {
 	seen := make([]mcpClient, principals)
 	errs := make([]error, principals)
 	for i := range principals {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			c, release, err := reg.clientFor(context.Background(), s, principalAuth{principal: strconv.Itoa(i + 1)})
+		wg.Go(func() {
+			c, release, err := reg.clientFor(t.Context(), s, principalAuth{principal: strconv.Itoa(i + 1)})
 			if err != nil {
 				errs[i] = err
 				return
 			}
 			defer release()
 			seen[i] = c
-		}(i)
+		})
 	}
 	wg.Wait()
 
@@ -497,7 +496,7 @@ func TestToolsForSkipsPerPrincipalServerWithoutAPrincipalSource(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	defs, err := reg.ToolsFor(context.Background(), testUsername)
+	defs, err := reg.ToolsFor(t.Context(), testUsername)
 	if err != nil {
 		t.Fatalf("ToolsFor: %v", err)
 	}
@@ -517,7 +516,7 @@ func TestToolsForUsesResolvedPrincipal(t *testing.T) {
 	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
 	t.Cleanup(func() { _ = reg.Close() })
 
-	defs, err := reg.ToolsFor(context.Background(), testUsername)
+	defs, err := reg.ToolsFor(t.Context(), testUsername)
 	if err != nil {
 		t.Fatalf("ToolsFor: %v", err)
 	}
@@ -558,7 +557,7 @@ func TestProbeForListsThatUsersOwnTools(t *testing.T) {
 	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
 	t.Cleanup(func() { _ = reg.Close() })
 
-	tools, err := reg.ProbeFor(context.Background(), s, testUsername)
+	tools, err := reg.ProbeFor(t.Context(), s, testUsername)
 	if err != nil {
 		t.Fatalf("ProbeFor: %v", err)
 	}
@@ -575,7 +574,7 @@ func TestProbeForReportsAnUnlinkedUser(t *testing.T) {
 	reg.SetTokenSource(stubTokens{}) // nobody linked
 	t.Cleanup(func() { _ = reg.Close() })
 
-	if _, err := reg.ProbeFor(context.Background(), s, testUsername); err == nil {
+	if _, err := reg.ProbeFor(t.Context(), s, testUsername); err == nil {
 		t.Fatal("an unlinked user's probe succeeded")
 	}
 }
@@ -589,7 +588,7 @@ func TestProbeForHonoursTheToolAllowlist(t *testing.T) {
 	reg.SetTokenSource(stubTokens{testPrincipalKey: testBearer42})
 	t.Cleanup(func() { _ = reg.Close() })
 
-	tools, err := reg.ProbeFor(context.Background(), s, testUsername)
+	tools, err := reg.ProbeFor(t.Context(), s, testUsername)
 	if err != nil {
 		t.Fatalf("ProbeFor: %v", err)
 	}
@@ -609,7 +608,7 @@ func TestProbeForOnASharedServerFallsBackToTheSharedProbe(t *testing.T) {
 	reg := NewRegistry([]Server{s}, nil, nil)
 	t.Cleanup(func() { _ = reg.Close() })
 
-	tools, err := reg.ProbeFor(context.Background(), s, testUsername)
+	tools, err := reg.ProbeFor(t.Context(), s, testUsername)
 	if err != nil {
 		t.Fatalf("ProbeFor: %v", err)
 	}

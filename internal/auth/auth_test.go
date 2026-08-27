@@ -1,7 +1,6 @@
 package auth_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/auth"
@@ -45,12 +44,12 @@ func TestNewSessionIDIsUniqueHex(t *testing.T) {
 }
 
 func TestUserContextRoundTrip(t *testing.T) {
-	ctx := auth.ContextWithUser(context.Background(), &model.User{ID: 7, Username: "z"})
+	ctx := auth.ContextWithUser(t.Context(), &model.User{ID: 7, Username: "z"})
 	got := auth.UserFromContext(ctx)
 	if got == nil || got.ID != 7 {
 		t.Fatalf("UserFromContext = %+v", got)
 	}
-	if auth.UserFromContext(context.Background()) != nil {
+	if auth.UserFromContext(t.Context()) != nil {
 		t.Fatal("expected nil user for empty context")
 	}
 }

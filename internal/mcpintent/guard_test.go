@@ -45,7 +45,7 @@ func (p *fakeProvider) StreamChatWithTools(ctx context.Context, req provider.Cha
 func TestGuardAllowsStrictJSONAndFramesData(t *testing.T) {
 	p := &fakeProvider{content: `{"verdict":"ALLOW","reason":"Tool matches request."}`}
 	g := NewGuard(p, Config{Model: "classifier", HistoryWindow: 6})
-	ctx := WithTrustedContext(context.Background(), TrustedContext{Request: testCheckWeather})
+	ctx := WithTrustedContext(t.Context(), TrustedContext{Request: testCheckWeather})
 	decision, err := g.Evaluate(ctx, validInput())
 	if err != nil || decision != (Decision{Verdict: VerdictAllow, Reason: "Tool matches request."}) {
 		t.Fatalf("decision=%+v err=%v", decision, err)
@@ -61,7 +61,7 @@ func TestGuardAllowsStrictJSONAndFramesData(t *testing.T) {
 func TestGuardLimitsFramedHistory(t *testing.T) {
 	p := &fakeProvider{content: `{"verdict":"ALLOW","reason":"Tool matches request."}`}
 	g := NewGuard(p, Config{HistoryWindow: 1})
-	ctx := WithTrustedContext(context.Background(), TrustedContext{History: []provider.Message{
+	ctx := WithTrustedContext(t.Context(), TrustedContext{History: []provider.Message{
 		{Role: classifierUserRole, Content: "old request"},
 		{Role: "assistant", Content: "current request"},
 	}})
@@ -150,7 +150,7 @@ func TestGuardFailsClosedForCancelledOrExpiredContext(t *testing.T) {
 
 func TestGuardFailsClosedWithoutTrustedContext(t *testing.T) {
 	p := &fakeProvider{content: testAllowResponse}
-	decision, err := NewGuard(p, Config{}).Evaluate(context.Background(), validInput())
+	decision, err := NewGuard(p, Config{}).Evaluate(t.Context(), validInput())
 	assertUnavailableBlock(t, decision, err)
 	if p.called {
 		t.Fatal("provider called without trusted context")

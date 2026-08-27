@@ -46,7 +46,7 @@ func newGuardrail(v *verdictProvider) *chat.Guardrail {
 
 func TestGuardrailOffTopic(t *testing.T) {
 	v := &verdictProvider{verdict: "OFF_TOPIC"}
-	off, err := newGuardrail(v).Classify(context.Background(), []provider.Message{{Role: model.MsgRoleUser, Content: "stock tips?"}})
+	off, err := newGuardrail(v).Classify(t.Context(), []provider.Message{{Role: model.MsgRoleUser, Content: "stock tips?"}})
 	if err != nil || !off {
 		t.Fatalf("off=%v err=%v, want true/nil", off, err)
 	}
@@ -56,7 +56,7 @@ func TestGuardrailOffTopic(t *testing.T) {
 }
 
 func TestGuardrailOnTopic(t *testing.T) {
-	off, err := newGuardrail(&verdictProvider{verdict: testVerdictOnTopic}).Classify(context.Background(),
+	off, err := newGuardrail(&verdictProvider{verdict: testVerdictOnTopic}).Classify(t.Context(),
 		[]provider.Message{{Role: model.MsgRoleUser, Content: "how many rest days?"}})
 	if err != nil || off {
 		t.Fatalf("off=%v err=%v, want false/nil", off, err)
@@ -64,12 +64,12 @@ func TestGuardrailOnTopic(t *testing.T) {
 }
 
 func TestGuardrailErrorAndUnexpectedVerdict(t *testing.T) {
-	_, err := newGuardrail(&verdictProvider{err: errors.New("boom")}).Classify(context.Background(),
+	_, err := newGuardrail(&verdictProvider{err: errors.New("boom")}).Classify(t.Context(),
 		[]provider.Message{{Role: model.MsgRoleUser, Content: "x"}})
 	if err == nil {
 		t.Fatal("expected error from classifier failure")
 	}
-	_, err = newGuardrail(&verdictProvider{verdict: "maybe?"}).Classify(context.Background(),
+	_, err = newGuardrail(&verdictProvider{verdict: "maybe?"}).Classify(t.Context(),
 		[]provider.Message{{Role: model.MsgRoleUser, Content: "x"}})
 	if err == nil {
 		t.Fatal("expected error on unexpected verdict")
@@ -82,7 +82,7 @@ func TestRecentWindowLimit(t *testing.T) {
 		msgs = append(msgs, provider.Message{Role: model.MsgRoleUser, Content: string(rune('a' + i))})
 	}
 	v := &verdictProvider{verdict: testVerdictOnTopic}
-	_, _ = newGuardrail(v).Classify(context.Background(), msgs)
+	_, _ = newGuardrail(v).Classify(t.Context(), msgs)
 	expectedMessages := 1 + testHistoryWindow // 1 system + testHistoryWindow recent
 	if len(v.gotReq.Messages) != expectedMessages {
 		t.Fatalf("classifier saw %d messages, want %d", len(v.gotReq.Messages), expectedMessages)

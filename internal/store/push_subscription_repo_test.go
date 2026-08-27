@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tamcore/kadence/internal/model"
@@ -11,7 +10,7 @@ import (
 
 func TestPushSubscriptionUpsertAndList(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-upsert", "push-upsert@example.com")
 
@@ -46,7 +45,7 @@ func TestPushSubscriptionUpsertAndList(t *testing.T) {
 
 func TestPushSubscriptionDeleteByEndpointScopedToUser(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-delete", "push-delete@example.com")
 	repo := store.NewPushSubscriptionRepository(pool)
@@ -72,7 +71,7 @@ func TestPushSubscriptionDeleteByEndpointScopedToUser(t *testing.T) {
 
 func TestPushSubscriptionDeleteByIDAndFailureLifecycle(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	u := createScheduledUser(t, ctx, users, "push-lifecycle", "push-lifecycle@example.com")
 	repo := store.NewPushSubscriptionRepository(pool)

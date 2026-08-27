@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -66,12 +67,11 @@ func (f *mcpAuditRepoFake) List(_ context.Context, filter store.MCPAuditFilter) 
 }
 
 func (f *mcpAuditRepoFake) Get(_ context.Context, id int64, _ time.Time) (model.MCPAuditCall, error) {
-	for _, row := range f.rows {
-		if row.ID == id {
-			return row, nil
-		}
+	i := slices.IndexFunc(f.rows, func(row model.MCPAuditCall) bool { return row.ID == id })
+	if i < 0 {
+		return model.MCPAuditCall{}, store.ErrNotFound
 	}
-	return model.MCPAuditCall{}, store.ErrNotFound
+	return f.rows[i], nil
 }
 
 func TestMCPAuditListIncludesIntentDecisionWithoutDetailPayloads(t *testing.T) {

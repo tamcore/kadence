@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -90,7 +89,7 @@ func TestHandlePaceConversionEmitsEvents(t *testing.T) {
 
 func TestAssembleToolsAlwaysOffersLocalPaceTool(t *testing.T) {
 	service := NewService(nil, ServiceConfig{MCPMaxTools: 2}, Deps{})
-	if tools := service.assembleTools(context.Background(), nil); !hasToolNamed(tools, testConvertPaceToolName) {
+	if tools := service.assembleTools(t.Context(), nil); !hasToolNamed(tools, testConvertPaceToolName) {
 		t.Fatalf("tools = %+v", tools)
 	}
 
@@ -99,7 +98,7 @@ func TestAssembleToolsAlwaysOffersLocalPaceTool(t *testing.T) {
 		{Name: "remote__one"},
 		{Name: "remote__two"},
 	}}
-	tools := service.assembleTools(context.Background(), remote)
+	tools := service.assembleTools(t.Context(), remote)
 	if countToolNamed(tools, testConvertPaceToolName) != 1 ||
 		!hasToolNamed(tools, "remote__one") ||
 		hasToolNamed(tools, "remote__two") {

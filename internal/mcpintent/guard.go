@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -68,9 +69,7 @@ func (e *BlockedError) Error() string {
 }
 
 func AsBlocked(err error) (*BlockedError, bool) {
-	var blocked *BlockedError
-	ok := errors.As(err, &blocked)
-	return blocked, ok
+	return errors.AsType[*BlockedError](err)
 }
 
 func InvalidIntentBlockedError() *BlockedError {
@@ -180,7 +179,7 @@ func recentTrustedContext(trusted TrustedContext, historyWindow int) TrustedCont
 	if len(out.History) <= historyWindow {
 		return out
 	}
-	out.History = append([]provider.Message(nil), out.History[len(out.History)-historyWindow:]...)
+	out.History = slices.Clone(out.History[len(out.History)-historyWindow:])
 	return out
 }
 

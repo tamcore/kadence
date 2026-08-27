@@ -1,7 +1,6 @@
 package chat_test
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -34,7 +33,7 @@ func runFencedToolTurn(t *testing.T, callResult string) [][]provider.Message {
 		chat.Deps{Convs: &fakeConvs{byID: map[string]model.Conversation{}}, Msgs: &fakeMsgs{}, MCP: mcp},
 	)
 	if err := svc.Stream(
-		context.Background(), testUserID, chat.UserContext{Username: testUsername}, "",
+		t.Context(), testUserID, chat.UserContext{Username: testUsername}, "",
 		"what's the weather", &capturingSink{},
 	); err != nil {
 		t.Fatalf("Stream: %v", err)

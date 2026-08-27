@@ -16,8 +16,8 @@ func TestGuardConvertsPanicToPanicError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error from a panicking fn, got nil")
 	}
-	var pe *PanicError
-	if !errors.As(err, &pe) {
+	pe, ok := errors.AsType[*PanicError](err)
+	if !ok {
 		t.Fatalf("error is not *PanicError: %T", err)
 	}
 	if pe.Value != "boom" {
@@ -58,7 +58,7 @@ func TestRunForeverRestartsAfterPanicAndLogsStack(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{}, 3)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		RunForever(ctx, log, "testsub", func(context.Context) {
@@ -100,7 +100,7 @@ func TestRunForeverRestartsAfterPanicAndLogsStack(t *testing.T) {
 func TestRunForeverReturnsOnCancelWithoutRestarting(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		RunForever(ctx, slog.Default(), "testsub", func(c context.Context) {
@@ -134,7 +134,7 @@ func TestRunForeverDoesNotRestartAfterCancelDuringBackoff(t *testing.T) {
 
 	var calls atomic.Int32
 	panicked := make(chan struct{}, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		RunForever(ctx, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), "testsub",
@@ -168,7 +168,7 @@ func TestRunForeverToleratesNilLogger(t *testing.T) {
 	t.Cleanup(func() { restartBackoff = restoreBackoff })
 
 	var calls atomic.Int32
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		RunForever(ctx, nil, "testsub", func(context.Context) {

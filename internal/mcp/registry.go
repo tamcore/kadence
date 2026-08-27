@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -83,7 +84,7 @@ type Registry struct {
 // system trust store). userSrc, if non-nil, supplies per-user DB-backed MCP
 // servers to merge with servers; pass nil to disable user-defined servers.
 func NewRegistry(servers []Server, httpClient *http.Client, userSrc UserServerSource) *Registry {
-	owned := append([]Server(nil), servers...)
+	owned := slices.Clone(servers)
 	for i := range owned {
 		owned[i].FromEnv = true
 	}
@@ -155,7 +156,7 @@ func (u *UserSnapshot) ServerPrefix(name, scope string) (string, bool) {
 
 // applicableServers returns env servers plus the user's own DB servers.
 func (r *Registry) applicableServers(ctx context.Context, username string) []Server {
-	out := append([]Server(nil), r.servers...)
+	out := slices.Clone(r.servers)
 	if r.userSrc != nil {
 		us, err := r.userSrc.ServersForUser(ctx, username)
 		if err != nil {
@@ -298,7 +299,7 @@ func (r *Registry) call(ctx context.Context, username string, servers []Server, 
 // Servers returns a copy of the configured env servers plus all users' DB
 // servers (used by the health poller, which has no per-user context).
 func (r *Registry) Servers() []Server {
-	out := append([]Server(nil), r.servers...)
+	out := slices.Clone(r.servers)
 	if r.userSrc != nil {
 		if all, err := r.userSrc.AllServers(context.Background()); err != nil {
 			slog.Warn("mcp: all user servers failed", "error", err)
@@ -382,12 +383,10 @@ func (s Server) allowsTool(toolName string) bool {
 	if len(s.Tools) == 0 {
 		return true
 	}
-	for _, pat := range s.Tools {
-		if ok, err := path.Match(pat, toolName); err == nil && ok {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.Tools, func(pat string) bool {
+		ok, err := path.Match(pat, toolName)
+		return err == nil && ok
+	})
 }
 
 // findApplicableServerIn finds the server whose effective tool-name prefix

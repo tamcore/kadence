@@ -568,7 +568,7 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	embedding := fixedEmbedding(dims)
 
 	data := make([]embeddingDatum, 0, inputCount)
-	for i := 0; i < inputCount; i++ {
+	for i := range inputCount {
 		data = append(data, embeddingDatum{
 			Object:    "embedding",
 			Index:     i,

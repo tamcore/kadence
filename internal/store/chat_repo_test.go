@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestConversationAndMessageFlow(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -87,7 +88,7 @@ func TestScheduledDefinitionHistoryExcludes198Deliveries(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	user, err := users.Create(ctx, model.User{Username: "scheduled-history", Email: "scheduled-history@example.com", PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -128,7 +129,7 @@ func TestMessageToolCallsPersisted(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := users.Create(ctx, model.User{Username: testAliceUsername, Email: testEmailA, PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -168,7 +169,7 @@ func TestConversationScopedToOwner(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, _ := users.Create(ctx, model.User{Username: testOwner, Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -183,7 +184,7 @@ func TestConversationUpdateTitle(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, _ := users.Create(ctx, model.User{Username: testOwner, Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -212,7 +213,7 @@ func TestConversationUpdateTitleIfCurrent(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, _ := users.Create(ctx, model.User{Username: testOwner, Email: testEmailO, PasswordHash: "h", Role: model.RoleUser})
 	other, _ := users.Create(ctx, model.User{Username: testOtherUsername, Email: testEmailB, PasswordHash: "h", Role: model.RoleUser})
@@ -277,7 +278,7 @@ func TestConversationNavigationOrderingPinningAndOwnerIsolation(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{Username: "navigation-owner", Email: "navigation-owner@example.com", PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -360,7 +361,7 @@ func TestMessageRepositoryChatWritesAndRewindsTouchActivity(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{Username: "navigation-activity", Email: "navigation-activity@example.com", PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -431,7 +432,7 @@ func TestMessageRepositoryActivityNeverRegresses(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "navigation-monotonic", Email: "navigation-monotonic@example.com",
@@ -488,7 +489,7 @@ func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
 	scheduledTasks := store.NewScheduledTaskRepository(pool, 10)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{Username: "navigation-no-activity", Email: "navigation-no-activity@example.com", PasswordHash: "h", Role: model.RoleUser})
 	if err != nil {
@@ -540,7 +541,7 @@ func TestConversationNavigationNonActivityWritesPreserveLastActivity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	extracted := append([]model.MessageAttachment(nil), userMessage.Attachments...)
+	extracted := slices.Clone(userMessage.Attachments)
 	extracted[0].ExtractedMarkdown = "# Extracted"
 	setActivity(conversation.ID)
 	if _, err := messages.UpdateChatAttachmentExtractions(ctx, conversation.ID, userMessage.ID, owner.ID, extracted); err != nil {
@@ -589,7 +590,7 @@ func TestMessageRepositoryEditAndRewind(t *testing.T) {
 	msgs := store.NewMessageRepository(pool)
 	chunks := store.NewChunkRepository(pool, "test-model")
 	audits := store.NewMCPAuditRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "rewind-edit", Email: "rewind-edit@example.com", PasswordHash: "h", Role: model.RoleUser,
@@ -659,7 +660,7 @@ func TestMessageRepositoryRegenerateAndRewind(t *testing.T) {
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
 	chunks := store.NewChunkRepository(pool, "test-model")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "rewind-regenerate", Email: "rewind-regenerate@example.com", PasswordHash: "h", Role: model.RoleUser,
@@ -731,7 +732,7 @@ func TestMessageRepositoryRewindValidatesOwnerKindAndRole(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, _ := users.Create(ctx, model.User{
 		Username: "rewind-owner", Email: "rewind-owner@example.com", PasswordHash: "h", Role: model.RoleUser,
@@ -764,7 +765,7 @@ func TestMessageRepositoryDeleteUserAndRewindValidatesTargetAndOwner(t *testing.
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner := createScheduledUser(t, ctx, users, "delete-rewind-owner", "delete-rewind-owner@example.com")
 	other := createScheduledUser(t, ctx, users, "delete-rewind-other", "delete-rewind-other@example.com")
@@ -814,7 +815,7 @@ func TestMessageRepositoryDeleteFirstUserMessageCleansDraftHandoff(t *testing.T)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
 	handoffs := store.NewScheduledHandoffRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner := createScheduledUser(t, ctx, users, "first-delete-draft", "first-delete-draft@example.com")
 	conversation, err := conversations.Create(ctx, owner.ID, "Chat")
@@ -856,7 +857,7 @@ func TestMessageRepositoryDeleteFirstUserMessageReturnsActiveDeliverySentinel(t 
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
 	handoffs := store.NewScheduledHandoffRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner := createScheduledUser(t, ctx, users, "first-delete-active", "first-delete-active@example.com")
 	conversation, err := conversations.Create(ctx, owner.ID, "Chat")
@@ -897,7 +898,7 @@ func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testi
 	users := store.NewUserRepository(pool)
 	convs := store.NewConversationRepository(pool)
 	msgs := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "stale-chat", Email: "stale-chat@example.com", PasswordHash: "h", Role: model.RoleUser,
@@ -931,7 +932,7 @@ func TestMessageRepositoryAddChatAssistantIfLatestUserRejectsEditedTurn(t *testi
 
 func TestChatRepositoryAssistantHandoffBindingIsAtomic(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -971,7 +972,7 @@ func TestChatRepositoryAssistantHandoffBindingIsAtomic(t *testing.T) {
 
 func TestChatRepositoryRegenerateRewindsDraftHandoffsButKeepsConfirmed(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -1025,7 +1026,7 @@ func TestChatRepositoryRegenerateRewindsDraftHandoffsButKeepsConfirmed(t *testin
 
 func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDelivery(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -1099,7 +1100,7 @@ func TestChatRepositoryEditRewindCleansDraftHandoffAndDeleteBlockedByActiveDeliv
 // generic wrapped error, so handlers can map it to a friendly 409.
 func TestChatRepositoryDeleteBlockedByActiveDeliveryReturnsSentinel(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
@@ -1138,7 +1139,7 @@ func TestChatRepositoryDeleteBlockedByActiveDeliveryReturnsSentinel(t *testing.T
 // definition conversation.
 func TestChatRepositoryDeleteChatWithOnlyDraftHandoffCleansUp(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)

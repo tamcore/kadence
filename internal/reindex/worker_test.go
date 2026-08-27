@@ -76,7 +76,7 @@ func TestRunBackoffGrowsExponentiallyAndCapsAtCeiling(t *testing.T) {
 			errors.New("e1"), errors.New("e2"), errors.New("e3"), errors.New("e4"),
 		},
 	}
-	Run(context.Background(), s, func(context.Context, []string) ([][]float32, error) {
+	Run(t.Context(), s, func(context.Context, []string) ([][]float32, error) {
 		return nil, nil
 	}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
@@ -111,7 +111,7 @@ func TestRunBackoffResetsAfterASuccessfulBatch(t *testing.T) {
 		stale: 10, total: 10,
 		batchErrs: []error{errors.New("e1"), errors.New("e2"), nil, errors.New("e3")},
 	}
-	Run(context.Background(), s, func(context.Context, []string) ([][]float32, error) {
+	Run(t.Context(), s, func(context.Context, []string) ([][]float32, error) {
 		return nil, nil
 	}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 

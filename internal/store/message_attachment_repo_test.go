@@ -20,7 +20,7 @@ func TestMessageRepositoryChatUserInputOrderedRoundTrip(t *testing.T) {
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-round-trip", Email: "attachment-round-trip@example.com",
@@ -107,7 +107,7 @@ func TestMessageRepositoryLoadsScopedChatAttachmentPayloadsOnDemand(t *testing.T
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-payload-owner", Email: "attachment-payload-owner@example.com",
@@ -192,7 +192,7 @@ func TestMessageRepositoryRejectsCrossConversationAttachmentPayloadID(t *testing
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-payload-scope", Email: "attachment-payload-scope@example.com",
@@ -236,7 +236,7 @@ func TestMessageRepositoryChatUserInputRollsBackInvalidReference(t *testing.T) {
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-rollback", Email: "attachment-rollback@example.com",
@@ -284,7 +284,7 @@ func TestMessageRepositoryNewConversationAndFirstInputRollBackTogether(t *testin
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "first-input-rollback", Email: "first-input-rollback@example.com",
@@ -322,7 +322,7 @@ func TestMessageRepositoryDocumentReferenceSnapshotSurvivesDelete(t *testing.T) 
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "reference-snapshot", Email: "reference-snapshot@example.com",
@@ -372,7 +372,7 @@ func TestMessageRepositoryConversationDeleteCascadesInputRelations(t *testing.T)
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-cascade", Email: "attachment-cascade@example.com",
@@ -415,7 +415,7 @@ func TestMessageRepositoryEditPreservesTargetInputAndDeletesSuffixRelations(t *t
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-edit", Email: "attachment-edit@example.com",
@@ -480,7 +480,7 @@ func TestMessageRepositoryRegenerateReusesPrecedingUserInput(t *testing.T) {
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-regenerate", Email: "attachment-regenerate@example.com",
@@ -539,7 +539,7 @@ func TestMessageRepositoryDeleteUserAndRewindDeletesSuffixRelations(t *testing.T
 	chunks := store.NewChunkRepository(pool, "test-model")
 	audits := store.NewMCPAuditRepository(pool)
 	handoffs := store.NewScheduledHandoffRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "delete-rewind-relations", Email: "delete-rewind-relations@example.com",
@@ -650,7 +650,7 @@ func TestMessageRepositoryChatUserInputEnforcesConversationOwner(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-owner", Email: "attachment-owner@example.com",
@@ -690,7 +690,7 @@ func TestMessageRepositoryChatUserInputDeleteRaceRollsBack(t *testing.T) {
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "reference-delete-race", Email: "reference-delete-race@example.com",
@@ -757,7 +757,7 @@ func TestMessageRepositoryChatUserInputMapsDocumentForeignKeyViolation(t *testin
 	conversations := store.NewConversationRepository(pool)
 	documents := store.NewDocumentRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "reference-fk", Email: "reference-fk@example.com",
@@ -831,7 +831,7 @@ func TestMessageAttachmentRejectsMismatchedSize(t *testing.T) {
 	users := store.NewUserRepository(pool)
 	conversations := store.NewConversationRepository(pool)
 	messages := store.NewMessageRepository(pool)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	owner, err := users.Create(ctx, model.User{
 		Username: "attachment-size", Email: "attachment-size@example.com",
@@ -949,7 +949,7 @@ func waitForBlockedDocumentReferenceQuery(t *testing.T, pool *pgxpool.Pool) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var waiting bool
-		err := pool.QueryRow(context.Background(), `
+		err := pool.QueryRow(t.Context(), `
 			SELECT EXISTS (
 				SELECT 1
 				  FROM pg_stat_activity

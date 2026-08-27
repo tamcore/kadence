@@ -7,11 +7,12 @@
 package secret
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -313,8 +314,8 @@ func (b *Broker) ActiveValues(userID int64) []string {
 			values = append(values, sv.value)
 		}
 	}
-	sort.Slice(values, func(i, j int) bool {
-		return len(values[i]) > len(values[j])
+	slices.SortFunc(values, func(a, b string) int {
+		return cmp.Compare(len(b), len(a))
 	})
 	return values
 }
