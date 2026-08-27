@@ -115,6 +115,19 @@ The one canonical URL garmin-mcp publishes. Its issuer, its RFC 8707 resource,
 every endpoint URL, and the path it serves MCP on are all derived from this, and
 changing it invalidates every user's tokens.
 */}}
+{{/*
+The Secret and key carrying the CA the app verifies MCP endpoints against, as
+"<secret>/<key>", or empty when no CA is configured. mcp.tls.enabled mints its
+own; mcp.tls.existingCASecret supplies one. tls-issuer.yaml rejects both at once.
+*/}}
+{{- define "kadence.mcp.caSecretRef" -}}
+{{- if .Values.mcp.tls.existingCASecret -}}
+{{- printf "%s/%s" .Values.mcp.tls.existingCASecret (.Values.mcp.tls.existingCASecretKey | default "ca.crt") -}}
+{{- else if .Values.mcp.tls.enabled -}}
+{{- printf "%s-mcp-ca/ca.crt" (include "kadence.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
 {{- define "kadence.garmin.publicURL" -}}
 {{- printf "https://%s%s" .Values.garmin.host .Values.garmin.path -}}
 {{- end }}

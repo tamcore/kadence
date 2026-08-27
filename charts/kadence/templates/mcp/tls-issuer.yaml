@@ -1,3 +1,6 @@
+{{- if and .Values.mcp.tls.enabled .Values.mcp.tls.existingCASecret }}
+{{- fail "mcp.tls.enabled and mcp.tls.existingCASecret are mutually exclusive: the app reads one KADENCE_MCP_CA_FILE, so it cannot trust both a self-minted sidecar CA and a supplied one. Pick the CA that signs the MCP endpoints this install actually talks to." }}
+{{- end }}
 {{- if .Values.mcp.tls.enabled }}
 {{- $fullname := include "kadence.fullname" . }}
 apiVersion: cert-manager.io/v1

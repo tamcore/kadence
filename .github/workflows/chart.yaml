@@ -227,6 +227,62 @@ jobs:
             echo "expected two user-scoped FIT servers to render two bridges, two Service ports, and twelve unique route env vars with unprefixed download tools; got bridge=$multi_bridge port=$multi_service_port env=$multi_app_env unique=$multi_app_env_unique prefixed-tools=$multi_prefixed_download_tool"
             exit 1
           fi
+      - name: assert mcp CA wiring (self-minted vs operator-supplied)
+        run: |
+          # Default: no CA configured at all -> no env, no mount, no volume.
+          helm template kadence ./charts/kadence > /tmp/rendered-ca-none.yaml
+          for expr in \
+            '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.volumes[] | select(.name == "mcp-ca")] | length' \
+            '[select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name == "KADENCE_MCP_CA_FILE")] | length'; do
+            actual=$(yq eval-all "$expr" /tmp/rendered-ca-none.yaml)
+            if [ "$actual" != "0" ]; then
+              echo "expected no mcp CA wiring by default, got $actual for: $expr"
+              exit 1
+            fi
+          done
+
+          # mcp.tls.enabled: the chart mints its own CA and mounts that Secret.
+          helm template kadence ./charts/kadence --set mcp.tls.enabled=true > /tmp/rendered-ca-minted.yaml
+          minted=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.volumes[] | select(.name == "mcp-ca") | .secret.secretName' /tmp/rendered-ca-minted.yaml)
+          minted_env=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name == "KADENCE_MCP_CA_FILE") | .value' /tmp/rendered-ca-minted.yaml)
+          if [ "$minted" != "kadence-mcp-ca" ] || [ "$minted_env" != "/etc/kadence/mcp-ca/ca.crt" ]; then
+            echo "expected self-minted CA secret kadence-mcp-ca mounted at /etc/kadence/mcp-ca/ca.crt, got secret='$minted' env='$minted_env'"
+            exit 1
+          fi
+
+          # mcp.tls.existingCASecret: mount the supplied Secret, no Issuer/CA Certificate minted.
+          helm template kadence ./charts/kadence \
+            --set mcp.tls.existingCASecret=kadence-garmin-tls > /tmp/rendered-ca-supplied.yaml
+          supplied=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.volumes[] | select(.name == "mcp-ca") | .secret.secretName' /tmp/rendered-ca-supplied.yaml)
+          supplied_key=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.volumes[] | select(.name == "mcp-ca") | .secret.items[0].key' /tmp/rendered-ca-supplied.yaml)
+          supplied_env=$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.containers[] | .env[] | select(.name == "KADENCE_MCP_CA_FILE") | .value' /tmp/rendered-ca-supplied.yaml)
+          minted_objects=$(yq eval-all '[select(.kind == "Issuer" or (.kind == "Certificate" and .metadata.name == "kadence-mcp-ca"))] | length' /tmp/rendered-ca-supplied.yaml)
+          if [ "$supplied" != "kadence-garmin-tls" ] || [ "$supplied_key" != "ca.crt" ] || [ "$supplied_env" != "/etc/kadence/mcp-ca/ca.crt" ] || [ "$minted_objects" != "0" ]; then
+            echo "expected supplied CA secret mounted with no minted Issuer/CA Certificate; got secret='$supplied' key='$supplied_key' env='$supplied_env' minted-objects=$minted_objects"
+            exit 1
+          fi
+
+          # A non-default key is honoured.
+          custom_key=$(helm template kadence ./charts/kadence \
+            --set mcp.tls.existingCASecret=some-bundle \
+            --set mcp.tls.existingCASecretKey=root.pem \
+            | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "kadence") | .spec.template.spec.volumes[] | select(.name == "mcp-ca") | .secret.items[0].key')
+          if [ "$custom_key" != "root.pem" ]; then
+            echo "expected existingCASecretKey=root.pem to be projected as ca.crt from key root.pem, got key='$custom_key'"
+            exit 1
+          fi
+
+          # Both at once is refused: one KADENCE_MCP_CA_FILE cannot carry two CAs.
+          if helm template kadence ./charts/kadence \
+            --set mcp.tls.enabled=true --set mcp.tls.existingCASecret=x >/dev/null 2>/tmp/ca-conflict.err; then
+            echo "expected mcp.tls.enabled + mcp.tls.existingCASecret to fail rendering, but it succeeded"
+            exit 1
+          fi
+          if ! grep -q "mutually exclusive" /tmp/ca-conflict.err; then
+            echo "expected a 'mutually exclusive' failure message, got:"
+            cat /tmp/ca-conflict.err
+            exit 1
+          fi
       - name: assert NetworkPolicy presence/count matches networkPolicy gates (wave 2, issue 14)
         run: |
           # combo: postgres+markitdown+2 mcp servers (garmin, cloakbrowser), defaultDeny=false

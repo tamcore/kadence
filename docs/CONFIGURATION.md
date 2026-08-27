@@ -212,7 +212,7 @@ linked conversation and immutable run audit records.
 | `KADENCE_MCP_MAX_ITERATIONS` | `16` | Max agentic tool-loop iterations per chat turn. |
 | `KADENCE_MCP_MAX_TOOLS` | `100` | Cap on tool definitions injected per request. |
 | `KADENCE_MCP_AUDIT_TTL` | `48h` | Retention for full remote MCP call audit records. Must be a positive Go duration. Expired records are hidden immediately and deleted on startup, then hourly. |
-| `KADENCE_MCP_CA_FILE` | — | PEM CA bundle for verifying MCP/markitdown TLS. Empty = system trust store. |
+| `KADENCE_MCP_CA_FILE` | — | PEM CA bundle **appended to** the system trust store when verifying MCP/markitdown TLS. Empty = system trust store only. Set by the chart from `mcp.tls.enabled` (self-minted CA) or `mcp.tls.existingCASecret` (a CA you supply — e.g. the private CA that signed a public `garmin.host`). |
 | `KADENCE_USER_MCP_ALLOWED_HOSTS` | — | Comma-separated host allowlist for user-registered MCP servers. Enables the feature only when set together with `KADENCE_ENCRYPTION_KEY`. |
 | `KADENCE_PUBLIC_URL` | — | The bare origin this deployment is reachable at, e.g. `https://kadence.example.com`. Required once any MCP server uses OAuth; no path, query, fragment, or trailing slash, because the callback path is appended to it and the result must equal the registered redirect URI byte for byte. |
 

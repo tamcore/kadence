@@ -41,3 +41,27 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  chart:
+    # Publishes the Helm chart as an OCI artifact so a GitOps repo can depend on
+    # a released version instead of vendoring a copy of this directory. Chart
+    # and appVersion both track the release tag, so `helm show chart` names the
+    # image the chart defaults to.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: goreleaser
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Package and push
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          helm package ./charts/kadence --version "$version" --app-version "$GITHUB_REF_NAME"
+          helm push "kadence-${version}.tgz" oci://ghcr.io/tamcore/charts

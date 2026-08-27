@@ -355,6 +355,20 @@ mcp:
     password: ""
   tls:
     enabled: false # requires cert-manager on cluster; mints per-server certs and serves app<->MCP over HTTPS
+    # Trust an operator-supplied CA instead of minting one. Use this when an
+    # MCP server is reached over HTTPS at a public hostname whose certificate a
+    # private CA issued — garmin.host behind a cert-manager `private`-style
+    # ClusterIssuer is the case this exists for. The app appends the PEM to the
+    # system pool (it does not replace it), so public TLS keeps working.
+    #
+    # Any secret carrying the CA works, including the Certificate secret
+    # cert-manager issued for that hostname: its ca.crt IS the issuing CA.
+    #
+    # Mutually exclusive with `enabled`: the app reads exactly one CA file, so
+    # trusting a supplied CA and a self-minted one at the same time is not
+    # expressible. The chart refuses to render rather than silently dropping one.
+    existingCASecret: ""
+    existingCASecretKey: ca.crt
   # Pod-level securityContext applied to every MCP server pod. Verified
   # (2026-07-22, remote docker `--user 65532:65532`) that garmin-mcp,
   # cloakbrowser-mcp, and markitdown all start fine as this non-root uid with

@@ -175,7 +175,7 @@ spec:
         - name: KADENCE_MARKITDOWN_AUTH_PASS
           valueFrom: { secretKeyRef: { name: {{ $mdSecret }}, key: password } }
         {{- end }}
-        {{- if .Values.mcp.tls.enabled }}
+        {{- if include "kadence.mcp.caSecretRef" . }}
         - name: KADENCE_MCP_CA_FILE
           value: /etc/kadence/mcp-ca/ca.crt
         {{- end }}
@@ -215,7 +215,7 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
-        {{- if .Values.mcp.tls.enabled }}
+        {{- if include "kadence.mcp.caSecretRef" . }}
         - name: mcp-ca
           mountPath: /etc/kadence/mcp-ca/ca.crt
           subPath: ca.crt
@@ -225,11 +225,12 @@ spec:
       - name: tmp
         emptyDir:
           sizeLimit: {{ .Values.tmpSizeLimit }}
-      {{- if .Values.mcp.tls.enabled }}
+      {{- with include "kadence.mcp.caSecretRef" . }}
+      {{- $caRef := splitList "/" . }}
       - name: mcp-ca
         secret:
-          secretName: {{ include "kadence.fullname" . }}-mcp-ca
+          secretName: {{ index $caRef 0 }}
           items:
-          - key: ca.crt
+          - key: {{ index $caRef 1 }}
             path: ca.crt
       {{- end }}

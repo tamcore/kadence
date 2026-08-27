@@ -161,6 +161,8 @@ mcp:
     password: <shared-across-renders>
   tls:
     enabled: false
+    # or, instead of minting a CA: trust one you already have
+    existingCASecret: ""
   servers:
     - name: garmin
       scope: { user: alice }        # or: scope: global
